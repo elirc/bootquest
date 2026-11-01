@@ -12,7 +12,7 @@
         "replication",
         "durability"
       ],
-      "instructions": "**Interview prompt.** \"The primary region takes 2,000 writes/s of 500 bytes each and replicates to the standby region asynchronously, running 30 seconds behind. The primary region dies. How much acknowledged data is gone?\"\n\n**Why it works.** With asynchronous cross-region replication a write is acknowledged before the other region has it. Everything acknowledged inside the lag window is lost when the primary region dies — that loss is the recovery point objective (RPO). Writes lost = writes per second × lag seconds; bytes lost = that × bytes per write. Synchronous replication drives the lag, and the RPO, to zero at the price of write latency.\n\n**Your task.** Export two functions:\n- `rpoEvents(writePerSec, lagSec)` → `writePerSec × lagSec`\n- `rpoBytes(writePerSec, bytesPerWrite, lagSec)` → `writePerSec × bytesPerWrite × lagSec`\n\n**Worked example.** 2,000 writes/s × 30 s of lag → **60,000** acknowledged writes lost.",
+      "instructions": "**Interview prompt.** \"The primary region takes 2,000 writes/s of 500 bytes each and replicates to the standby region asynchronously, running 30 seconds behind. The primary region dies. How much acknowledged data is gone?\"\n\n**Why it works.** With asynchronous cross-region replication a write is acknowledged before the other region has it. Everything acknowledged inside the lag window is lost when the primary region dies — that loss is the recovery point objective (RPO). Writes lost = writes per second × lag seconds; bytes lost = that × bytes per write. Synchronous replication drives the lag, and the RPO, to zero at the price of write latency.\n\n**Your task.** Export two functions:\n- `rpoEvents(writePerSec, lagSec)` → acknowledged writes lost when the primary region dies while the standby trails by `lagSec` seconds\n- `rpoBytes(writePerSec, bytesPerWrite, lagSec)` → the same loss in bytes\n\n**Worked example.** 2,000 writes/s × 30 s of lag → **60,000** acknowledged writes lost.",
       "starter": "export function rpoEvents(writePerSec, lagSec) {\n  // TODO: writes acknowledged inside the lag window\n}\n\nexport function rpoBytes(writePerSec, bytesPerWrite, lagSec) {\n  // TODO: the same window in bytes\n}\n",
       "solution": "export function rpoEvents(writePerSec, lagSec) {\n  return writePerSec * lagSec;\n}\n\nexport function rpoBytes(writePerSec, bytesPerWrite, lagSec) {\n  return writePerSec * bytesPerWrite * lagSec;\n}\n",
       "tests": [
@@ -72,7 +72,7 @@
       "hints": [
         "An async replica is always some seconds behind; ask what the primary acknowledged during those seconds that the standby never received.",
         "events = writes/s × lagSec; bytes = writes/s × bytesPerWrite × lagSec.",
-        "Everything acknowledged inside the replication lag window is lost when the primary region dies: multiply writes per second by the lag seconds, and by bytes per write for the byte count"
+        "Everything the primary acknowledged inside the lag window never reached the standby. Count the writes in that window, and weigh each one by its size for the bytes."
       ]
     },
     {
@@ -83,7 +83,7 @@
         "availability",
         "operations"
       ],
-      "instructions": "**Interview prompt.** \"Health checks fire every 5 s and we fail over after 3 missed beats; promoting the standby takes 45 s; clients cache DNS for 60 s. How long does each regional failover take — and how many of them fit in a 99.9% month?\"\n\n**Why it works.** A failover outage is a pipeline of stages that run in sequence: detection (heartbeat interval × missed beats before the region is declared dead), promotion of the standby, and the DNS TTL during which clients keep calling the old address. The month's downtime budget — about 43 minutes at 99.9%, about 4 minutes at 99.99% — converts to seconds (× 60); dividing by the per-failover RTO and rounding down gives how many failovers you can afford.\n\n**Your task.** Export two functions:\n- `rtoSeconds(heartbeatSec, missedBeats, promoteSec, dnsTtlSec)` → `heartbeatSec × missedBeats + promoteSec + dnsTtlSec`\n- `failoversWithinBudget(budgetMinutesPerMonth, rtoSec)` → `Math.floor(budgetMinutesPerMonth × 60 ÷ rtoSec)`\n\n**Worked example.** A 43-minute budget is 43 × 60 = 2,580 s; with 120 s failovers, 2,580 ÷ 120 = 21.5 → **21** failovers a month.",
+      "instructions": "**Interview prompt.** \"Health checks fire every 5 s and we fail over after 3 missed beats; promoting the standby takes 45 s; clients cache DNS for 60 s. How long does each regional failover take — and how many of them fit in a 99.9% month?\"\n\n**Why it works.** A failover outage is a pipeline of stages that run in sequence: detection (heartbeat interval × missed beats before the region is declared dead), promotion of the standby, and the DNS TTL during which clients keep calling the old address. The month's downtime budget — about 43 minutes at 99.9%, about 4 minutes at 99.99% — converts to seconds (× 60); dividing by the per-failover RTO and rounding down gives how many failovers you can afford.\n\n**Your task.** Export two functions:\n- `rtoSeconds(heartbeatSec, missedBeats, promoteSec, dnsTtlSec)` → seconds from the region's death until clients reach the new primary: detection after `missedBeats` missed heartbeats, then promotion, then clients waiting out the DNS TTL\n- `failoversWithinBudget(budgetMinutesPerMonth, rtoSec)` → how many whole failovers of `rtoSec` seconds fit in a monthly downtime budget given in minutes, **rounded DOWN**\n\n**Worked example.** A 43-minute budget is 43 × 60 = 2,580 s; with 120 s failovers, 2,580 ÷ 120 = 21.5 → **21** failovers a month.",
       "starter": "export function rtoSeconds(heartbeatSec, missedBeats, promoteSec, dnsTtlSec) {\n  // TODO: detection plus promotion plus DNS\n}\n\nexport function failoversWithinBudget(budgetMinutesPerMonth, rtoSec) {\n  // TODO: whole failovers that fit in the budget\n}\n",
       "solution": "export function rtoSeconds(heartbeatSec, missedBeats, promoteSec, dnsTtlSec) {\n  return heartbeatSec * missedBeats + promoteSec + dnsTtlSec;\n}\n\nexport function failoversWithinBudget(budgetMinutesPerMonth, rtoSec) {\n  return Math.floor((budgetMinutesPerMonth * 60) / rtoSec);\n}\n",
       "tests": [
@@ -146,7 +146,7 @@
       "hints": [
         "Walk the outage on a timeline: first nobody knows the region is dead, then the standby is being promoted, then clients still hold the old DNS answer.",
         "RTO = heartbeat × missed + promote + TTL; failovers = ⌊budgetMin × 60 ÷ RTO⌋.",
-        "The outage is the sum of the stages: heartbeat × missed beats to detect, plus promotion, plus the DNS TTL clients keep caching — divide the month's downtime budget in seconds by that total and round down for how many failovers you can afford"
+        "The outage is the stages added up one after another: the missed heartbeats before anyone notices, the promotion, and the time clients keep the cached DNS answer. Convert the month's budget to seconds, see how many whole outages fit, and drop any fraction."
       ]
     },
     {
@@ -157,7 +157,7 @@
         "capacity",
         "availability"
       ],
-      "instructions": "**Interview prompt.** \"We serve 120,000 QPS spread evenly across 4 regions, and one region can carry 40,000 QPS. What does each survivor carry when a region dies — and how many regions do we need so that losing any one is a non-event?\"\n\n**Why it works.** When a region dies its share is redistributed over the survivors, so each one carries totalQps ÷ (regions − 1). The N+1 planning rule turns that around: deploy enough regions to carry the whole load at capacity, ⌈totalQps ÷ perRegionCapacityQps⌉, plus one spare so any single region can fail. `perRegionQpsAfterLoss` is only called with regions ≥ 2, and the tests choose inputs that divide exactly, so every answer is a whole number.\n\n**Your task.** Export two functions:\n- `perRegionQpsAfterLoss(totalQps, regions)` → `totalQps ÷ (regions − 1)`\n- `regionsToDeploy(totalQps, perRegionCapacityQps)` → `Math.ceil(totalQps ÷ perRegionCapacityQps) + 1`\n\n**Worked example.** 120,000 QPS over 4 regions, one lost → 120,000 ÷ 3 = **40,000** QPS per survivor — exactly at capacity.",
+      "instructions": "**Interview prompt.** \"We serve 120,000 QPS spread evenly across 4 regions, and one region can carry 40,000 QPS. What does each survivor carry when a region dies — and how many regions do we need so that losing any one is a non-event?\"\n\n**Why it works.** When a region dies its share is redistributed over the survivors, so each one carries totalQps ÷ (regions − 1). The N+1 planning rule turns that around: deploy enough regions to carry the whole load at capacity, ⌈totalQps ÷ perRegionCapacityQps⌉, plus one spare so any single region can fail. `perRegionQpsAfterLoss` is only called with regions ≥ 2, and the tests choose inputs that divide exactly, so every answer is a whole number.\n\n**Your task.** Export two functions:\n- `perRegionQpsAfterLoss(totalQps, regions)` → the load on each surviving region after one of `regions` equal regions is lost\n- `regionsToDeploy(totalQps, perRegionCapacityQps)` → the fewest regions to deploy so the load still fits after any one region is lost\n\n**Worked example.** 120,000 QPS over 4 regions, one lost → 120,000 ÷ 3 = **40,000** QPS per survivor — exactly at capacity.",
       "starter": "export function perRegionQpsAfterLoss(totalQps, regions) {\n  // TODO: the survivors split the whole load\n}\n\nexport function regionsToDeploy(totalQps, perRegionCapacityQps) {\n  // TODO: regions for the load plus one spare\n}\n",
       "solution": "export function perRegionQpsAfterLoss(totalQps, regions) {\n  return totalQps / (regions - 1);\n}\n\nexport function regionsToDeploy(totalQps, perRegionCapacityQps) {\n  return Math.ceil(totalQps / perRegionCapacityQps) + 1;\n}\n",
       "tests": [
@@ -214,7 +214,7 @@
       "hints": [
         "Losing a region does not lose its traffic — the survivors absorb it, so size them for the day one is missing.",
         "after loss = total ÷ (regions − 1); deploy = ⌈total ÷ capacity⌉ + 1.",
-        "After one region dies the survivors split the whole load, totalQps ÷ (regions − 1) — so deploy ceil(totalQps ÷ perRegionCapacity) regions for the load plus one spare for the failure"
+        "A lost region's traffic does not disappear: the survivors split the whole load among themselves. So size for the load in whole regions, rounding up, and deploy one spare on top for the region you lose."
       ]
     },
     {
@@ -225,7 +225,7 @@
         "slo",
         "availability"
       ],
-      "instructions": "**Interview prompt.** \"A region serving 30,000 QPS goes dark for the 120 s our failover takes. The SLO allows 7,200,000 failed requests a month (roughly a 99.99% SLO on this traffic). How much of the month's error budget did that single incident burn?\"\n\n**Why it works.** During the RTO every request the dead region would have served fails, so one incident costs regionQps × rtoSec failed requests. Expressed against the month's allowed failures in per-mille (‰ = x/1000), it shows how many such incidents the SLO can survive. The tests choose inputs that divide exactly, so every answer is a whole number.\n\n**Your task.** Export two functions:\n- `failedRequests(regionQps, rtoSec)` → `regionQps × rtoSec`\n- `budgetBurnPermille(failedRequests, allowedFailuresPerMonth)` → `failedRequests × 1000 ÷ allowedFailuresPerMonth`\n\n**Worked example.** 30,000 QPS dark for 120 s → **3,600,000** failed requests.",
+      "instructions": "**Interview prompt.** \"A region serving 30,000 QPS goes dark for the 120 s our failover takes. The SLO allows 7,200,000 failed requests a month (roughly a 99.99% SLO on this traffic). How much of the month's error budget did that single incident burn?\"\n\n**Why it works.** During the RTO every request the dead region would have served fails, so one incident costs regionQps × rtoSec failed requests. Expressed against the month's allowed failures in per-mille (‰ = x/1000), it shows how many such incidents the SLO can survive. The tests choose inputs that divide exactly, so every answer is a whole number.\n\n**Your task.** Export two functions:\n- `failedRequests(regionQps, rtoSec)` → requests that fail while the region is dark for `rtoSec` seconds\n- `budgetBurnPermille(failedRequests, allowedFailuresPerMonth)` → the share of the month's error budget that one incident burns, per 1,000\n\n**Worked example.** 30,000 QPS dark for 120 s → **3,600,000** failed requests.",
       "starter": "export function failedRequests(regionQps, rtoSec) {\n  // TODO: every request the dead region would have served\n}\n\nexport function budgetBurnPermille(failedRequests, allowedFailuresPerMonth) {\n  // TODO: the incident as a per-mille of the month\n}\n",
       "solution": "export function failedRequests(regionQps, rtoSec) {\n  return regionQps * rtoSec;\n}\n\nexport function budgetBurnPermille(failedRequests, allowedFailuresPerMonth) {\n  return (failedRequests * 1000) / allowedFailuresPerMonth;\n}\n",
       "tests": [
@@ -282,7 +282,7 @@
       "hints": [
         "While the failover runs, the traffic aimed at the dead region has nowhere to go — count it.",
         "failed = regionQps × rtoSec; burn‰ = failed × 1000 ÷ allowedPerMonth.",
-        "Every request the dead region would have served during the RTO fails, regionQps × rtoSec — scale by 1000 ÷ the month's allowed failures to see the budget share one incident burns"
+        "Every request aimed at the dead region fails until the failover completes, so count the region's traffic over the RTO. Compare those failures with the month's allowed failures, out of 1,000."
       ]
     },
     {
@@ -293,7 +293,7 @@
         "cost",
         "bandwidth"
       ],
-      "instructions": "**Interview prompt.** \"The application writes 200 GB a day in total; each write lands in its home region and is replicated to every other region. We run 4 regions and cross-region transfer costs 2¢ per GB. What is the monthly replication bill, and what does adding a fifth region do to it?\"\n\n**Why it works.** In an all-to-all mesh every write leaves its home region once per peer, so daily replication egress is writeGbPerDay × (regions − 1). The bill uses a 30-day billing month and money in integer cents. Every region you add re-bills the whole write stream one more time.\n\n**Your task.** Export two functions:\n- `meshEgressGbPerDay(writeGbPerDay, regions)` → `writeGbPerDay × (regions − 1)`\n- `meshMonthlyCents(writeGbPerDay, regions, centsPerGb)` → `writeGbPerDay × (regions − 1) × 30 × centsPerGb`\n\n**Worked example.** 200 GB/day across 4 regions → 200 × 3 = **600 GB** of replication egress a day.",
+      "instructions": "**Interview prompt.** \"The application writes 200 GB a day in total; each write lands in its home region and is replicated to every other region. We run 4 regions and cross-region transfer costs 2¢ per GB. What is the monthly replication bill, and what does adding a fifth region do to it?\"\n\n**Why it works.** In an all-to-all mesh every write leaves its home region once per peer, so daily replication egress is writeGbPerDay × (regions − 1). The bill uses a 30-day billing month and money in integer cents. Every region you add re-bills the whole write stream one more time.\n\n**Your task.** Export two functions:\n- `meshEgressGbPerDay(writeGbPerDay, regions)` → gigabytes per day that cross region boundaries when every write is copied to every other region\n- `meshMonthlyCents(writeGbPerDay, regions, centsPerGb)` → that replication egress billed over a 30-day month at `centsPerGb`, in cents\n\n**Worked example.** 200 GB/day across 4 regions → 200 × 3 = **600 GB** of replication egress a day.",
       "starter": "export function meshEgressGbPerDay(writeGbPerDay, regions) {\n  // TODO: each write leaves once per peer region\n}\n\nexport function meshMonthlyCents(writeGbPerDay, regions, centsPerGb) {\n  // TODO: a 30-day month of that egress, in cents\n}\n",
       "solution": "export function meshEgressGbPerDay(writeGbPerDay, regions) {\n  return writeGbPerDay * (regions - 1);\n}\n\nexport function meshMonthlyCents(writeGbPerDay, regions, centsPerGb) {\n  return writeGbPerDay * (regions - 1) * 30 * centsPerGb;\n}\n",
       "tests": [
@@ -353,7 +353,7 @@
       "hints": [
         "A write is born in one region and must reach every other one — count how many times it crosses a region boundary.",
         "egress/day = writeGb × (regions − 1); cents/month = writeGb × (regions − 1) × 30 × centsPerGb.",
-        "Every write leaves its home region once per peer, writeGb × (regions − 1) per day — multiply by 30 days and the per-GB cents for the monthly replication bill"
+        "A write is born in one region and must reach every other region, so it crosses a boundary once per peer, never back to itself. Bill that daily traffic for a 30-day month at the per-gigabyte price."
       ]
     },
     {
@@ -364,7 +364,7 @@
         "cost",
         "availability"
       ],
-      "instructions": "**Interview prompt.** \"One region of our stack costs $4,000 a month. Running hot-hot in two regions doubles that. A pilot-light standby keeps the second region 10% warm and scales it up only during a disaster. What does each DR topology cost per month?\"\n\n**Why it works.** Hot-hot (active-active) pays the full regional price in every region. Pilot light pays one full region plus a warm per-mille slice of a second (‰ = x/1000) — data replicated and a skeleton fleet running. Money is in integer cents: $4,000 = 400,000¢. The tests choose inputs that divide exactly, so every answer is a whole number.\n\n**Your task.** Export two functions:\n- `hotHotMonthlyCents(perRegionCents, regions)` → `perRegionCents × regions`\n- `pilotLightMonthlyCents(perRegionCents, warmPermille)` → `perRegionCents + perRegionCents × warmPermille ÷ 1000`\n\n**Worked example.** 400,000¢ per region × 2 regions → **800,000¢** a month hot-hot.",
+      "instructions": "**Interview prompt.** \"One region of our stack costs $4,000 a month. Running hot-hot in two regions doubles that. A pilot-light standby keeps the second region 10% warm and scales it up only during a disaster. What does each DR topology cost per month?\"\n\n**Why it works.** Hot-hot (active-active) pays the full regional price in every region. Pilot light pays one full region plus a warm per-mille slice of a second (‰ = x/1000) — data replicated and a skeleton fleet running. Money is in integer cents: $4,000 = 400,000¢. The tests choose inputs that divide exactly, so every answer is a whole number.\n\n**Your task.** Export two functions:\n- `hotHotMonthlyCents(perRegionCents, regions)` → the monthly cost in cents of running `regions` full regions all the time\n- `pilotLightMonthlyCents(perRegionCents, warmPermille)` → the monthly cost of one full region plus a standby kept `warmPermille` out of 1,000 warm\n\n**Worked example.** 400,000¢ per region × 2 regions → **800,000¢** a month hot-hot.",
       "starter": "export function hotHotMonthlyCents(perRegionCents, regions) {\n  // TODO: full price in every region\n}\n\nexport function pilotLightMonthlyCents(perRegionCents, warmPermille) {\n  // TODO: one full region plus a warm slice of another\n}\n",
       "solution": "export function hotHotMonthlyCents(perRegionCents, regions) {\n  return perRegionCents * regions;\n}\n\nexport function pilotLightMonthlyCents(perRegionCents, warmPermille) {\n  return perRegionCents + (perRegionCents * warmPermille) / 1000;\n}\n",
       "tests": [
@@ -421,7 +421,7 @@
       "hints": [
         "Hot-hot runs two full copies all the time; pilot light keeps the second copy mostly switched off until it is needed.",
         "hotHot = perRegion × regions; pilotLight = perRegion + perRegion × warm‰ ÷ 1000.",
-        "Hot-hot pays the full region price times the region count — pilot light pays one full region plus the warm per-mille slice of a second, per × warm‰ ÷ 1000 added on"
+        "Hot-hot pays the full price for every region. Pilot light pays one full region and only the warm per-mille share of a second one, so add that share of a region's price to a single region."
       ]
     },
     {
@@ -432,7 +432,7 @@
         "consensus",
         "throughput"
       ],
-      "instructions": "**Interview prompt.** \"Our globally consistent database runs consensus across regions 100 ms apart, and every commit needs one quorum round. How many commits per second can it do one at a time — and with group commit packing 500 commits into each round?\"\n\n**Why it works.** If each commit needs its own consensus round and rounds run one after another, the inter-region round trip behaves like a critical section: at most 1000 ÷ rttMs rounds fit in a second (1 s = 1,000 ms). This is module 06's lock-serialization math with the WAN round trip as the hold time — and module 06's batching lesson is the escape hatch: pack commitsPerRound commits into every round and the cap multiplies by the batch size. The tests choose inputs that divide exactly, so every answer is a whole number.\n\n**Your task.** Export two functions:\n- `consensusCommitsPerSec(interRegionRttMs)` → `1000 ÷ interRegionRttMs`\n- `batchedCommitsPerSec(interRegionRttMs, commitsPerRound)` → `commitsPerRound × 1000 ÷ interRegionRttMs`\n\n**Worked example.** A 100 ms inter-region RTT → 1000 ÷ 100 = **10** commits/s, one round at a time.",
+      "instructions": "**Interview prompt.** \"Our globally consistent database runs consensus across regions 100 ms apart, and every commit needs one quorum round. How many commits per second can it do one at a time — and with group commit packing 500 commits into each round?\"\n\n**Why it works.** If each commit needs its own consensus round and rounds run one after another, the inter-region round trip behaves like a critical section: at most 1000 ÷ rttMs rounds fit in a second (1 s = 1,000 ms). This is module 06's lock-serialization math with the WAN round trip as the hold time — and module 06's batching lesson is the escape hatch: pack commitsPerRound commits into every round and the cap multiplies by the batch size. The tests choose inputs that divide exactly, so every answer is a whole number.\n\n**Your task.** Export two functions:\n- `consensusCommitsPerSec(interRegionRttMs)` → commits per second when every commit needs one inter-region round trip and rounds never overlap\n- `batchedCommitsPerSec(interRegionRttMs, commitsPerRound)` → commits per second when each round carries `commitsPerRound` commits\n\n**Worked example.** A 100 ms inter-region RTT → 1000 ÷ 100 = **10** commits/s, one round at a time.",
       "starter": "export function consensusCommitsPerSec(interRegionRttMs) {\n  // TODO: sequential rounds per second\n}\n\nexport function batchedCommitsPerSec(interRegionRttMs, commitsPerRound) {\n  // TODO: rounds per second times the batch\n}\n",
       "solution": "export function consensusCommitsPerSec(interRegionRttMs) {\n  return 1000 / interRegionRttMs;\n}\n\nexport function batchedCommitsPerSec(interRegionRttMs, commitsPerRound) {\n  return (commitsPerRound * 1000) / interRegionRttMs;\n}\n",
       "tests": [
@@ -486,7 +486,7 @@
       "hints": [
         "If rounds cannot overlap, the round trip is a lock you hold — ask how many such holds fit in one second.",
         "rounds/s = 1000 ÷ rttMs; batched = commitsPerRound × 1000 ÷ rttMs.",
-        "Each consensus round costs one inter-region RTT, so sequential rounds cap at 1000 ÷ rttMs per second — packing commitsPerRound into every round multiplies that cap by the batch size"
+        "Rounds that cannot overlap behave like a lock held for one round trip, so count how many round trips fit in a second. Batching does not shorten the round trip, it puts more commits in each one, so the cap grows with the batch size."
       ]
     },
     {
