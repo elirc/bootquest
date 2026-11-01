@@ -180,15 +180,19 @@ describe('GET /api/stats/weak and GET /api/due (ab wave S3)', () => {
     const s = ExplainBackScoreResponse.parse((await request(app).post(`/api/units/${b}/explain-back/self-score`).send({ perKeyPoint: marks })).body);
     expect(s.evidenceIds.length).toBeGreaterThan(1); // one evidence row per competency
     const missed = IDS.slice(0, 2);
+    // S5's self-score writes these rows itself (merged tree); on this branch alone they are inserted
+    // here. 018 is append-only (a second insert aborts), so insert only where the row is missing.
     for (const id of s.evidenceIds) {
       tmp.db.run(
-        `INSERT INTO eb_score_detail (evidence_id, plain, weighted, w3_missed, missed_ids, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO eb_score_detail (evidence_id, plain, weighted, w3_missed, missed_ids, created_at)
+         SELECT ?, ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM eb_score_detail WHERE evidence_id = ?)`,
         id,
         0.8,
         0.7,
         1,
         JSON.stringify(missed),
         clock().getTime(),
+        id,
       );
     }
     const w = await weak();
@@ -261,9 +265,29 @@ describe('GET /api/stats/weak and GET /api/due (ab wave S3)', () => {
     expect(await due()).toEqual({ retests: [], altSets: [], nextAltSetAt: null });
   });
 
-  it('retests are exactly GET /competencies retests', async () => {
+  it('retests are exactly GET /competencies retests (one due, one later)', async () => {
+    const t = clock().getTime();
+    // two changed-example schedules the way engines/ladder.ts scheduleRetests writes them
+    const ins = (unit: number, dueAt: number, eb: number) =>
+      tmp.db.run(
+        `INSERT INTO review_item (card_key, kind, unit_id, content_ref_id, competency_id, fsrs_state, due_at, created_at, updated_at) VALUES (?, 'retest', ?, NULL, NULL, ?, ?, ?, ?)`,
+        `retest:u${unit}:eb${eb}`,
+        unit,
+        JSON.stringify({ retest: { artifactUnitId: project, explainBackAttemptId: eb } }),
+        dueAt,
+        t,
+        t,
+      );
+    ins(drill, t - DAY_MS, 9001);
+    ins(study, t + DAY_MS, 9002);
     const comp = CompetenciesResponse.parse((await request(app).get('/api/competencies')).body);
-    expect((await due()).retests).toEqual(comp.retests);
+    const d = await due();
+    expect(d.retests).toHaveLength(2);
+    expect(d.retests).toEqual(comp.retests);
+    expect(d.retests.map((r) => [r.unitId, r.due, r.artifactUnitId])).toEqual([
+      [drill, true, project],
+      [study, false, project],
+    ]);
   });
 
   it('both routes refuse a query string (strict like every stats route)', async () => {
