@@ -2,6 +2,7 @@ import { XpAwardInput, type CheckType, type XpKind, type XpZeroReason } from '@b
 import type { Db } from '../db/database.ts';
 import { getAttempt, HonestyRuleError, isRevealed, isVerifiedPass, READING_ATTEST_SQL } from './attempts.ts';
 import { dayKey, nowMs, type Clock } from './clock.ts';
+import { EB_PASS_SQL } from './eb-score.ts';
 import { PROMOTION_MIN_COVERAGE } from './evidence.ts';
 
 /** Spec §6.1 amounts. `code` is per difficulty point (10 x difficulty). */
@@ -97,8 +98,9 @@ function insertXp(
  * the ledger before anything is paid (W1a audit #5):
  *  - code / quiz / predict / study-quest: the attempt is a verified pass (outcome
  *    pass + passing submit run) on a check whose type earns exactly that kind;
- *  - explain-back: the stored answer attempt has explain-back evidence with
- *    >= 80% coverage; patch-kata: the answer attempt has kata evidence;
+ *  - explain-back: the stored answer attempt has PASSING explain-back evidence
+ *    (EB_PASS_SQL: >= 80% coverage, weighted for a [wN] set, no [w3] missed);
+ *    patch-kata: the answer attempt has kata evidence;
  *  - reading: the attempt is a reading self-attest on a reading unit.
  * Unit, track and difficulty come from the DB, never the caller. Then, in
  * priority order: revealed => 0 forever; already paid for this unit+kind => 0
@@ -136,15 +138,16 @@ export function awardXp(db: Db, input: XpAwardInput, now: Clock): XpAward {
       case 'explain-back':
       case 'patch-kata': {
         const evKind = x.kind === 'explain-back' ? 'explain-back' : 'kata';
-        const minScore = x.kind === 'explain-back' ? PROMOTION_MIN_COVERAGE : 0;
-        const ok = db.get(
-          `SELECT 1 AS x FROM evidence WHERE attempt_id = ? AND kind = ? AND score >= ?`,
-          attempt.id,
-          evKind,
-          minScore,
-        );
+        // A5: an explain-back pays only on a PASSING self-score (EB_PASS_SQL: the floor, and no [w3] missed)
+        const ok =
+          x.kind === 'explain-back'
+            ? db.get(`SELECT 1 AS x FROM evidence e WHERE e.attempt_id = ? AND e.kind = 'explain-back' AND ${EB_PASS_SQL}`, attempt.id)
+            : db.get(`SELECT 1 AS x FROM evidence WHERE attempt_id = ? AND kind = ? AND score >= 0`, attempt.id, evKind);
         if (attempt.outcome !== 'submitted' || !ok) {
-          throw new HonestyRuleError('NOT_VERIFIED', `attempt ${attempt.id} has no completed ${evKind}${minScore ? ` >= ${minScore * 100}%` : ''}`);
+          throw new HonestyRuleError(
+            'NOT_VERIFIED',
+            `attempt ${attempt.id} has no completed ${evKind}${x.kind === 'explain-back' ? ` >= ${PROMOTION_MIN_COVERAGE * 100}% with every [w3] covered` : ''}`,
+          );
         }
         break;
       }

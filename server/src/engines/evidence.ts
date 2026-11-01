@@ -2,6 +2,7 @@ import { CompetencyId, EvidenceInput, PROJECT_UNIT_KINDS, PROMOTION_MIN_COVERAGE
 import type { Db } from '../db/database.ts';
 import { getAttempt, HonestyRuleError, isVerifiedPass, VERIFIED_PASS_SQL, type AttemptRow } from './attempts.ts';
 import { DAY_MS, nowMs, type Clock } from './clock.ts';
+import { EB_PASS_SQL } from './eb-score.ts';
 
 /**
  * Competency ladder (spec §6.2) — the truth layer.
@@ -18,9 +19,9 @@ import { DAY_MS, nowMs, type Clock } from './clock.ts';
  *   (a) artifact — 'artifact' evidence on an attempt that is a VERIFIED pass
  *       (outcome pass + passing submit run), solo, on a PROJECT_UNIT_KINDS
  *       unit that declares the competency;
- *   (b) ITS explain-back — 'explain-back' evidence >= 80% self-scored
- *       coverage on an unassisted 'submitted' answer attempt made at/after the
- *       artifact attempt, on the artifact's unit itself or on an
+ *   (b) ITS explain-back — 'explain-back' evidence that PASSES (EB_PASS_SQL:
+ *       >= 80% self-scored coverage, weighted for a [wN] set, and no [w3] missed)
+ *       on an unassisted 'submitted' answer attempt made at/after the artifact attempt, on the artifact's unit itself or on an
  *       explain-back-kind unit that lists the artifact unit as a prerequisite;
  *   (c) changed-example retest — 'retest' evidence on a DIFFERENT, verified,
  *       solo attempt on a 'retest' unit whose variation_of_unit_id chain
@@ -288,14 +289,13 @@ export function evaluatePromotion(db: Db, competency: CompetencyId, now: Clock):
     db.all<LegRow>(
       `SELECT e.id AS id, a.id AS attemptId, a.unit_id AS unitId, a.created_at AS at
          FROM evidence e JOIN attempt a ON a.id = e.attempt_id JOIN unit u ON u.id = a.unit_id
-        WHERE e.competency_id = ? AND e.kind = 'explain-back' AND e.score >= ? AND e.assistance = 'none'
+        WHERE e.competency_id = ? AND e.kind = 'explain-back' AND ${EB_PASS_SQL} AND e.assistance = 'none'
           AND a.mode = 'solo' AND a.outcome = 'submitted' AND a.answer IS NOT NULL
           AND (a.unit_id = ? OR (u.kind = 'explain-back' AND EXISTS (
                 SELECT 1 FROM unit_prerequisite p WHERE p.unit_id = u.id AND p.prereq_unit_id = ?)))
           AND a.created_at >= ? AND a.created_at > ? AND e.created_at > ? AND e.created_at <= ?
         ORDER BY a.created_at, e.id`,
       competency,
-      PROMOTION_MIN_COVERAGE,
       art.unitId,
       art.unitId,
       art.at,
@@ -347,7 +347,7 @@ export function evaluatePromotion(db: Db, competency: CompetencyId, now: Clock):
   const missing: string[] = [];
   if (best.artifact === null) missing.push('artifact: no unassisted, run-verified project artifact since the last rating change');
   if (best.explainBack === null) {
-    missing.push(`explain-back: none of the artifact's explain-backs reaches ${PROMOTION_MIN_COVERAGE * 100}% unassisted coverage`);
+    missing.push(`explain-back: none of the artifact's explain-backs reaches ${PROMOTION_MIN_COVERAGE * 100}% unassisted coverage (a weighted set also needs every [w3] key point)`);
   }
   if (best.retest === null) {
     missing.push("retest: no unassisted, run-verified changed-example retest of the artifact's unit >= 2 days after artifact + explain-back");

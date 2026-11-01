@@ -82,6 +82,7 @@ import {
 } from './types';
 import type { XpByTrack } from '@bootquest/shared/api';
 import { G1_MIN_DEFECTS, G1_TARGET_RATE, PROMOTION_MIN_COVERAGE } from '@bootquest/shared/thresholds';
+import { ebMeetsGate, ebTally } from '../lib/eb-weights';
 
 /** Private, fixture-only grading material. Never crosses the API boundary. */
 interface PrivateFixture {
@@ -961,8 +962,10 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
         exactMarks(ids, body.perKeyPoint);
         const missed = ids.filter((k) => body.perKeyPoint[k] === 'missed');
         const covered = ids.length - missed.length;
-        const coverage = covered / ids.length;
-        const passed = coverage >= PROMOTION_MIN_COVERAGE;
+        // A5 (as the server): weighted coverage + no [w3] missed for a [wN] set, plain otherwise
+        const tally = ebTally(ebKeyPoints(id).flatMap((q) => q.keyPoints), body.perKeyPoint);
+        const coverage = tally.coverage;
+        const passed = ebMeetsGate(tally, PROMOTION_MIN_COVERAGE * 100);
         const evidenceIds = fileEvidence(u, a.attemptId, 'explain-back', coverage, `${covered}/${ids.length} key points covered`, eb.competencies);
         scores.set(a.attemptId, { score: coverage, evidenceIds, at: NOW });
         let xp: { id: number; amount: number; reason: null | 'already-awarded' } | null = null;
@@ -1018,7 +1021,8 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
         if (scores.has(p.attemptId)) throw err(409, 'ALREADY_SCORED', `practice attempt ${practiceOf(id).findIndex((x) => x.attemptId === body.attemptId) + 1} is already self-scored (evidence is append-only)`);
         const missed = ids.filter((k) => body.perKeyPoint[k] === 'missed');
         const covered = ids.length - missed.length;
-        const coverage = covered / ids.length;
+        const tally = ebTally(ebKeyPoints(id).flatMap((q) => q.keyPoints), body.perKeyPoint);
+        const coverage = tally.coverage;
         const evidenceIds = fileEvidence(u, p.attemptId, 'explain-back', coverage, `${covered}/${ids.length} key points covered`, eb.competencies, 'practice');
         scores.set(p.attemptId, { score: coverage, evidenceIds, at: NOW });
         // feedback only: never XP, retests or promotions
@@ -1028,7 +1032,7 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
           total: ids.length,
           coverage,
           minCoveragePct: PROMOTION_MIN_COVERAGE * 100,
-          passed: coverage >= PROMOTION_MIN_COVERAGE,
+          passed: ebMeetsGate(tally, PROMOTION_MIN_COVERAGE * 100),
           missed,
           evidenceIds,
           xp: null,
