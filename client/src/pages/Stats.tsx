@@ -15,6 +15,7 @@ import type {
 } from '../api/types';
 import { BarChart, DataTable, Legend, RateChart, ShareBar, type BarDatum, type ChartSeries } from '../components/StatsCharts';
 import { Chip, LoadState, PageHeader, Panel, ProgressBar } from '../components/ui';
+import { WeakSpotsPanel } from '../components/WeakSpots';
 import { fmtRate, longDate, monthStarts, shortDate, weekdayLabel } from '../lib/chart';
 import { fmtInt, fmtStamp } from '../lib/format';
 import { buildHeatGrid } from '../lib/heatmap';
@@ -28,7 +29,7 @@ const COMPETENCIES: { id: CompetencyId; label: string }[] = COMPETENCY_IDS.map((
 type Loaded<T> = AsyncState<T> & { reload: () => void };
 
 /**
- * Stats: tiles, XP over time, pass rates, review forecast + retention, campaign progress, G1 catch rate, evidence.
+ * Stats: tiles, weak spots (ab wave S3), XP over time, pass rates, review forecast + retention, campaign progress, G1 catch rate, evidence.
  *
  * Release (UI-FINAL leftover, CLS 0.0067 on /stats): every panel used to fetch on its own and grow from its skeleton
  * when its data landed, pushing the panels below it down one by one. The page now starts every panel request at once
@@ -44,9 +45,10 @@ export function StatsPage() {
   const reviews = useAsync(() => api.getReviewStats(), [api]);
   const campaign = useAsync(() => api.getCampaignProgress(), [api]);
   const katas = useAsync(() => api.getKataStats(), [api]);
+  const weak = useAsync(() => api.getWeakSpots(), [api]);
   // settled once = laid out for good (a later Retry puts that one panel back into loading, in place)
   const [panelsSettled, setPanelsSettled] = useState(false);
-  const allSettled = [xp, rates, reviews, campaign, katas].every((x) => x.status !== 'loading');
+  const allSettled = [xp, rates, reviews, campaign, katas, weak].every((x) => x.status !== 'loading');
   if (allSettled && !panelsSettled) setPanelsSettled(true);
   const grid = q.data ? buildHeatGrid(q.data.heatmap, q.data.today) : null;
   const days = q.data?.heatmap ?? [];
@@ -81,6 +83,7 @@ export function StatsPage() {
             </div>
           </div>
           <div className="stats-grid">
+            <WeakSpotsPanel q={weak} />
             <XpPanel q={xp} />
             <PassRatePanel q={rates} />
             <ReviewPanel q={reviews} />

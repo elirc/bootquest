@@ -35,6 +35,8 @@ import {
   type RefContentResponse,
   type WrittenAnswerResponse,
   type SlateSettingsResponse,
+  type DueResponse,
+  type WeakSpotsResponse,
 } from './types';
 
 type Init = { method: 'POST' | 'PUT'; body: unknown };
@@ -146,5 +148,8 @@ export function createHttpApi(baseUrl = '/api', fetchImpl: typeof fetch = (...a)
             ? { preset: b.preset }
             : { tracks: b.tracks.map((t) => ({ trackId: t.trackId, enabled: t.enabled, ...(t.size !== undefined ? { size: t.size } : {}) })) },
       }),
+    // ---- ab wave S3
+    getWeakSpots: () => call<WeakSpotsResponse>('/stats/weak'),
+    getDue: () => call<DueResponse>('/due'),
   };
 }

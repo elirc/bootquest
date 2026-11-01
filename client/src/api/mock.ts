@@ -79,6 +79,8 @@ import {
   type ReviewStatsResponse,
   type TrackProgress,
   type XpStatsResponse,
+  type DueResponse,
+  type WeakSpotsResponse,
 } from './types';
 import type { XpByTrack } from '@bootquest/shared/api';
 import { G1_MIN_DEFECTS, G1_TARGET_RATE, PROMOTION_MIN_COVERAGE } from '@bootquest/shared/thresholds';
@@ -1308,6 +1310,12 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
     reseedItem: (unitId) => {
       itemVersion.set(unitId, versionOf(unitId) + 1);
     },
+
+    // ---- ab wave S3: a fresh learner has no weak spots; Due now mirrors getCompetencies' retests
+    // (none) and no alternate set is ever due (the mock clock is fixed: a sibling of an answered set
+    // stays inside its 2-day gap).
+    getWeakSpots: () => wrap((): WeakSpotsResponse => ({ today: fx.dashboard.today, totalGroups: 0, groups: [] })),
+    getDue: () => wrap((): DueResponse => ({ retests: [], altSets: [], nextAltSetAt: null })),
   };
 }
 

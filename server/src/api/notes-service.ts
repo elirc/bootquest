@@ -96,7 +96,7 @@ function quizAnswered(db: Db, quizKey: string): { answered: boolean; passed: boo
 
 type Release = { released: true } | { released: false; reason: 'unanswered' | 'missed'; at: number | null };
 
-function explanationRelease(db: Db, quizKey: string, now: number): Release {
+export function explanationRelease(db: Db, quizKey: string, now: number): Release {
   const a = quizAnswered(db, quizKey);
   if (!a.answered) return { released: false, reason: 'unanswered', at: null };
   if (a.passed) return { released: true };

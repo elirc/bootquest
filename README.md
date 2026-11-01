@@ -31,23 +31,44 @@ Stack: an npm workspaces monorepo.
 
 ## Quickstart (Windows)
 
+### Run it
+
 ```bat
 npm install
 
 rem the one DB file. There is no default: every server/CLI path refuses to guess.
 set BOOTQUEST_DB=C:\Users\Owner\bootquest\bootquest.db
 
+rem the API server AND the browser UI from this one terminal; Ctrl+C stops both
+npm run app
+```
+
+`npm run app` prints the URL to open (http://localhost:5173 by default) once both halves are
+up. It refuses, before opening anything, when `BOOTQUEST_DB` is unset or not an absolute path. Both halves run in one
+Node process, so Ctrl+C (or closing the window) never leaves a server behind, in cmd,
+PowerShell or Git Bash alike. Set the variable the same way in the other shells:
+`$env:BOOTQUEST_DB = "C:\Users\Owner\bootquest\bootquest.db"` (PowerShell) or
+`export BOOTQUEST_DB=/c/Users/Owner/bootquest/bootquest.db` (Git Bash). Options:
+
+- `BOOTQUEST_PORT` (API, default 4178) and `BOOTQUEST_UI_PORT` (UI, default 5173).
+- `npm run app -- --open` also opens the browser (cmd or Git Bash; PowerShell 5.1 drops the `--`).
+
+The UI is the client's own Vite dev server with its usual config: it proxies `/api` to the
+API port and keeps imported packs (answer keys) off its file server.
+
+To run the halves separately instead (two terminals):
+
+```bat
 rem API on http://127.0.0.1:4178 (BOOTQUEST_PORT to change)
 npm run serve
 ```
 
-In a second terminal, start the browser UI. Vite serves it on http://localhost:5173 and
-proxies `/api` to 127.0.0.1:4178. `npm run dev:mock -w @bootquest/client` runs the UI
-standalone against a mock instead.
-
 ```bat
+rem UI on http://localhost:5173, proxying /api to 127.0.0.1:4178
 npm run dev -w @bootquest/client
 ```
+
+`npm run dev:mock -w @bootquest/client` runs the UI standalone against a mock instead.
 
 The CLI is for serious work in your own editor. Add the repo's `bin\` folder to PATH:
 

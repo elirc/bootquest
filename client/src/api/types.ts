@@ -77,6 +77,8 @@ import type {
   WrittenAnswerResponse,
   XpOutcome as XpOutcomeSchema,
 } from '@bootquest/shared/api';
+// ab wave S3: weak spots + due now (shared/src/api-ext.ts, types only)
+import type { AltSetDueDto, DueResponse, WeakExampleDto, WeakGroupDto, WeakSignalKind, WeakSpotsResponse } from '@bootquest/shared/api-ext';
 
 // ---------------------------------------------------------------- re-exported wire types
 
@@ -131,6 +133,7 @@ export type {
   UnitSummary,
   WrittenAnswerResponse,
 };
+export type { AltSetDueDto, DueResponse, WeakExampleDto, WeakGroupDto, WeakSignalKind, WeakSpotsResponse };
 
 // shared/src/api.ts exports these schemas without a sibling type alias; infer them here.
 export type HealthResponse = z.infer<typeof HealthResponseSchema>;
@@ -311,6 +314,11 @@ export interface BootQuestApi {
    * moves). 400 VALIDATION for a track with no drill slot, a duplicate, a size outside 1-10, or every track off.
    */
   putSlateSettings(body: SlateSettingsBody): Promise<SlateSettingsResponse>;
+  // ---- ab wave S3: weak spots + due now (read-only)
+  /** GET /api/stats/weak — per repo / drill module, released keys only, recency-weighted, capped. */
+  getWeakSpots(): Promise<WeakSpotsResponse>;
+  /** GET /api/due — open retests + alternate explain-back sets whose rotation gate has opened. */
+  getDue(): Promise<DueResponse>;
 }
 
 /** Codes the client can raise itself on top of the server's envelope codes. */
