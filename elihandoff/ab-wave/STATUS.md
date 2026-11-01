@@ -127,7 +127,17 @@ resume from here without re-auditing or re-running the council.
     moves the card to Relearning, so a later Again on it does not demote (conservative).
   - S1 ring fixes DONE: a52edb5c (midnight-boundary tests), 08cbd895 + a7f7d6e7 (README `today` exits 2; the
     `bootquest slate` README line is drafted in S1's report for the hub). Expected server count 660 (not re-run).
+  - S4-on-S5 PASS (0 BLOCKING, 0 SHOULD; counts recounted; `git merge-tree` of ab-s5 vs every other stream clean).
+    Hub: recount the client base at merge (377 is right per S1/S2).
+  - S4 DONE incl. owed client suite (398/398) and ring fixes ebde343f (mixed drills follow slate tracks; palette
+    Enter waits for the current query; "Expand all (N rows)" note); client 398 → 401.
   2026-11-01 all 7 were resumed with their review (S1 on S2 and S7 on S1 added; S4 still owes its client suite).
+
+- **Integration (session 3, 2026-11-01):** merged into `ab-wave` with `--no-ff`, no conflicts so far: S6
+  (a6a9439b), S2 (44b951af), S1 (540ec8e2), S5 (1922583f). Deviation from the planned order: S2/S1/S5 went before
+  S7 because S7 (and S3) were still applying ring fixes. Checkpoint 1 (typechecks + server suite) is logged in
+  `scratchpad/hub/cp1.txt` of the session. Still to merge: S7, S3, S4 (after their ring fixes), then the merge
+  items listed above and the full battery.
 
 ## Not done
 - Finish the streams (resume prompt below tells each agent to adopt its clone's partial work), ring review, hub
