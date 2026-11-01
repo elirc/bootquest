@@ -37,6 +37,8 @@ import {
   type SlateSettingsResponse,
   type DueResponse,
   type WeakSpotsResponse,
+  type DrillNextResponse,
+  type UnitSearchResponse,
 } from './types';
 
 type Init = { method: 'POST' | 'PUT'; body: unknown };
@@ -151,5 +153,12 @@ export function createHttpApi(baseUrl = '/api', fetchImpl: typeof fetch = (...a)
     // ---- ab wave S3
     getWeakSpots: () => call<WeakSpotsResponse>('/stats/weak'),
     getDue: () => call<DueResponse>('/due'),
+    // ab S4 find things
+    searchUnits: (q, limit) => {
+      const params = new URLSearchParams({ q });
+      if (limit !== undefined) params.set('limit', String(limit));
+      return call<UnitSearchResponse>(`/units/search?${params.toString()}`);
+    },
+    getNextDrill: (tracks) => call<DrillNextResponse>(`/drills/next?${new URLSearchParams({ tracks: tracks.join(','), mode: 'mixed' }).toString()}`),
   };
 }

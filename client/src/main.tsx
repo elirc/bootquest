@@ -8,6 +8,7 @@ import './styles/app.css';
 import './styles/skilltree.css';
 import './styles/trackunits.css';
 import './styles/slatefocus.css';
+import './styles/find.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

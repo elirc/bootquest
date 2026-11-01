@@ -51,6 +51,7 @@ import { contentCounts, reviewQueue } from '../store/queries.ts';
 import { emptyContentStore, type UnitContentStore } from './content-store.ts';
 import { asyncRoute, errorBody, HttpError, sendJson, validate } from './http.ts';
 import { localOnlyGuard } from './guard.ts';
+import { registerFindRoutes } from './find-routes.ts';
 import { getRefContent } from './service.ts';
 import { getUnitNotes } from './notes-service.ts';
 import { reviewCardText } from './study-service.ts';
@@ -190,6 +191,8 @@ export function createApp(opts: AppOptions): Express {
     validate(EmptyQuery, req.query, 'query');
     sendJson(res, 200, getTrackUnits(deps, id));
   }));
+
+  registerFindRoutes(router, deps); // ab S4: /units/search (before /units/:id) + /drills/next
 
   // key = one URL-encoded path segment (keys contain '/'): /units/by-key/bootforge%2Fjs-fundamentals%2F...
   router.get('/units/by-key/:key', asyncRoute((req, res) => {

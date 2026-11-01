@@ -17,6 +17,9 @@ export const hasModifier = (e: KeyboardEvent): boolean => e.ctrlKey || e.metaKey
 /** Ctrl on Windows/Linux, Cmd on macOS. */
 export const isMod = (e: KeyboardEvent): boolean => e.ctrlKey || e.metaKey;
 
+/** ab S4: Ctrl+K / Cmd+K, the "find a unit" palette (no Shift / Alt variants). */
+export const isPaletteKey = (e: KeyboardEvent): boolean => isMod(e) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k';
+
 /**
  * Window-level keydown listener. The handler is kept in a ref so callers can pass an
  * inline closure without re-binding on every render.
@@ -51,6 +54,7 @@ export interface ShortcutDoc {
 export const SHORTCUTS: ShortcutDoc[] = [
   ...Object.entries(GO_CHORDS).map(([k, v]) => ({ keys: ['g', k], label: `Go to ${v.label}`, scope: 'Global' })),
   { keys: ['?'], label: 'Toggle this help', scope: 'Global' },
+  { keys: ['Ctrl', 'K'], label: 'Find a unit by title or key', scope: 'Global' },
   { keys: ['j', 'k'], label: 'Next / previous step', scope: 'Campaign' },
   { keys: ['v'], label: 'Toggle list / skill-tree view', scope: 'Campaign' },
   { keys: ['↑', '↓', '←', '→'], label: 'Move between skill-tree nodes', scope: 'Campaign' },

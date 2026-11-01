@@ -2,7 +2,9 @@ import { join } from 'node:path';
 import request from 'supertest';
 import type { Express } from 'express';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { CampaignResponse, DashboardResponse, SelfAttestResponse, SubmitResponse, TrackUnitsResponse } from '@bootquest/shared/api';
+import { CampaignResponse, SelfAttestResponse, SubmitResponse, TrackUnitsResponse } from '@bootquest/shared/api';
+// ab S4: the dashboard's slate items carry targetUnitId (api-ext), so the strict parse uses the extended schema
+import { DashboardResponseExt as DashboardResponse } from '@bootquest/shared/api-ext';
 import { createApp } from '../../src/api/app.ts';
 import { mapContentStore } from '../../src/api/content-store.ts';
 import type { Runner } from '../../src/api/runners.ts';
