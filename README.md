@@ -68,8 +68,6 @@ Commands:
 - `bootquest status`
 - `bootquest today`: today's slate (slots and done state), reviews due, streak, freeze
   tokens and next up per track. Read-only; exits 2 (and says why) when the server cannot be read.
-- `bootquest slate`: show the daily slate settings; `--tracks java,sysdesign --size 3` or
-  `--preset full|default` changes them from tomorrow (today's slate never changes).
 - `bootquest sync`
 - `bootquest mutate`: the mutation gate on solo-project units.
 - `bootquest reset --yes-really`: see below.
