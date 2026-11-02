@@ -34,11 +34,9 @@ The server refuses to start on a stale stamp or a busy port, and backs up the DB
 - **The owner has not used the app yet** (checked 2026-10-30: 0 attempts, 0 XP, 0 review cards, 15 "missed" days on
   the heatmap since 10-15). REVIEW-2026-10-30 §1 explains why that puts the "day one" app wave first. Re-check with
   `GET /api/dashboard` before planning.
-- **ab wave INTEGRATED 2026-11-01 on branch `ab-wave`, full battery green, NOT landed** (see
-  [`ab-wave/STATUS.md`](ab-wave/STATUS.md) and SEEDING §8 "ab wave"). All 7 streams merged after the ring review, the
-  hub merge items are fixed, and the app was booted on a copy of the owner DB (migrations 017/018 apply cleanly).
-  Landing = the owner says "land": merge `ab-wave` into `main` and push. Until then selfboot is on `ab-wave`: do not
-  `npm run serve` / `npm run app` from it against the real DB.
+- **ab wave LANDED 2026-11-01 on `main` a2777ba8 (pushed)**, full battery green (see
+  [`ab-wave/STATUS.md`](ab-wave/STATUS.md) and SEEDING §8 "ab wave"). The owner can now run the app from `main`
+  against the real DB (`npm run app`); migrations 017/018 apply on first boot (proven on a DB copy).
 - Content census (count again before trusting a number; `C:\Users\Owner\Desktop\bootquest-handoff\tools\census.mjs`
   is a read-only counter):
 

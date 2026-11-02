@@ -1,4 +1,4 @@
-# ab wave: status and how to resume (paused 2026-10-30, out of usage)
+# ab wave: status (LANDED 2026-11-01, main a2777ba8)
 
 Owner order: "review plan in elihandoff and implement, use 7 opus agents, council of 5 agents to review high level
 choices". The plan is `../REVIEW-2026-10-30.md`. This folder holds what the paused session produced. A new session can
@@ -152,8 +152,7 @@ resume from here without re-auditing or re-running the council.
   weighted EB sets, 51 blindable `[senior]` prompts (of 57), sysdrills 129, EB packs 244. ladder-real pins unchanged.
 
 ## Not done
-- Landing: the owner says "land" → `git switch main && git merge --no-ff ab-wave && git push`, then switch selfboot
-  back to main. Everything else in the wave is done.
+- Nothing: landed on `main` a2777ba8 and pushed 2026-11-01 (owner said "land"). Owner items are in SEEDING §8.
 
 ## Resume (new session)
 1. Read `../../AGENTS.md`, then this file, then `RULINGS.md`, then `briefs/COMMON.md`. Do not re-run the council.
