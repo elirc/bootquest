@@ -190,8 +190,10 @@ describe('GET /api/dashboard slate targetUnitId', { timeout: 30_000 }, () => {
     expect(target(d, 'drill:csharp')).toBe(ctx.id('find/cs/linq'));
     // act 1 of js: study A has no check (content pending), so the first AVAILABLE quest is reading R1
     expect(target(d, 'campaign')).toBe(ctx.id('campaign/js/read-r1'));
-    const review = d.slate.items.find((i) => i.slot === 'review');
-    expect(review && 'targetUnitId' in review).toBe(false);
+    // merged ab wave (S1): no review slot before the learner's first review card, so this fresh
+    // fixture has none; a review slot never carries a target (only drill sets and the campaign step do)
+    expect(d.slate.items.find((i) => i.slot === 'review')).toBeUndefined();
+    expect(d.slate.items.filter((i) => 'targetUnitId' in i).every((i) => i.kind !== 'review-clear')).toBe(true);
 
     // reveal skips a drill for good; a pass moves the target on (and unlocks the prerequisite chain)
     await request(ctx.app).post(`/api/units/${ctx.id('find/js/revealed')}/reveal`).send({});
