@@ -2,14 +2,15 @@ import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { errorText } from '../api/errors';
 import { createMockApi } from '../api/mock';
-import { ApiError, type BootQuestApi, type Dashboard, type RetestListItemDto, type SlateItem } from '../api/types';
+import { ApiError, type BootQuestApi, type Dashboard, type SlateItem } from '../api/types';
 import { daysFrom, fmtRelative, fmtShortDate, fmtStamp, fmtWhen, plural } from '../lib/format';
 import { COMPETENCY_IDS, TRACK_IDS, isTrackId } from '../lib/view';
 import { renderApp } from '../test/render';
 import { reviewKeyBlocked } from './Review';
 
-// fix/client-dash: Due-now panel, local dates, demotions, Review shortcut gating, slate routing
-// and variants, the evidence deep link, friendly error text.
+// fix/client-dash: local dates, demotions, Review shortcut gating, slate routing
+// and variants, the evidence deep link, friendly error text. (The Due-now panel tests live in
+// due-weak.test.tsx since ab wave S3 moved the panel onto GET /due.)
 
 const ORIGINAL_TZ = process.env.TZ;
 afterEach(() => {
@@ -104,102 +105,6 @@ describe('lib/view mirrors shared/src/enums.ts', () => {
   });
 });
 
-describe('Due now (open retests)', () => {
-  const NOW = Date.now();
-  const retests: RetestListItemDto[] = [
-    { reviewItemId: 9, unitId: 777, title: 'Changed example: later one', dueAt: NOW + 2 * 86_400_000, artifactUnitId: 106, due: false },
-    { reviewItemId: 8, unitId: 102, title: 'Changed example: group records by key length', dueAt: NOW - 3_600_000, artifactUnitId: 106, due: true },
-  ];
-
-  it('lists due retests first and prominently, each linking its retest unit; legs link their units', async () => {
-    const base = createMockApi();
-    const api: BootQuestApi = { ...base, getCompetencies: async () => ({ ...(await base.getCompetencies()), retests }) };
-    renderApp('/', api);
-    const panel = await screen.findByTestId('due-now');
-    const section = panel.closest('section')!;
-    expect(section).toHaveClass('due-now-hot');
-    expect(within(section).getByRole('heading', { level: 2 })).toHaveTextContent('Due now · 1 retest open');
-    const rows = panel.querySelectorAll('[data-retest]');
-    expect(Array.from(rows).map((r) => r.getAttribute('data-retest'))).toEqual(['102', '777']);
-    expect(rows[0]).toHaveAttribute('data-due', 'true');
-    expect(within(rows[0] as HTMLElement).getByText('open now')).toBeInTheDocument();
-    expect(within(rows[0] as HTMLElement).getByRole('link', { name: /Take the retest/ })).toHaveAttribute('href', '/play/102');
-    expect(within(rows[0] as HTMLElement).getByRole('link', { name: 'artifact unit #106' })).toHaveAttribute('href', '/play/106');
-    expect(within(rows[1] as HTMLElement).getByRole('link', { name: /Retest: Changed example: later one/ })).toHaveAttribute('href', '/play/777');
-    expect(rows[1]).toHaveTextContent(`opens ${fmtShortDate(NOW + 2 * 86_400_000)}`);
-
-    // the competency legs: artifact + retest chips are links; the due retest says so
-    const lf = screen.getByRole('table').querySelector<HTMLElement>('[data-competency="language-fluency"]')!;
-    expect(within(lf.querySelector<HTMLElement>('[data-leg="artifact"]')!).getByRole('link')).toHaveAttribute('href', '/play/106');
-    const retestLeg = lf.querySelector<HTMLElement>('[data-leg="retest"]')!;
-    expect(within(retestLeg).getByRole('link')).toHaveAttribute('href', '/play/102');
-    expect(retestLeg).toHaveTextContent('open now');
-    // explain-back has no unit on the wire: stays a plain chip
-    expect(within(lf.querySelector<HTMLElement>('[data-leg="explain"]')!).queryByRole('link')).toBeNull();
-  });
-
-  it('says how a retest gets scheduled when there is none; a failed read has its own retry', async () => {
-    renderApp('/');
-    const empty = await screen.findByTestId('due-empty');
-    expect(empty).toHaveTextContent('A passing explain-back');
-    // fix-wave 4: both spaced-repetition mechanisms are named, so a sibling-set unit's pass is not a mystery
-    expect(empty).toHaveTextContent('on an artifact with a seeded changed example schedules a retest at least 2 days later');
-    expect(empty).toHaveTextContent('units without a seeded variation rotate alternate question sets instead');
-    expect(empty).toHaveTextContent('the next fresh set opens from the unit page');
-    expect(screen.getByTestId('due-now').closest('section')).not.toHaveClass('due-now-hot');
-
-    const base = createMockApi();
-    let fail = true;
-    const api: BootQuestApi = {
-      ...base,
-      getCompetencies: () => (fail ? Promise.reject(new ApiError(500, 'INTERNAL', 'boom')) : base.getCompetencies()),
-    };
-    const second = renderApp('/', api);
-    const due = await within(second.container).findByTestId('due-now');
-    expect(within(due).getByRole('alert')).toHaveTextContent('boom');
-    // the rest of the dashboard is still there
-    expect(within(second.container).getByRole('table')).toBeInTheDocument();
-    fail = false;
-    await second.user.click(within(due).getByRole('button', { name: 'Retry' }));
-    expect(await within(second.container).findByTestId('due-empty')).toBeInTheDocument();
-  });
-
-  it('the panel\'s Retry keeps the rest of the dashboard mounted (no blank page, no refetched slate targets)', async () => {
-    const base = createMockApi();
-    let fail = true;
-    let release: () => void = () => {};
-    let trackUnitCalls = 0;
-    const api: BootQuestApi = {
-      ...base,
-      getCompetencies: () =>
-        fail
-          ? Promise.reject(new ApiError(500, 'INTERNAL', 'boom'))
-          : new Promise((resolve, reject) => {
-              release = () => void base.getCompetencies().then(resolve, reject);
-            }),
-      getTrackUnits: (t) => {
-        trackUnitCalls++;
-        return base.getTrackUnits(t);
-      },
-    };
-    const { user, container } = renderApp('/', api);
-    const due = await within(container).findByTestId('due-now');
-    await waitFor(() => expect(within(slateRow('drill:js')!).getByRole('link')).toHaveAttribute('href', '/play/102'));
-    const table = within(container).getByRole('table');
-    const calls = trackUnitCalls;
-    fail = false;
-    await user.click(within(due).getByRole('button', { name: 'Retry' }));
-    // mid-reload: the page is still there (same nodes), and the panel does not claim "no retests"
-    expect(table).toBeInTheDocument();
-    expect(within(container).getByTestId('due-now')).toBe(due);
-    expect(within(due).queryByTestId('due-empty')).toBeNull();
-    act(() => release());
-    expect(await within(due).findByTestId('due-empty')).toBeInTheDocument();
-    expect(table).toBeInTheDocument();
-    expect(trackUnitCalls).toBe(calls);
-  });
-});
-
 describe('slate routing and variants', () => {
   it('drill sets go to the next unpassed drill; the campaign step to the track that has one', async () => {
     const api = createMockApi();
@@ -211,9 +116,10 @@ describe('slate routing and variants', () => {
     await waitFor(() => expect(within(slateRow('drill:js')!).getByRole('link')).toHaveAttribute('href', '/play/102'));
     // java: no drill unit at all -> the track page
     expect(within(slateRow('drill:java')!).getByRole('link')).toHaveAttribute('href', '/campaign/java');
-    // campaign: the in-progress quest of the first track with an actionable one
-    await waitFor(() => expect(within(slateRow('campaign')!).getByRole('link')).toHaveAttribute('href', '/campaign/js?unit=102'));
-    expect(slateRow('campaign')).toHaveTextContent('Campaign step JS/TS');
+    // campaign: the in-progress quest of the first track with an actionable one (ab S4: the
+    // server's targetUnitId, straight to the unit page)
+    await waitFor(() => expect(within(slateRow('campaign')!).getByRole('link')).toHaveAttribute('href', '/play/102'));
+    expect(slateRow('campaign')).toHaveTextContent('Campaign step');
     expect(slateRow('drill:js')).toHaveTextContent('JS/TS drill set (5 drills)');
   });
 
@@ -249,6 +155,13 @@ describe('slate routing and variants', () => {
     expect(slateRow('campaign')).toHaveTextContent('nothing open in an unlocked act today');
     expect(within(slateRow('review')!).getByRole('link')).toHaveAttribute('href', '/review');
     expect(screen.getByRole('progressbar', { name: 'Slate items cleared' })).toHaveAttribute('aria-valuemax', '1');
+  });
+
+  it('an empty slate is not called a review-only day (ab hub merge item)', async () => {
+    renderApp('/', withSlate([]));
+    expect(await screen.findByTestId('slate-empty')).toHaveTextContent('Earn 20 XP to keep the streak');
+    expect(screen.queryByTestId('slate-review-only')).toBeNull();
+    for (const t of ['js', 'csharp', 'java', 'sysdesign']) expect(slateRow(`drill:${t}`)).toHaveAttribute('data-missing', 'true');
   });
 
   it('a fresh day with an empty review queue is not counted as cleared work', async () => {
@@ -342,7 +255,8 @@ describe('Review: demotions and shortcut gating', () => {
     const api: BootQuestApi = {
       ...base,
       getReviewQueue: async () => ({ count: items.length, items }),
-      gradeReview: async (id, g) => ({ ...(await base.gradeReview(id, g)), nextDueAt: due[n++]! }),
+      // remainingDue follows this 3-card queue (ab wave S2: "Queue cleared" needs the server's 0 due)
+      gradeReview: async (id, g) => ({ ...(await base.gradeReview(id, g)), nextDueAt: due[n++]!, remainingDue: items.length - n }),
     };
     const { user } = renderApp('/review', api);
     await screen.findByRole('button', { name: /Show answer/ });

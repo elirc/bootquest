@@ -8,7 +8,6 @@ import {
   ApiErrorBody,
   AttemptDetailResponse,
   CompetenciesResponse,
-  DashboardResponse,
   EvidenceListResponse,
   ExplainBackKeyResponse,
   ExplainBackScoreResponse,
@@ -20,6 +19,8 @@ import {
   SubmitResponse,
   UnitDetailResponse,
 } from '@bootquest/shared/api';
+// ab S4: the dashboard's slate items carry targetUnitId (api-ext), so the strict parse uses the extended schema
+import { DashboardResponseExt as DashboardResponse } from '@bootquest/shared/api-ext';
 import type { SeedExplainBackItem, SeedPatchKataItem } from '@bootquest/shared';
 import { createApp } from '../../src/api/app.ts';
 import type { Runner } from '../../src/api/runners.ts';

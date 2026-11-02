@@ -51,13 +51,16 @@ import { contentCounts, reviewQueue } from '../store/queries.ts';
 import { emptyContentStore, type UnitContentStore } from './content-store.ts';
 import { asyncRoute, errorBody, HttpError, sendJson, validate } from './http.ts';
 import { localOnlyGuard } from './guard.ts';
+import { registerFindRoutes } from './find-routes.ts';
 import { getRefContent } from './service.ts';
 import { getUnitNotes } from './notes-service.ts';
 import { reviewCardText } from './study-service.ts';
 import { campaignProgress, passRates, reviewStats, xpStats } from './stats-service.ts';
+import { registerS3Routes } from './s3-routes.ts';
 import { defaultRunners, type RunnerRegistry } from './runners.ts';
 import { emptySeedItemStore, type SeedItemStore } from '../store/seed-items.ts';
 import { ladderUnits } from '../store/ladder.ts';
+import { registerSettingsRoutes } from './settings-routes.ts';
 import {
   answerExplainBack,
   getAttemptDetail,
@@ -188,6 +191,8 @@ export function createApp(opts: AppOptions): Express {
     validate(EmptyQuery, req.query, 'query');
     sendJson(res, 200, getTrackUnits(deps, id));
   }));
+
+  registerFindRoutes(router, deps); // ab S4: /units/search (before /units/:id) + /drills/next
 
   // key = one URL-encoded path segment (keys contain '/'): /units/by-key/bootforge%2Fjs-fundamentals%2F...
   router.get('/units/by-key/:key', asyncRoute((req, res) => {
@@ -381,6 +386,8 @@ export function createApp(opts: AppOptions): Express {
     sendJson(res, 200, CampaignProgressResponse.parse(campaignProgress(deps)));
   }));
 
+  registerS3Routes(router, ladder); // ab wave S3: GET /stats/weak, GET /due
+
   // W7: the ladder units (explain-back / G2 / kata bank / retests / authored G3-G4) with campaign links
   router.get('/ladder', asyncRoute((req, res) => {
     validate(EmptyQuery, req.query, 'query');
@@ -445,6 +452,8 @@ export function createApp(opts: AppOptions): Express {
     validate(EmptyQuery, req.query, 'query');
     sendJson(res, 200, RefContentResponse.parse(await getRefContent(deps, id)));
   }));
+
+  registerSettingsRoutes(router, deps); // ab S1: GET/PUT /settings/slate
 
   app.use('/api', router);
 

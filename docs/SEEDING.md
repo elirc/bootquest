@@ -162,6 +162,14 @@ Append a module: add `tools/seed/authoring/sysdrills/NN-topic.json` (next free `
 `validation.json` together. A quarantined exercise blocks the stamp at this bank size: fix
 the authoring, never the test.
 
+Task lines and hints (ab wave): "Your task" states what each function answers, its units and
+its rounding, never the formula (no backticked arithmetic: x, /, ceil/floor brackets,
+operators, `Math.*`, ceil/floor/max/min calls); the formula goes in hint 2; hint 3 is the
+approach in words (no `;`, `=>`, `return`, parentheses or backtick arithmetic). Only the
+sysdrills importer enforces the task line (`import.ts` `taskFormulaSpans` / `hintThreeCode`);
+the cs/java importers gate hint 3 only. A trap test names its naive variant and is added
+only where that variant passes every other test.
+
 #### csdrills (the csharp track's authored drill bank)
 
 `csdrills` has no upstream repo either: its source is hand-written JSON committed in this
@@ -366,6 +374,17 @@ npm run seed:explainback -- docs/learning/testing-rationale.md --checkout .cache
 The G2 delegation-brief rubrics are explain-back packs too: the drafts are in
 `tools/seed/authoring/g2/` and the output in `content/seed/explainback/g2-brief--<repo>/`.
 See `docs/recon/w5c-content.md` for the `[wN]` weight convention.
+
+**Key-point weights `[wN]` (ab wave).** An explain-back key point may start with `[w1]`, `[w2]`
+or `[w3]` (exact prefix at the very start; prose mentions of "[w3]" do not count). A set is
+WEIGHTED only when every key point carries a prefix; otherwise it is scored as before (plain
+covered/total). The prefix stays in the stored and served text (seed items byte-identical, no
+`weight` field); the server derives it at runtime (`shared/src/eb-weight.ts` `kpWeight`) and the
+client shows it as a chip. Gate for a weighted set: Σ weight(covered) / Σ weight(all) ≥ 80% AND
+no `[w3]` missed. One predicate (`server/src/engines/eb-score.ts` `ebPasses` / `EB_PASS_SQL`)
+decides `passed`, the pass XP, the promotion leg (b) and the leg display. Use `[w3]` only for a
+point an answer cannot pass without; never mix weighted and unweighted points in one set.
+`seed:lint:leaks` refuses a DESIGN IT/G2 set with an unweighted key point.
 
 **Alternate sets (retakes).** An alternate set of an existing explain-back pack is a SIBLING
 pack: the same unit path and sha as the primary pack's manifest, its own draft, `--set <id>`
@@ -1728,3 +1747,52 @@ resolved); quiz variety `concept` and flashcard shape `hand-authored`;
       are never shown; the runs panel never refreshes; a status change resets unsaved builder edits.
   - **Report items:** a typeahead load drill and login-lockout math (C1 dropped them as marginal); data history /
     GDPR erase as a DESIGN IT topic; set-Bs for the 4 new cw primaries.
+- **ab wave — DONE (2026-11-01):** implements REVIEW-2026-10-30 waves A (trimmed) + B (trimmed) after a 5-agent
+  council (`elihandoff/ab-wave/RULINGS.md` is binding; wave C deferred until the owner has used the app). 7 Opus
+  streams in clones (ab-s1..s7), ring review S1→S2→…→S7→S1 with fixes as new commits, hub integration on `ab-wave`.
+  Restamp-free: new DTOs live in `shared/src/api-ext.ts` (`api.ts` is fingerprinted via `pack.ts:2`); only S6/S7's
+  re-imported or re-seeded packs carry new stamps. Migrations 017 `slate_setting`, 018 `eb_score_detail`.
+  - **S1 slate (A1):** the day-one slate is 1 drill per slate track + the campaign step; the review slot appears only
+    once a card existed before the day. Learner choice in append-only `slate_setting`, effective tomorrow, via
+    GET/PUT /api/settings/slate, `bootquest slate`, or the dashboard "Choose your focus" card; `--preset full` restores
+    5 per track. The heatmap hides `missed` days before the first learner action (display only). `bootquest today`
+    exits 2 when the server cannot be read.
+  - **S2 truth layer:** quiz-miss and flashcard cards carry the quest competency (all `code-reading`). A lapse demotes
+    at most once per competency per local day, never below 1, with no confirm on Again (R3.2). A repeat quiz miss
+    re-grades its card as again (no XP/log/demotion). The Review page pages past 200; "Queue cleared" only at 0 due.
+  - **S3 weak/due:** GET /stats/weak (weak spots per repo / drill module, released keys only, recency-weighted),
+    GET /due (retests + alternate EB sets whose 2-day gate opened), a Stats panel + dashboard teaser (hidden without
+    data), Due now on /due. `npm run app` starts API + UI in one process (absolute BOOTQUEST_DB required); the Vite dev
+    server denies `content/` and `.cache/` (answer keys were reachable via `/@fs/`).
+  - **S4 find:** GET /units/search (key + title, campaign quests with act lock), dashboard slate `targetUnitId`
+    (response only, never stored), GET /drills/next?mode=mixed (follows today's slate tracks), Ctrl+K palette, unit
+    browser groups collapsed by default.
+  - **S5 EB weights:** `[wN]` weights count at runtime (136 of 244 EB sets; §3 "Key-point weights"); legacy sets
+    unchanged; one `eb_score_detail` row per EB evidence row; weight chips, weighted preview, missed-[w3] result and a
+    client-only blind toggle on the 51 `[senior]` prompts (of 57) that carry the "Write your design
+    before you look:" marker. `EB_PASS_SQL` uses the 80% floor; `passed` uses a unit's
+    own `minCoverage` (none set today).
+  - **S6 sysdrills:** modules 01-14 reshaped in place (drills are outside the AGENTS.md freeze clause; hints are
+    unserved): 95 task-line formulas → 0, every code/formula hint 3 → prose, +9 tests (8 named traps + 1 boundary),
+    no retirements/relabels, census 129, re-validated 129/129; importer gates + 7 tests (§3 sysdrills). Boot proof on
+    a copy of the owner DB (10 units updated, 0 retired).
+  - **S7 leak lint + quiz-layer repair:** `seed:lint:leaks` also runs `tools/seed/src/ops/xleak-lint.ts` (EB kp vs
+    same-repo quiz key+explanation, flashcard back, note or other EB pack: containment ≥ 0.55 and ≥ 7 tokens; flashcard
+    back vs a same-pack quiz key; unweighted DESIGN IT/G2 kp) against the shrink-only, ratchet-tested
+    `ops/xleak-baseline.json` (146: 143 frozen at 9b7f0ea3 + 3 hub-accepted, helios q1.kp6/q1.kp7 vs note
+    x-receipt-same-client and ww7 q2.kp1 vs x-q04, ids 1-based). masterstore q2.kp2 was rewritten (a real leak).
+    Doc-recall stems → situations in tracer, pulse, jsdrillv2, dotnet-drop, j2, netcalendy, j7 (61 → 2: pulse q09
+    frozen, j7 q25); 28 new-layer flashcard backs over 60 words → one fact each; ww7 q13/q15/q18 explanations trimmed;
+    tracer-B q1.kp6 and ww48 q1.kp4 carry "the repo does not yet …". Keys, choices, slots and counts unchanged.
+  - **Hub merge fixes:** the merged dashboard mount reads dashboard + competencies + tracks + /due + /stats/weak +
+    /settings/slate (6, pinned in client `find.test.tsx`); an empty slate gets its own note instead of "Review-only
+    day"; settings/find server tests follow the merged tree.
+  - **Counts:** content census unchanged (sysdrills 129, quest packs 204, EB packs 244); ladder-real pins unchanged.
+    Suites at the hub: server 705 + selfrun 20, client 430, tools/seed 2270, cli 120, smoke:api 76/76,
+    demo:promotion 39/39, seed:demo:planted 48/48, test:csharp 46, test:java 23, seed:pins 688/688 OK,
+    restamp:all 697/697 fresh.
+  - **Owner items:** the 80% app floor vs "suggested pass: 70%" in 81 DESIGN IT prompts; every study quest declares
+    only `code-reading` (206 entries, up to 3,956 cards on one competency; a per-promotion-window cap may be wanted);
+    §7.4 two-choice quizzes need a factory change + restamp; the frozen wrong items stay frozen; retiring masteroutline
+    fc b8ab1a9d is the cheapest V7 fix; 5 javadrills task lines still hand over a formula (03-streams ×2,
+    07-exception-flow, 08-money-math, 10-completablefuture); the Fable review is still owed.

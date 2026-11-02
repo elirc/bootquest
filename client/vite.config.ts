@@ -8,6 +8,9 @@ import react from '@vitejs/plugin-react';
 // symlink would also resolve it). The client only ever imports TYPES from it, so no
 // shared/zod code ends up in the bundle.
 const sharedApi = fileURLToPath(new URL('../shared/src/api.ts', import.meta.url));
+// ab wave extensions (types only, not fingerprinted; see the header of shared/src/api-ext.ts).
+const sharedApiExt = fileURLToPath(new URL('../shared/src/api-ext.ts', import.meta.url));
+const sharedEbWeight = fileURLToPath(new URL('../shared/src/eb-weight.ts', import.meta.url));
 // The one RUNTIME import: the pass-mark constants (a zod-free module, see its header), so the
 // self-score previews use the server's own numbers.
 const sharedThresholds = fileURLToPath(new URL('../shared/src/thresholds.ts', import.meta.url));
@@ -15,7 +18,7 @@ const sharedThresholds = fileURLToPath(new URL('../shared/src/thresholds.ts', im
 export default defineConfig({
   plugins: [react()],
   resolve: {
-    alias: { '@bootquest/shared/api': sharedApi, '@bootquest/shared/thresholds': sharedThresholds },
+    alias: { '@bootquest/shared/api': sharedApi, '@bootquest/shared/api-ext': sharedApiExt, '@bootquest/shared/eb-weight': sharedEbWeight, '@bootquest/shared/thresholds': sharedThresholds },
   },
   server: {
     port: 5173,
@@ -26,8 +29,10 @@ export default defineConfig({
     proxy: { '/api': { target: `http://127.0.0.1:${process.env.BOOTQUEST_PORT ?? '4178'}` } },
     // Imported packs carry reference solutions and answer keys: the dev server must never
     // serve them via /@fs/ (w2-review i1). Setting `deny` replaces Vite's defaults, so they
-    // are restated here.
-    fs: { deny: ['.env', '.env.*', '*.{crt,pem}', '**/.git/**', '**/content/packs/**'] },
+    // are restated here. ab S3 (ring review, `npm run app` makes this server the default): all of
+    // content/ (seed packs hold quiz answer keys and explain-back key points, seed-drafts too) and
+    // .cache/ (pinned upstream checkouts with solutions) are denied; the client imports neither.
+    fs: { deny: ['.env', '.env.*', '*.{crt,pem}', '**/.git/**', '**/content/**', '**/.cache/**'] },
   },
   build: {
     target: 'es2022',

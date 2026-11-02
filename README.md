@@ -31,23 +31,44 @@ Stack: an npm workspaces monorepo.
 
 ## Quickstart (Windows)
 
+### Run it
+
 ```bat
 npm install
 
 rem the one DB file. There is no default: every server/CLI path refuses to guess.
 set BOOTQUEST_DB=C:\Users\Owner\bootquest\bootquest.db
 
+rem the API server AND the browser UI from this one terminal; Ctrl+C stops both
+npm run app
+```
+
+`npm run app` prints the URL to open (http://localhost:5173 by default) once both halves are
+up. It refuses, before opening anything, when `BOOTQUEST_DB` is unset or not an absolute path. Both halves run in one
+Node process, so Ctrl+C (or closing the window) never leaves a server behind, in cmd,
+PowerShell or Git Bash alike. Set the variable the same way in the other shells:
+`$env:BOOTQUEST_DB = "C:\Users\Owner\bootquest\bootquest.db"` (PowerShell) or
+`export BOOTQUEST_DB=/c/Users/Owner/bootquest/bootquest.db` (Git Bash). Options:
+
+- `BOOTQUEST_PORT` (API, default 4178) and `BOOTQUEST_UI_PORT` (UI, default 5173).
+- `npm run app -- --open` also opens the browser (cmd or Git Bash; PowerShell 5.1 drops the `--`).
+
+The UI is the client's own Vite dev server with its usual config: it proxies `/api` to the
+API port and keeps imported packs (answer keys) off its file server.
+
+To run the halves separately instead (two terminals):
+
+```bat
 rem API on http://127.0.0.1:4178 (BOOTQUEST_PORT to change)
 npm run serve
 ```
 
-In a second terminal, start the browser UI. Vite serves it on http://localhost:5173 and
-proxies `/api` to 127.0.0.1:4178. `npm run dev:mock -w @bootquest/client` runs the UI
-standalone against a mock instead.
-
 ```bat
+rem UI on http://localhost:5173, proxying /api to 127.0.0.1:4178
 npm run dev -w @bootquest/client
 ```
+
+`npm run dev:mock -w @bootquest/client` runs the UI standalone against a mock instead.
 
 The CLI is for serious work in your own editor. Add the repo's `bin\` folder to PATH:
 
@@ -67,7 +88,11 @@ Commands:
 - `bootquest submit`: recorded. Add `--assisted` to self-flag help.
 - `bootquest status`
 - `bootquest today`: today's slate (slots and done state), reviews due, streak, freeze
-  tokens and next up per track. Read-only; it always exits 0, even when the server is down.
+  tokens and next up per track. Read-only; exits 2 (and says why) when the server cannot be read.
+- `bootquest slate`: shows the daily slate settings. `bootquest slate --tracks java,sysdesign --size 3`
+  (listed tracks on, the others off), `--size n` alone, or `--preset default|full` changes them from
+  tomorrow; today's slate never changes. Same in the web app: the dashboard's "Choose your focus" /
+  "Change daily slate".
 - `bootquest sync`
 - `bootquest mutate`: the mutation gate on solo-project units.
 - `bootquest reset --yes-really`: see below.
@@ -189,8 +214,10 @@ Content is not in the DB, so the next `npm run serve` loads all of it again. Exi
   runs, evidence, XP events and review logs. `competency_rating` changes must be tied to
   promotion or demotion evidence.
 - **Three-leg promotion** (spec §6.2). A competency moves up one notch only after all
-  three legs below, all linked and timed on attempt time. A lapse on a Review-state FSRS
-  card for that competency demotes it one notch.
+  three legs below, all linked and timed on attempt time. A lapse (Again on a Review-state
+  FSRS card linked to that competency: study-quest missed-question and flashcard cards carry
+  their quest's competency) demotes it one notch, at most once per competency per local day
+  and never below 1. A capped lapse is still an ordinary review.
   - (a) an independent, run-verified, solo artifact: a project-kind unit;
   - (b) *its* explain-back with ≥80% key-point coverage;
   - (c) a changed-example retest of that unit, passed solo ≥2 days later.
@@ -283,7 +310,9 @@ Each gate is a real command that must exit 0. Run them in the foreground.
   `seed:check -- --restamp`.
 - **Revoke the leaked Shopify token** (andie `VERIFICATION.md`).
 - Decide the **quiz-oracle** policy (G6: repeated recorded submits can find quiz
-  answers) and the **demotion cap** (at most one demotion per competency per day?).
+  answers). The **demotion cap** is one demotion per competency per day (ab wave); every
+  study quest declares only `code-reading`, so decide whether that competency also needs a
+  per-promotion-window cap.
   Also decide the retake policy for one-shot explain-back and kata items.
 - Fix the **upstream guide errors** listed in [docs/SEEDING.md](docs/SEEDING.md#8-backlog)
   in the source repos.

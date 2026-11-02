@@ -34,9 +34,14 @@ import {
   type UnitNotesResponse,
   type RefContentResponse,
   type WrittenAnswerResponse,
+  type SlateSettingsResponse,
+  type DueResponse,
+  type WeakSpotsResponse,
+  type DrillNextResponse,
+  type UnitSearchResponse,
 } from './types';
 
-type Init = { method: 'POST'; body: unknown };
+type Init = { method: 'POST' | 'PUT'; body: unknown };
 
 /** Reads the `{error:{code,message,issues?}}` envelope; tolerates non-JSON bodies (proxies, crashes). */
 async function toApiError(res: Response, path: string): Promise<ApiError> {
@@ -135,5 +140,25 @@ export function createHttpApi(baseUrl = '/api', fetchImpl: typeof fetch = (...a)
     getCampaignProgress: () => call<CampaignProgressResponse>('/stats/campaign'),
     getUnitNotes: (id) => call<UnitNotesResponse>(`${unit(id)}/notes`),
     getRefContent: (refId) => call<RefContentResponse>(`/refs/${encodeURIComponent(String(refId))}/content`),
+    // ---- ab S1: slate settings. Whitelisted body: the preset, or per track only trackId / enabled / size.
+    getSlateSettings: () => call<SlateSettingsResponse>('/settings/slate'),
+    putSlateSettings: (b) =>
+      call<SlateSettingsResponse>('/settings/slate', {
+        method: 'PUT',
+        body:
+          'preset' in b
+            ? { preset: b.preset }
+            : { tracks: b.tracks.map((t) => ({ trackId: t.trackId, enabled: t.enabled, ...(t.size !== undefined ? { size: t.size } : {}) })) },
+      }),
+    // ---- ab wave S3
+    getWeakSpots: () => call<WeakSpotsResponse>('/stats/weak'),
+    getDue: () => call<DueResponse>('/due'),
+    // ab S4 find things
+    searchUnits: (q, limit) => {
+      const params = new URLSearchParams({ q });
+      if (limit !== undefined) params.set('limit', String(limit));
+      return call<UnitSearchResponse>(`/units/search?${params.toString()}`);
+    },
+    getNextDrill: (tracks) => call<DrillNextResponse>(`/drills/next?${new URLSearchParams({ tracks: tracks.join(','), mode: 'mixed' }).toString()}`),
   };
 }

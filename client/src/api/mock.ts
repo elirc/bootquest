@@ -44,6 +44,7 @@ import {
   studyQuestFixtures,
 } from './fixtures/ladder';
 import { writtenFixtures } from './fixtures/written';
+import { createMockSlateSettings } from './mock-slate';
 import {
   ApiError,
   type BootQuestApi,
@@ -78,9 +79,16 @@ import {
   type ReviewStatsResponse,
   type TrackProgress,
   type XpStatsResponse,
+  type DueResponse,
+  type WeakSpotsResponse,
+  type DrillNextResponse,
+  type SlateItem,
+  type UnitSearchHit,
+  type UnitSearchResponse,
 } from './types';
 import type { XpByTrack } from '@bootquest/shared/api';
 import { G1_MIN_DEFECTS, G1_TARGET_RATE, PROMOTION_MIN_COVERAGE } from '@bootquest/shared/thresholds';
+import { ebMeetsGate, ebTally } from '../lib/eb-weights';
 
 /** Private, fixture-only grading material. Never crosses the API boundary. */
 interface PrivateFixture {
@@ -145,6 +153,8 @@ export interface MockApiOptions {
    * `lockedCampaignFixtures[id]` when one exists (a statically locked act, inert quests).
    */
   lockedTracks?: readonly TrackId[];
+  /** ab S1: 'full' (default, the fixture learner's 5-drill sets) or 'unconfigured' (day one: no slate_setting row). */
+  slateSettings?: 'full' | 'unconfigured';
 }
 
 // ---- pass rates: mirrors server/src/engines/stats.ts passRate / passRatesBy and the
@@ -439,6 +449,61 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
 
   const queue = () => fx.reviewQueue.filter((c) => !graded.has(c.id) && c.dueAt <= NOW);
 
+  const slateSettings = createMockSlateSettings({
+    today: fx.dashboard.today,
+    tracks: trackList.filter((t) => !t.locked && t.id !== 'agentic'),
+    start: opts.slateSettings,
+  });
+  // ---- ab S4 find things: mirrors server/src/api/find-service.ts over the fixture state
+  /** first passable drill of a track: a drill, available (not done, prerequisites met), never revealed */
+  const firstOpenDrill = (t: string): UnitSummary | null => {
+    const track = trackList.find((x) => x.id === t);
+    if (!track || track.locked) return null;
+    return (units[track.id] ?? []).find((u) => u.kind === 'drill' && u.state === 'available' && !u.revealed) ?? null;
+  };
+  /** the campaign step's unit: first track (server order) with an available quest in an unlocked act, in-progress first */
+  const campaignTarget = (): number | null => {
+    for (const t of trackList) {
+      if (t.locked) continue;
+      const open = campaignActs(t.id)
+        .filter((a) => a.unlocked)
+        .flatMap((a) => a.quests.filter((q) => q.state === 'available' && q.unitId !== undefined));
+      const pick = open.find((q) => q.inProgress) ?? open[0];
+      if (pick?.unitId !== undefined) return pick.unitId;
+    }
+    return null;
+  };
+  const withTarget = (s: SlateItem): SlateItem =>
+    s.kind === 'drill-set' ? { ...s, targetUnitId: firstOpenDrill(s.track ?? '')?.id ?? null } : s.kind === 'campaign-step' ? { ...s, targetUnitId: campaignTarget() } : s;
+
+  /** search corpus: every unit plus the campaign quests whose unit is not a practice unit (key `campaign/<track>/<repo>`) */
+  function searchCorpus(): UnitSearchHit[] {
+    const hits: UnitSearchHit[] = allUnits().map((u) => ({ id: u.id, key: u.key, trackId: u.trackId, kind: u.kind, title: u.title, state: u.state, campaign: false }));
+    const known = new Set(hits.map((h) => h.id));
+    // a unit held only by locked acts is locked (unless done), like the server's act gate
+    const actOpen = new Map<number, boolean>();
+    for (const t of trackList) {
+      for (const a of campaignActs(t.id)) {
+        for (const q of a.quests) {
+          if (q.unitId === undefined) continue;
+          actOpen.set(q.unitId, (actOpen.get(q.unitId) ?? false) || (a.unlocked && !t.locked));
+          if (known.has(q.unitId)) continue;
+          known.add(q.unitId);
+          hits.push({
+            id: q.unitId,
+            key: `campaign/${t.id}/${q.repo}`,
+            trackId: t.id,
+            kind: q.kind === 'reading' ? 'reading' : 'study',
+            title: q.title,
+            state: q.state === 'done' ? 'done' : q.state === 'locked' ? 'locked' : 'available',
+            campaign: true,
+          });
+        }
+      }
+    }
+    return hits.map((h) => (actOpen.get(h.id) === false && h.state !== 'done' ? { ...h, state: 'locked' as const } : h));
+  }
+
   const wrap = <T>(fn: () => T): Promise<T> => {
     try {
       return respond(fn());
@@ -672,6 +737,7 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
     getDashboard: () =>
       wrap(() => ({
         ...fx.dashboard,
+        slate: { ...fx.dashboard.slate, items: fx.dashboard.slate.items.map(withTarget) },
         heatmap: fx.heatmap,
         competencies: fx.competencies.map((c) => ({ ...c, promotion: promotionFixtures[c.id] ?? emptyPromotion(c.rating) })),
         reviewQueue: { due: queue().length },
@@ -952,8 +1018,10 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
         exactMarks(ids, body.perKeyPoint);
         const missed = ids.filter((k) => body.perKeyPoint[k] === 'missed');
         const covered = ids.length - missed.length;
-        const coverage = covered / ids.length;
-        const passed = coverage >= PROMOTION_MIN_COVERAGE;
+        // A5 (as the server): weighted coverage + no [w3] missed for a [wN] set, plain otherwise
+        const tally = ebTally(ebKeyPoints(id).flatMap((q) => q.keyPoints), body.perKeyPoint);
+        const coverage = tally.coverage;
+        const passed = ebMeetsGate(tally, PROMOTION_MIN_COVERAGE * 100);
         const evidenceIds = fileEvidence(u, a.attemptId, 'explain-back', coverage, `${covered}/${ids.length} key points covered`, eb.competencies);
         scores.set(a.attemptId, { score: coverage, evidenceIds, at: NOW });
         let xp: { id: number; amount: number; reason: null | 'already-awarded' } | null = null;
@@ -1009,7 +1077,8 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
         if (scores.has(p.attemptId)) throw err(409, 'ALREADY_SCORED', `practice attempt ${practiceOf(id).findIndex((x) => x.attemptId === body.attemptId) + 1} is already self-scored (evidence is append-only)`);
         const missed = ids.filter((k) => body.perKeyPoint[k] === 'missed');
         const covered = ids.length - missed.length;
-        const coverage = covered / ids.length;
+        const tally = ebTally(ebKeyPoints(id).flatMap((q) => q.keyPoints), body.perKeyPoint);
+        const coverage = tally.coverage;
         const evidenceIds = fileEvidence(u, p.attemptId, 'explain-back', coverage, `${covered}/${ids.length} key points covered`, eb.competencies, 'practice');
         scores.set(p.attemptId, { score: coverage, evidenceIds, at: NOW });
         // feedback only: never XP, retests or promotions
@@ -1019,7 +1088,7 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
           total: ids.length,
           coverage,
           minCoveragePct: PROMOTION_MIN_COVERAGE * 100,
-          passed: coverage >= PROMOTION_MIN_COVERAGE,
+          passed: ebMeetsGate(tally, PROMOTION_MIN_COVERAGE * 100),
           missed,
           evidenceIds,
           xp: null,
@@ -1288,9 +1357,49 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
         throw err(404, 'NOT_FOUND', `content ref ${refId} not found`);
       }),
 
+    // ---- ab S1: slate settings (client/src/api/mock-slate.ts; drill-slot tracks = js, csharp, java, sysdesign)
+    getSlateSettings: () => wrap(() => slateSettings.get()),
+    putSlateSettings: (body) => wrap(() => slateSettings.put(body)),
+    searchUnits: (q, limit = 30) =>
+      wrap((): UnitSearchResponse => {
+        const query = q.trim();
+        if (query === '' || query.length > 100 || !Number.isInteger(limit) || limit < 1 || limit > 50) throw err(400, 'VALIDATION', 'invalid request query');
+        const tokens = [...new Set(query.toLowerCase().split(/\s+/))].slice(0, 8);
+        const phrase = tokens.join(' ');
+        const rank = (h: UnitSearchHit) => {
+          const t = h.title.toLowerCase();
+          return t === phrase ? 0 : t.startsWith(phrase) ? 1 : t.includes(phrase) ? 2 : h.key.toLowerCase().includes(phrase) ? 3 : 4;
+        };
+        const hits = searchCorpus()
+          .filter((h) => tokens.every((tok) => h.key.toLowerCase().includes(tok) || h.title.toLowerCase().includes(tok)))
+          .sort((a, b) => rank(a) - rank(b) || a.id - b.id);
+        return { q: query, total: hits.length, items: hits.slice(0, limit) };
+      }),
+
+    getNextDrill: (tracks) =>
+      wrap((): DrillNextResponse => {
+        if (tracks.length === 0 || new Set(tracks).size !== tracks.length || tracks.some((t) => !trackList.some((x) => x.id === t))) {
+          throw err(400, 'VALIDATION', 'invalid request query');
+        }
+        const passedDrills = tracks.reduce((n, t) => n + (units[t] ?? []).filter((u) => u.kind === 'drill' && u.state === 'done').length, 0);
+        const dayNo = Math.floor(Date.parse(`${fx.dashboard.today}T00:00:00Z`) / DAY_MS);
+        const startIndex = (dayNo + passedDrills) % tracks.length;
+        for (let i = 0; i < tracks.length; i++) {
+          const u = firstOpenDrill(tracks[(startIndex + i) % tracks.length]!);
+          if (u) return { mode: 'mixed', tracks: [...tracks], startIndex, unit: { id: u.id, key: u.key, trackId: u.trackId, title: u.title, difficulty: u.difficulty } };
+        }
+        return { mode: 'mixed', tracks: [...tracks], startIndex, unit: null };
+      }),
+
     reseedItem: (unitId) => {
       itemVersion.set(unitId, versionOf(unitId) + 1);
     },
+
+    // ---- ab wave S3: a fresh learner has no weak spots; Due now mirrors getCompetencies' retests
+    // (none) and no alternate set is ever due (the mock clock is fixed: a sibling of an answered set
+    // stays inside its 2-day gap).
+    getWeakSpots: () => wrap((): WeakSpotsResponse => ({ today: fx.dashboard.today, totalGroups: 0, groups: [] })),
+    getDue: () => wrap((): DueResponse => ({ retests: [], altSets: [], nextAltSetAt: null })),
   };
 }
 

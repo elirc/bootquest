@@ -4,9 +4,10 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Command, CommanderError } from 'commander';
 import type { UnitDetailResponse } from '@bootquest/shared/api';
+import type { SlateSettingsBody } from '@bootquest/shared/api-ext';
 import { ApiClient, DEFAULT_SERVER, UsageError, type FetchLike } from './client.ts';
 import { ConfigError, loadConfig, resolveSubmissionFile, type ProjectConfig } from './config.ts';
-import { formatDashboard, formatError, formatProject, formatRun, formatSubmit, formatSync, formatToday } from './format.ts';
+import { formatDashboard, formatError, formatProject, formatRun, formatSlateSettings, formatSubmit, formatSync, formatToday } from './format.ts';
 import { classifyUnit, resolveUnit, type Delivery } from './units.ts';
 import { formatMutation, MutateError, mutateProject, spawnTool, type ToolRunner } from './mutate.ts';
 
@@ -16,7 +17,8 @@ import { formatMutation, MutateError, mutateProject, spawnTool, type ToolRunner 
  *   1  run/submit completed but did not pass (fail / todo / crashed / timeout / error verdict)
  *   2  could not do the job: usage error, bad .bootquest.json, server unreachable,
  *      server refused (error envelope), unit kind the CLI does not deliver
- * Exception: `today` is informational and always exits 0 (a down server is reported in text).
+ * `today` is read-only: 0 when it printed the slate, 2 when the server could not be read (ab A1;
+ * it used to swallow the error and exit 0, so a script could not tell a down server from a day).
  */
 export const EXIT = { OK: 0, NOT_PASSED: 1, ERROR: 2 } as const;
 
@@ -174,6 +176,60 @@ async function prepare(
   return { client, detail, payload: { repoPath }, source: repoPath, label: 'Repo' };
 }
 
+interface SlateOpts {
+  tracks?: string;
+  size?: string;
+  preset?: string;
+}
+
+type SlateChange = { preset: 'default' | 'full' } | { tracks: string[] | null; size: number | null };
+
+/** `bootquest slate` options -> what to change (null = just show). Bounds mirror migration 017 (1..10). */
+export function parseSlateOpts(o: SlateOpts): SlateChange | null {
+  if (o.preset !== undefined) {
+    if (o.tracks !== undefined || o.size !== undefined) throw new UsageError('--preset cannot be combined with --tracks / --size');
+    const p = o.preset.trim();
+    if (p !== 'default' && p !== 'full') throw new UsageError(`--preset must be default or full (got "${o.preset}")`);
+    return { preset: p };
+  }
+  if (o.tracks === undefined && o.size === undefined) return null;
+  let size: number | null = null;
+  if (o.size !== undefined) {
+    const t = o.size.trim();
+    size = /^\d{1,2}$/.test(t) ? Number(t) : NaN;
+    if (!(size >= 1 && size <= 10)) throw new UsageError(`--size must be an integer 1-10 (got "${o.size}")`);
+  }
+  let tracks: string[] | null = null;
+  if (o.tracks !== undefined) {
+    tracks = [...new Set(o.tracks.split(',').map((t) => t.trim()).filter(Boolean))];
+    if (tracks.length === 0) throw new UsageError('--tracks needs at least one track id (e.g. --tracks java,sysdesign)');
+  }
+  return { tracks, size };
+}
+
+/**
+ * The PUT body for --tracks / --size, built from the server's current tomorrow shape: --tracks lists
+ * the tracks that are on (every other slate track goes off); --size alone resizes the tracks that are
+ * on. A listed track keeps its chosen size unless --size is given.
+ */
+export function slateBody(
+  change: { tracks: string[] | null; size: number | null },
+  current: { tomorrowTracks: { trackId: string; enabled: boolean; size: number; configured: boolean }[] },
+): SlateSettingsBody {
+  const known = current.tomorrowTracks.map((t) => t.trackId);
+  const unknown = (change.tracks ?? []).filter((t) => !known.includes(t));
+  if (unknown.length > 0) {
+    throw new UsageError(`not a slate track: ${unknown.join(', ')}. Slate tracks: ${known.join(', ') || '(none)'}`);
+  }
+  const on = (t: { trackId: string; enabled: boolean }) => (change.tracks ? change.tracks.includes(t.trackId) : t.enabled);
+  const tracks = current.tomorrowTracks.map((t) => {
+    const enabled = on(t);
+    const size = enabled && change.size !== null ? change.size : t.configured ? t.size : undefined;
+    return { trackId: t.trackId, enabled, ...(size !== undefined ? { size } : {}) };
+  });
+  return { tracks } as SlateSettingsBody;
+}
+
 export function buildProgram(io: CliIo, setExit: (code: number) => void): Command {
   const program = new Command();
   program
@@ -217,17 +273,39 @@ export function buildProgram(io: CliIo, setExit: (code: number) => void): Comman
     .command('today')
     .description(
       "today's slate (slots + done state), reviews due, streak + freeze tokens and next up per track. " +
-        'Read-only (one GET); always exits 0, also when the server is down (it says so)',
+        'Read-only (one GET). Exit 0 shown, 2 when the server could not be read (it says so)',
     )
     .action(async (_o: unknown, cmd: Command) => {
       try {
         const client = new ApiClient(serverUrl(cmd.optsWithGlobals<GlobalOpts>(), io.env), io.fetch);
         io.out(formatToday(await client.dashboard(), client.server));
       } catch (err) {
-        // informational command: an unreachable / refusing server is reported, never an error exit
+        // an unreachable / refusing server is reported in words AND in the exit code (never a stack trace)
         io.out("Today: unavailable - the server could not be read, so nothing is shown and nothing changed.");
         io.err(formatError(err));
+        return setExit(EXIT.ERROR);
       }
+      setExit(EXIT.OK);
+    });
+
+  program
+    .command('slate')
+    .description(
+      "show or choose the daily slate: which tracks give a drill set and how many drills each. A change takes effect TOMORROW " +
+        "(today's slate and past days never move). No options: show. Exit 0 done, 2 refused / server unreachable",
+    )
+    .option('--tracks <ids>', 'comma-separated tracks on the slate from tomorrow (e.g. java,sysdesign); every other track goes off')
+    .option('--size <n>', 'drills per track from tomorrow (with --tracks: those tracks; alone: every track that is on)')
+    .option('--preset <name>', 'default (every track, 1 drill) or full (every track, 5 drills)')
+    .action(async (o: SlateOpts, cmd: Command) => {
+      const client = new ApiClient(serverUrl(cmd.optsWithGlobals<GlobalOpts>(), io.env), io.fetch);
+      const change = parseSlateOpts(o);
+      if (change === null) {
+        io.out(formatSlateSettings(await client.slateSettings(), client.server));
+        return setExit(EXIT.OK);
+      }
+      const body = 'preset' in change ? change : slateBody(change, await client.slateSettings());
+      io.out(formatSlateSettings(await client.putSlateSettings(body), client.server, true));
       setExit(EXIT.OK);
     });
 

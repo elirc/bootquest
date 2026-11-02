@@ -1,36 +1,39 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useApi } from '../api/context';
+import { errorText } from '../api/errors';
 import type {
   CompetenciesResponse,
   CompetencyRow,
   Dashboard as DashboardData,
   PromotionLegState,
   PromotionProgress,
-  RetestListItemDto,
   SlateItem,
   TrackId,
 } from '../api/types';
+import { DueNowPanel } from '../components/DueNow';
 import { Heatmap } from '../components/Heatmap';
 import { Icon } from '../components/Icon';
+import { SlateFocus } from '../components/SlateFocus';
 import { Chip, Kbd, LoadState, PageHeader, Panel, ProgressBar, RatingPips } from '../components/ui';
+import { WeakSpotsTeaser } from '../components/WeakSpots';
 import { fmtInt, fmtRelative, fmtShortDate, fmtWhen, plural } from '../lib/format';
 import { useTracks } from '../lib/tracks';
 import { useAsync, type AsyncState } from '../lib/useAsync';
-import { FREEZE_TOKENS_MAX, SLATE_DRILL_TRACKS, TRACK_IDS, TRACK_LABEL, TRACK_PLACEHOLDER, dayOfMs, isTrackId } from '../lib/view';
+import { FREEZE_TOKENS_MAX, SLATE_DRILL_TRACKS, TRACK_LABEL, TRACK_PLACEHOLDER, dayOfMs, isTrackId } from '../lib/view';
 
 type Loaded<T> = AsyncState<T> & { reload: () => void };
 
 export function DashboardPage() {
   const api = useApi();
   const q = useAsync(() => api.getDashboard(), [api]);
-  // fix/client-dash: the open retests live on GET /competencies only (the review queue excludes
-  // them by design). Requested alongside the dashboard and laid out once it SETTLES, so the
-  // "Due now" panel never pushes the page down after first paint.
+  // The competency table marks units with a due retest from GET /competencies (the review queue
+  // excludes retests by design). The first paint waits for it to SETTLE so the table never shifts.
+  // ab S3: the "Due now" panel reads its own GET /due (and Weak spots GET /stats/weak), each with
+  // its own Retry, so the rest of the page is not torn down when one of them reloads.
   const comp = useAsync(() => api.getCompetencies(), [api]);
-  // fix/client-review 4: only the FIRST paint waits for /competencies. Once the body is up it stays
-  // mounted while the Due-now panel reloads (its own Retry), so the rest of the page (and the slate
-  // target lookups it fires on mount) is not torn down and refetched.
+  // ab S4: the slate links come with GET /dashboard (targetUnitId). A mount reads /dashboard,
+  // /competencies, the shell's shared /tracks, /due, /stats/weak and (focus card) /settings/slate.
   const [painted, setPainted] = useState(false);
   const showBody = q.status === 'ready' && (painted || comp.status !== 'loading');
   if (showBody && !painted) setPainted(true);
@@ -147,7 +150,10 @@ function DashboardBody({ d, comp }: { d: DashboardData; comp: Loaded<Competencie
         </section>
       </div>
 
-      <DueNowPanel q={comp} retests={retests} />
+      <DueNowPanel />
+
+      {/* ab S1: "Choose your focus" until a slate choice is saved, then a summary + Change link */}
+      <SlateFocus />
 
       <div className="dash-row">
         <Panel title="Activity" labelledBy="p-activity" className="dash-heat" aside={<span className="muted">last {d.heatmap.length} days</span>}>
@@ -188,136 +194,35 @@ function DashboardBody({ d, comp }: { d: DashboardData; comp: Loaded<Competencie
           ))}
         </ul>
       </Panel>
+
+      {/* ab wave S3: last on the page, so its late arrival never pushes anything down; absent without data */}
+      <WeakSpotsTeaser />
     </div>
-  );
-}
-
-// ---------------------------------------------------------------- due now (open retests)
-
-/** Due first (oldest opening first), then the upcoming ones by opening time. */
-const byUrgency = (a: RetestListItemDto, b: RetestListItemDto) => Number(b.due) - Number(a.due) || a.dueAt - b.dueAt;
-
-/**
- * fix/client-dash: the changed-example retests (promotion leg c). They are excluded from the
- * review queue by design, so this panel is where a due one is seen at all.
- */
-function DueNowPanel({ q, retests }: { q: Loaded<CompetenciesResponse>; retests: RetestListItemDto[] }) {
-  const due = retests.filter((r) => r.due).length;
-  const sorted = [...retests].sort(byUrgency);
-  return (
-    <Panel
-      title={
-        <>
-          Due now{due > 0 && <span className="due-count"> · {plural(due, 'retest')} open</span>}
-        </>
-      }
-      labelledBy="p-due"
-      className={`due-now${due > 0 ? ' due-now-hot' : ''}`}
-      aside={<span className="muted small">retests are not in the review queue</span>}
-    >
-      <div data-testid="due-now">
-        {q.status !== 'ready' ? (
-          // an error (with Retry), or the reload that Retry started: never "No retests" while unknown
-          <LoadState error={q.error} onRetry={q.reload} minHeight={64} />
-        ) : sorted.length === 0 ? (
-          <p className="muted small due-empty" data-testid="due-empty">
-            No retests scheduled. A passing explain-back (≥80% coverage) on an artifact with a seeded changed example schedules a retest at least 2 days later; units without a seeded variation rotate alternate question sets instead — the next fresh set opens from the unit page.
-          </p>
-        ) : (
-          <ul className="due-list">
-            {sorted.map((r) => (
-              <li key={r.reviewItemId} className={`due-row${r.due ? ' due-row-open' : ''}`} data-retest={r.unitId} data-due={r.due}>
-                {r.due ? <Chip tone="accent">open now</Chip> : <Chip tone="info">opens {fmtShortDate(r.dueAt)}</Chip>}
-                <Link to={`/play/${r.unitId}`} className="due-title">
-                  {r.due ? 'Take the retest: ' : 'Retest: '}
-                  {r.title}
-                </Link>
-                <span className="due-meta muted small">
-                  {r.due ? `opened ${fmtWhen(r.dueAt)}` : `opens ${fmtWhen(r.dueAt)}`} · changed example of{' '}
-                  <Link to={`/play/${r.artifactUnitId}`}>artifact unit #{r.artifactUnitId}</Link> · solo, no help
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </Panel>
   );
 }
 
 // ---------------------------------------------------------------- slate
 
-type SlateTargets = {
-  /** per drill track: the first unpassed, unrevealed, available drill (null = none found) */
-  drill: Partial<Record<TrackId, number | null>>;
-  /** the first track (server order) with an actionable quest in an unlocked act */
-  campaign: { trackId: TrackId; unitId: number } | null;
-};
-
 const slateTrack = (s: SlateItem): TrackId | null => (s.kind === 'drill-set' && s.track && isTrackId(s.track) ? s.track : null);
 
 /**
- * fix/client-dash: where each slate row leads. A drill set goes to the next drill on its track:
- * the dashboard's own next-up unit when that IS a drill, otherwise the first unpassed drill of
- * GET /tracks/:id/units. The campaign step goes to the track that has an actionable quest (the
- * bare /campaign route always opened JS). Resolved after first paint; links only change target.
+ * Where each slate row leads. ab S4: the server computes the target in GET /dashboard
+ * (`targetUnitId`: a drill set's first passable, unrevealed drill; the campaign step's quest unit),
+ * so the dashboard no longer fans out to /tracks/:id/units and five /tracks/:id/campaign reads. A
+ * missing target (null, or an older server without the field) falls back to the track / campaign page.
  */
-function useSlateTargets(d: DashboardData) {
-  const api = useApi();
-  const nextDrill = (t: TrackId) => {
-    const u = d.nextUp.find((n) => n.trackId === t)?.unit;
-    return u && u.kind === 'drill' ? u.id : null;
-  };
-  const lookup = d.slate.items
-    .map(slateTrack)
-    .filter((t): t is TrackId => t !== null && nextDrill(t) === null);
-  const wantCampaign = d.slate.items.some((s) => s.kind === 'campaign-step');
-  const key = `${lookup.join(',')}|${wantCampaign}`;
-  const q = useAsync(async (): Promise<SlateTargets> => {
-    const drill: SlateTargets['drill'] = {};
-    await Promise.all(
-      lookup.map(async (t) => {
-        try {
-          const units = (await api.getTrackUnits(t)).units.filter((u) => u.kind === 'drill' && u.state !== 'done' && !u.revealed);
-          drill[t] = (units.find((u) => u.state === 'available') ?? null)?.id ?? null;
-        } catch {
-          drill[t] = null;
-        }
-      }),
-    );
-    let campaign: SlateTargets['campaign'] = null;
-    if (wantCampaign) {
-      const all = await Promise.allSettled(TRACK_IDS.map((t) => api.getCampaign(t)));
-      for (const [i, r] of all.entries()) {
-        if (r.status !== 'fulfilled' || r.value.track.locked) continue;
-        const open = r.value.acts.filter((a) => a.unlocked).flatMap((a) => a.quests.filter((x) => x.state === 'available' && x.unitId !== undefined));
-        const pick = open.find((x) => x.inProgress) ?? open[0];
-        if (pick?.unitId !== undefined) {
-          campaign = { trackId: TRACK_IDS[i]!, unitId: pick.unitId };
-          break;
-        }
-      }
-    }
-    return { drill, campaign };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [api, key]);
-  return { nextDrill, targets: q.data };
-}
-
-function slateView(s: SlateItem, nextDrill: (t: TrackId) => number | null, targets: SlateTargets | undefined): { label: string; href: string; hint?: string } {
+function slateView(s: SlateItem): { label: string; href: string; hint?: string } {
+  const target = s.targetUnitId ?? null;
   switch (s.kind) {
     case 'drill-set': {
       const track = slateTrack(s);
       const size = s.size !== undefined ? ` (${plural(s.size, 'drill')})` : '';
       const label = `${track ? TRACK_LABEL[track] : (s.track ?? '')} drill set${size}`.trim();
-      if (!track) return { label, href: '/campaign' };
-      const unit = nextDrill(track) ?? targets?.drill[track] ?? null;
-      return unit !== null ? { label, href: `/play/${unit}` } : { label, href: `/campaign/${track}` };
+      if (target !== null) return { label, href: `/play/${target}` };
+      return { label, href: track ? `/campaign/${track}` : '/campaign' };
     }
-    case 'campaign-step': {
-      const c = targets?.campaign;
-      return c ? { label: 'Campaign step', hint: TRACK_LABEL[c.trackId], href: `/campaign/${c.trackId}?unit=${c.unitId}` } : { label: 'Campaign step', href: '/campaign' };
-    }
+    case 'campaign-step':
+      return target !== null ? { label: 'Campaign step', href: `/play/${target}` } : { label: 'Campaign step', href: '/campaign' };
     case 'review-clear':
       return { label: 'Clear the review queue', href: '/review' };
   }
@@ -325,7 +230,6 @@ function slateView(s: SlateItem, nextDrill: (t: TrackId) => number | null, targe
 
 function Slate({ d }: { d: DashboardData }) {
   const tracks = useTracks();
-  const { nextDrill, targets } = useSlateTargets(d);
   const items = d.slate.items;
   // while /tracks loads, the placeholder (all unlocked) stands in, so rows do not pop in later
   const trackRows: readonly { id: TrackId; locked: boolean }[] = tracks.data?.tracks ?? TRACK_PLACEHOLDER;
@@ -334,13 +238,16 @@ function Slate({ d }: { d: DashboardData }) {
   // missing row is stated neutrally, never as "track exhausted"
   const noDrillSlot = SLATE_DRILL_TRACKS.filter((t) => unlocked(t) && !items.some((s) => slateTrack(s) === t));
   const noCampaign = !items.some((s) => s.kind === 'campaign-step');
-  const reviewOnly = items.every((s) => s.kind === 'review-clear');
+  // an empty slate (every chosen track exhausted, no campaign step, no review card yet) is not a
+  // review-only day: the server never counts it as a slate-day, so only the 20 XP partial rule applies
+  const emptySlate = items.length === 0;
+  const reviewOnly = !emptySlate && items.every((s) => s.kind === 'review-clear');
   const vacuous = vacuousReviewSlot(items, d.reviewQueue.due);
   return (
     <>
       <ul className="slate">
         {items.map((s) => (
-          <SlateRow key={s.slot} s={s} view={slateView(s, nextDrill, targets)} vacuous={vacuous(s)} />
+          <SlateRow key={s.slot} s={s} view={slateView(s)} vacuous={vacuous(s)} />
         ))}
         {noDrillSlot.map((t) => (
           <li key={`gone-${t}`} className="slate-row slate-gone" data-slot={`drill:${t}`} data-missing="true">
@@ -363,12 +270,68 @@ function Slate({ d }: { d: DashboardData }) {
           </li>
         )}
       </ul>
+      {emptySlate && (
+        <p className="slate-note muted small" data-testid="slate-empty">
+          Nothing on today&apos;s slate: no drill set, campaign step or review can be scheduled. Earn 20 XP to keep the streak.
+        </p>
+      )}
       {reviewOnly && (
         <p className="slate-note muted small" data-testid="slate-review-only">
           Review-only day: no drill set and no campaign step can be taken. Clearing the queue counts only after at least one review today; with nothing due, earn 20 XP to keep the streak.
         </p>
       )}
+      <MixedDrills tracks={mixedTracks(items, SLATE_DRILL_TRACKS.filter(unlocked))} />
     </>
+  );
+}
+
+/**
+ * ab S4 ring fix (S3 review SHOULD-1): the tracks Mixed drills rotate over are today's slate drill-set
+ * tracks (the learner's chosen focus), unlocked ones only, in slate order; with fewer than 2 of them it
+ * falls back to every unlocked drill track, so the button still mixes something.
+ */
+export function mixedTracks(items: readonly SlateItem[], unlockedDrillTracks: readonly TrackId[]): TrackId[] {
+  const slate = [...new Set(items.flatMap((s) => {
+    const t = slateTrack(s);
+    return t !== null && unlockedDrillTracks.includes(t) ? [t] : [];
+  }))];
+  return slate.length >= 2 ? slate : [...unlockedDrillTracks];
+}
+
+/**
+ * ab S4: interleaved practice. GET /drills/next?mode=mixed is asked only on click (never on mount),
+ * then the learner lands on that drill. The server rotates over the tracks deterministically (day +
+ * drills passed), so the next press after a pass moves to another track.
+ */
+function MixedDrills({ tracks }: { tracks: readonly TrackId[] }) {
+  const api = useApi();
+  const navigate = useNavigate();
+  const [state, setState] = useState<{ busy: boolean; note: string | null }>({ busy: false, note: null });
+  if (tracks.length < 2) return null;
+  const start = () => {
+    setState({ busy: true, note: null });
+    api.getNextDrill(tracks).then(
+      (r) => {
+        if (r.unit) navigate(`/play/${r.unit.id}`);
+        else setState({ busy: false, note: 'No drill is open on these tracks right now.' });
+      },
+      (e: unknown) => setState({ busy: false, note: errorText(e) }),
+    );
+  };
+  return (
+    <div className="slate-mixed" data-testid="mixed-drills">
+      <button type="button" className="btn btn-sm" onClick={start} disabled={state.busy} aria-describedby="mixed-why">
+        <Icon name="bolt" /> Mixed drills
+      </button>
+      <span id="mixed-why" className="muted small">
+        one drill at a time, rotating {tracks.map((t) => TRACK_LABEL[t]).join(' · ')}
+      </span>
+      {state.note && (
+        <p className="small" role="status" data-testid="mixed-note">
+          {state.note}
+        </p>
+      )}
+    </div>
   );
 }
 

@@ -10,6 +10,7 @@
 export const BOOLEAN_COLUMNS: ReadonlySet<string> = new Set([
   'locked',
   'slate_drills',
+  'enabled',
   'read_only',
   'inverted',
   'assisted',

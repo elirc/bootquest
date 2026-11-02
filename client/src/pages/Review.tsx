@@ -3,7 +3,7 @@ import { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useApi } from '../api/context';
 import { errorText } from '../api/errors';
-import { isApiError, type GradeResponse, type ReviewGrade, type ReviewQueueItem } from '../api/types';
+import { isApiError, type GradeResponse, type ReviewGrade, type ReviewQueueItem, type ReviewQueueResponse } from '../api/types';
 import { useDueReport } from '../components/AppShell';
 import { Icon } from '../components/Icon';
 import { Chip, Kbd, LoadState, PageHeader, ProgressBar } from '../components/ui';
@@ -40,13 +40,33 @@ export function ReviewPage() {
   return (
     <>
       <PageHeader eyebrow="Spaced repetition" title="Review session" />
-      {q.status === 'ready' ? <Session cards={q.data.items} /> : <LoadState error={q.error} onRetry={q.reload} minHeight={420} />}
+      {q.status === 'ready' ? <Session first={q.data} /> : <LoadState error={q.error} onRetry={q.reload} minHeight={420} />}
     </>
   );
 }
 
-function Session({ cards }: { cards: ReviewQueueItem[] }) {
+/**
+ * BUG-2 (ab wave S2): GET /reviews/queue serves one page (200 by default) plus the server's due
+ * COUNT. When a page was cut short (count > items.length) and the session reaches its end, it
+ * fetches the queue again and carries on: graded cards have left the due set, so a plain refetch
+ * IS the next batch (no offset: an offset over a shrinking set would skip cards). The done panel
+ * says "Queue cleared" only when the server's latest count (the last grade's remainingDue) is 0;
+ * otherwise "Session done" with the count and a button that fetches the cards due again (a card
+ * graded Again returns after a short FSRS step). A card the server refused (NOT_DUE) is never
+ * served again in this session, so a refetch can never loop on it.
+ */
+type Paging = 'idle' | 'loading' | 'error' | 'stalled';
+
+function Session({ first }: { first: ReviewQueueResponse }) {
   const api = useApi();
+  const [cards, setCards] = useState<ReviewQueueItem[]>(first.items);
+  // the server's due count: the queue response's, then each grade's remainingDue
+  const [due, setDue] = useState(first.count);
+  // the last fetched page was cut short: more due cards wait beyond it
+  const [more, setMore] = useState(first.count > first.items.length);
+  const [paging, setPaging] = useState<Paging>('idle');
+  // cards the server refused (NOT_DUE) in this session: a refetch never serves them again
+  const refused = useRef(new Set<number>());
   const [index, setIndex] = useState(0);
   const [revealed, setRevealed] = useState(false);
   const [xp, setXp] = useState(0);
@@ -61,6 +81,24 @@ function Session({ cards }: { cards: ReviewQueueItem[] }) {
   const busy = useRef(false);
   const reportDue = useDueReport();
   const card = cards[index];
+  const lastOfPage = index + 1 >= cards.length;
+
+  const fetchMore = async () => {
+    setPaging('loading');
+    try {
+      const r = await api.getReviewQueue();
+      const fresh = r.items.filter((it) => !refused.current.has(it.id));
+      setDue(r.count);
+      setMore(r.count > r.items.length);
+      setCards((cs) => [...cs, ...fresh]);
+      // only cards the server already refused came back: stop instead of looping
+      setPaging(fresh.length === 0 && r.count > 0 ? 'stalled' : 'idle');
+      setError(null);
+    } catch (e) {
+      setError(errorText(e));
+      setPaging('error');
+    }
+  };
 
   const grade = async (g: ReviewGrade) => {
     if (!card || !revealed || busy.current) return;
@@ -68,6 +106,7 @@ function Session({ cards }: { cards: ReviewQueueItem[] }) {
     try {
       const r = await api.gradeReview(card.id, g);
       reportDue(r.remainingDue); // W11: the nav badge counts down live
+      setDue(r.remainingDue);
       const dem = r.demotion;
       if (dem) setDemotions((ds) => [dem, ...ds]);
       setNextDueAt((n) => (n === null ? r.nextDueAt : Math.min(n, r.nextDueAt)));
@@ -76,12 +115,15 @@ function Session({ cards }: { cards: ReviewQueueItem[] }) {
       setRevealed(false);
       setIndex((i) => i + 1);
       setError(null);
+      if (lastOfPage && more && r.remainingDue > 0) void fetchMore();
     } catch (e) {
       setError(errorText(e));
       // NOT_DUE: the server will not take a grade for this card today; move on.
       if (isApiError(e, 'NOT_DUE')) {
+        refused.current.add(card.id);
         setRevealed(false);
         setIndex((i) => i + 1);
+        if (lastOfPage && more) void fetchMore();
       }
     } finally {
       busy.current = false;
@@ -102,19 +144,59 @@ function Session({ cards }: { cards: ReviewQueueItem[] }) {
     }
   });
 
+  if (!card && (paging === 'loading' || paging === 'error')) {
+    return (
+      <div className="review">
+        <Demotions items={demotions} />
+        <div className="panel review-done" aria-live="polite" data-testid="review-next-page">
+          {paging === 'loading' ? (
+            <p className="muted">
+              Batch done ({cards.length} cards). Loading the next {due} due…
+            </p>
+          ) : (
+            <>
+              <p className="error-text" role="alert">
+                {error}
+              </p>
+              <button type="button" className="btn" onClick={() => void fetchMore()}>
+                Load the next cards
+              </button>
+              <Link to="/" className="btn">
+                Back to dashboard
+              </Link>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   if (cards.length === 0 || !card) {
+    // "Queue cleared" only on the server's word: its latest due count is 0
+    const left = cards.length > 0 && due > 0;
     return (
       <div className="review">
         <Demotions items={demotions} />
         <div className="panel review-done" role="status">
           <Icon name="check" size={24} />
-          <h2>{cards.length === 0 ? 'Nothing due' : 'Queue cleared'}</h2>
+          <h2>{cards.length === 0 ? 'Nothing due' : left ? 'Session done' : 'Queue cleared'}</h2>
           {cards.length > 0 && (
             <p>
               {cards.length} cards · +{xp} XP · {GRADES.map((g) => `${g.label} ${tally[g.grade]}`).join(' · ')}
             </p>
           )}
-          {cards.length > 0 && nextDueAt !== null && (
+          {left && (
+            <p className="muted small" data-testid="still-due">
+              {due} {due === 1 ? 'card is' : 'cards are'} still due
+              {paging === 'stalled' ? ', but the server would not take a grade for them now. Try again later.' : ' (a card graded Again comes back after a short step).'}
+            </p>
+          )}
+          {left && paging !== 'stalled' && (
+            <button type="button" className="btn btn-primary" onClick={() => void fetchMore()}>
+              Review the {due} due
+            </button>
+          )}
+          {cards.length > 0 && !left && nextDueAt !== null && (
             <p className="muted small" data-testid="next-due">
               Next card due {fmtWhen(nextDueAt)}.
             </p>
@@ -127,14 +209,17 @@ function Session({ cards }: { cards: ReviewQueueItem[] }) {
     );
   }
 
+  // the session total counts the due cards beyond this page too (the queue serves 200 at a time)
+  const total = more ? Math.max(cards.length, index + due) : cards.length;
+
   return (
     <div className="review">
       <Demotions items={demotions} />
       <div className="review-progress">
         <span>
-          Card <strong>{index + 1}</strong> of {cards.length}
+          Card <strong>{index + 1}</strong> of {total}
         </span>
-        <ProgressBar value={index} max={cards.length} label="Review progress" tone="info" />
+        <ProgressBar value={index} max={total} label="Review progress" tone="info" />
         <span className="muted">+{xp} XP</span>
         {/* the running grade tally once a grade has landed (the done panel shows the final one).
             Plain text, never a live region: role=status belongs to the done panel */}
@@ -230,7 +315,7 @@ function Demotions({ items }: { items: Demotion[] }) {
             </li>
           ))}
         </ul>
-        <p className="muted small">A lapse (Again) on a review card this competency already knew drops it one notch. Win it back with the three promotion legs.</p>
+        <p className="muted small">A lapse (Again on a card you had already learned) drops its competency one notch: at most once per competency per day, and never below 1. Win it back with the three promotion legs.</p>
       </div>
     </div>
   );

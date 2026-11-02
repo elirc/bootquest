@@ -22,6 +22,7 @@ import {
 } from '@bootquest/shared/api';
 import type { Db } from '../db/database.ts';
 import { HonestyRuleError, recordAttempt, type AttemptRow } from '../engines/attempts.ts';
+import { ebObservation, ebPasses, ebScore, recordEbScoreDetail } from '../engines/eb-score.ts';
 import { PROMOTION_MIN_COVERAGE, promoteIfEligible, recordEvidence } from '../engines/evidence.ts';
 import { artifactsAwaitingSoloPass, EB_SET_MIN_GAP_MS, MutationGateError, openRetests, promotionProgress, recordMutationEvidence, scheduleRetests } from '../engines/ladder.ts';
 import { closeElapsedDays, composeSlate } from '../engines/streak.ts';
@@ -469,8 +470,9 @@ export function getExplainBackKey(deps: LadderDeps, unitId: number): ExplainBack
 }
 
 /**
- * POST /units/:id/explain-back/self-score — per-key-point covered|missed -> coverage,
- * filed as explain-back evidence (assessor self, no filing window); >= 80% pays 20 XP once
+ * POST /units/:id/explain-back/self-score — per-key-point covered|missed -> coverage (A5: weighted
+ * for a [wN] set, plus an eb_score_detail row per evidence row), filed as explain-back evidence
+ * (assessor self, no filing window); a PASS (ebPasses: the mark, and no [w3] missed) pays 20 XP once
  * and schedules the changed-example retest (>= 2 days out); then the promotion rule runs.
  */
 export function selfScoreExplainBack(deps: LadderDeps, unitId: number, body: { perKeyPoint: Record<string, 'covered' | 'missed'> }): ExplainBackScoreResponse {
@@ -482,13 +484,12 @@ export function selfScoreExplainBack(deps: LadderDeps, unitId: number, body: { p
   if (!attempt) throw notAnswered(db, 'explainBack', item, unit, 'answers');
   assertAnsweredHere(db, unit, attempt);
   const competencies = requireCompetencies(db, attempt.unit_id);
-  const ids = explainBackKey(item).flatMap((q) => q.keyPoints.map((k) => k.id));
-  assertExactMarks(ids, body.perKeyPoint, 'perKeyPoint');
-  const missed = ids.filter((id) => body.perKeyPoint[id] === 'missed');
-  const covered = ids.length - missed.length;
-  const coverage = covered / ids.length;
+  const keyPoints = explainBackKey(item).flatMap((q) => q.keyPoints);
+  assertExactMarks(keyPoints.map((k) => k.id), body.perKeyPoint, 'perKeyPoint');
+  // A5: weighted coverage for a [wN] set (plain otherwise) and the one pass predicate
+  const s = ebScore(keyPoints, body.perKeyPoint);
   const minCoverage = effectiveMinCoverage(check.spec);
-  const passed = coverage >= minCoverage;
+  const passed = ebPasses(s.score, s.w3Missed.length, minCoverage);
 
   return honest(() =>
     db.tx(() => {
@@ -496,33 +497,35 @@ export function selfScoreExplainBack(deps: LadderDeps, unitId: number, body: { p
         throw new HttpError(409, 'ALREADY_SCORED', 'your answer on this unit is already self-scored (evidence is append-only)');
       }
       closeElapsedDays(db, clock);
-      const evidenceIds = competencies.map(
-        (competency) =>
-          recordEvidence(
-            db,
-            {
-              competency,
-              kind: 'explain-back',
-              intention: 'explain-back with the code hidden: answers stored first, then self-scored against the key points',
-              observation: `${covered}/${ids.length} key points covered (${pct(coverage)}%)${missed.length ? `; missed ${missed.join(', ')}` : ''}`,
-              score: coverage,
-              attemptId: attempt.id,
-            },
-            clock,
-          ).id,
-      );
+      const evidenceIds = competencies.map((competency) => {
+        const id = recordEvidence(
+          db,
+          {
+            competency,
+            kind: 'explain-back',
+            intention: 'explain-back with the code hidden: answers stored first, then self-scored against the key points',
+            observation: ebObservation(s),
+            score: s.score,
+            attemptId: attempt.id,
+          },
+          clock,
+        ).id;
+        recordEbScoreDetail(db, id, s, clock);
+        return id;
+      });
       const award = passed ? awardXp(db, { kind: 'explain-back', attemptId: attempt.id }, clock) : null;
       const retests = passed ? scheduleRetests(db, attempt.id, clock) : [];
       const promotions = promoteAll(db, competencies, clock);
       composeSlate(db, clock);
       return {
         attemptId: attempt.id,
-        covered,
-        total: ids.length,
-        coverage,
+        covered: s.covered,
+        total: s.total,
+        // the score of record (weighted for a [wN] set): what `passed` and minCoveragePct compare
+        coverage: s.score,
         minCoveragePct: pct(minCoverage),
         passed,
-        missed,
+        missed: s.missed,
         evidenceIds,
         xp: award ? { id: award.id, amount: award.amount, reason: award.reason } : null,
         retests: retests.map((r) => ({ reviewItemId: r.reviewItemId, unitId: r.unitId, title: r.title, dueAt: r.dueAt, artifactUnitId: r.artifactUnitId })),
@@ -603,11 +606,9 @@ export function practiceScoreExplainBack(deps: LadderDeps, unitId: number, body:
   // still binds the attempt's own unit and competencies below.
   assertAnsweredHere(db, unit, attempt);
   const competencies = requireCompetencies(db, attempt.unit_id);
-  const ids = explainBackKey(item).flatMap((q) => q.keyPoints.map((k) => k.id));
-  assertExactMarks(ids, body.perKeyPoint, 'perKeyPoint');
-  const missed = ids.filter((id) => body.perKeyPoint[id] === 'missed');
-  const covered = ids.length - missed.length;
-  const coverage = covered / ids.length;
+  const keyPoints = explainBackKey(item).flatMap((q) => q.keyPoints);
+  assertExactMarks(keyPoints.map((k) => k.id), body.perKeyPoint, 'perKeyPoint');
+  const s = ebScore(keyPoints, body.perKeyPoint);
   const minCoverage = effectiveMinCoverage(check.spec);
 
   return honest(() =>
@@ -616,29 +617,30 @@ export function practiceScoreExplainBack(deps: LadderDeps, unitId: number, body:
         const ord = practiceAttempts(db, item).findIndex((p) => p.id === attempt.id) + 1;
         throw new HttpError(409, 'ALREADY_SCORED', `practice attempt ${ord} is already self-scored (evidence is append-only)`);
       }
-      const evidenceIds = competencies.map(
-        (competency) =>
-          recordEvidence(
-            db,
-            {
-              competency,
-              kind: 'explain-back',
-              intention: 'explain-back PRACTICE retake: the key was already seen; scored for feedback only',
-              observation: `${covered}/${ids.length} key points covered (${pct(coverage)}%)${missed.length ? `; missed ${missed.join(', ')}` : ''}`,
-              score: coverage,
-              attemptId: attempt.id,
-            },
-            clock,
-          ).id,
-      );
+      const evidenceIds = competencies.map((competency) => {
+        const id = recordEvidence(
+          db,
+          {
+            competency,
+            kind: 'explain-back',
+            intention: 'explain-back PRACTICE retake: the key was already seen; scored for feedback only',
+            observation: ebObservation(s),
+            score: s.score,
+            attemptId: attempt.id,
+          },
+          clock,
+        ).id;
+        recordEbScoreDetail(db, id, s, clock);
+        return id;
+      });
       return {
         attemptId: attempt.id,
-        covered,
-        total: ids.length,
-        coverage,
+        covered: s.covered,
+        total: s.total,
+        coverage: s.score,
         minCoveragePct: pct(minCoverage),
-        passed: coverage >= minCoverage,
-        missed,
+        passed: ebPasses(s.score, s.w3Missed.length, minCoverage),
+        missed: s.missed,
         evidenceIds,
         xp: null,
         retests: [],
