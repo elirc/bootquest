@@ -1,4 +1,4 @@
-# BootQuest handoff — START HERE (updated 2026-10-30)
+# BootQuest handoff — START HERE (updated 2026-11-01)
 
 BootQuest is the owner's single-user, local-first gamified upskilling app (npm workspaces `server/`, `client/`, `cli/`,
 `shared/`, `tools/seed/`). This folder is the one current handoff. Everything older lives in git history and in
@@ -34,9 +34,11 @@ The server refuses to start on a stale stamp or a busy port, and backs up the DB
 - **The owner has not used the app yet** (checked 2026-10-30: 0 attempts, 0 XP, 0 review cards, 15 "missed" days on
   the heatmap since 10-15). REVIEW-2026-10-30 §1 explains why that puts the "day one" app wave first. Re-check with
   `GET /api/dashboard` before planning.
-- **ab wave PAUSED 2026-10-30 (out of usage): resume from [`ab-wave/STATUS.md`](ab-wave/STATUS.md).** The council
-  ruled, the hub contracts landed on branch `ab-wave` (green), the 7 stream briefs are written; no stream work is
-  committed yet. selfboot is checked out on `ab-wave`: do not `npm run serve` from it against the real DB.
+- **ab wave INTEGRATED 2026-11-01 on branch `ab-wave`, full battery green, NOT landed** (see
+  [`ab-wave/STATUS.md`](ab-wave/STATUS.md) and SEEDING §8 "ab wave"). All 7 streams merged after the ring review, the
+  hub merge items are fixed, and the app was booted on a copy of the owner DB (migrations 017/018 apply cleanly).
+  Landing = the owner says "land": merge `ab-wave` into `main` and push. Until then selfboot is on `ab-wave`: do not
+  `npm run serve` / `npm run app` from it against the real DB.
 - Content census (count again before trusting a number; `C:\Users\Owner\Desktop\bootquest-handoff\tools\census.mjs`
   is a read-only counter):
 

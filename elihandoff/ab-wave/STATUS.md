@@ -139,9 +139,21 @@ resume from here without re-auditing or re-running the council.
   `scratchpad/hub/cp1.txt` of the session. Still to merge: S7, S3, S4 (after their ring fixes), then the merge
   items listed above and the full battery.
 
+- **Session 4 (2026-11-01):** merged S7 (3a2f6b92), so all 7 are in. Hub merge items fixed in b7b8c7ed (client
+  find.test mount pin = 6 reads by counting; settings.test on `DashboardResponseExt`; empty slate gets its own note
+  instead of "Review-only day"; `demote()` doc; README `bootquest slate`) and 89165a4c (server find.test: no review
+  slot on a fresh fixture since S1). Full battery green at the hub: typechecks, seed:lint:leaks (0 token leaks; xleak
+  146/146 baselined), seed:lint:answers, restamp:all 697/697 fresh, seed:pins 688/688 OK, seed:campaign --check,
+  server 705/705 + selfrun 20/20, tools/seed 2270/2270, client 430/430, cli 120/120, smoke:api 76/76,
+  demo:promotion 39/39, seed:demo:planted 48/48, test:csharp 46/46, test:java 23/23 (JDK 17). Live check: `npm run
+  app` on a copy of the owner DB (:4391/:5391) booted (sysdrills 10 updated, 0 retired), `/@fs/` answer keys 403,
+  day-one slate 4 drills x1 + campaign, 0 phantom missed days, the new endpoints answer. SEEDING §3 (sysdrills task
+  lines, `[wN]` weights) + §8 "ab wave" bullet and `../README.md` State written. Counts verified by counting: 136
+  weighted EB sets, 51 blindable `[senior]` prompts (of 57), sysdrills 129, EB packs 244. ladder-real pins unchanged.
+
 ## Not done
-- Finish the streams (resume prompt below tells each agent to adopt its clone's partial work), ring review, hub
-  integration, the battery, the SEEDING §8 bullet, and the README census.
+- Landing: the owner says "land" → `git switch main && git merge --no-ff ab-wave && git push`, then switch selfboot
+  back to main. Everything else in the wave is done.
 
 ## Resume (new session)
 1. Read `../../AGENTS.md`, then this file, then `RULINGS.md`, then `briefs/COMMON.md`. Do not re-run the council.
