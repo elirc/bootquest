@@ -38,15 +38,16 @@ function withSlate(items: SlateItem[], base = createMockApi()): BootQuestApi {
 const slateLink = (slot: string) => within(document.querySelector<HTMLElement>(`.slate [data-slot="${slot}"]`)!).getByRole('link');
 
 describe('dashboard: slate targets come with GET /dashboard (no fan-out)', () => {
-  it('a mount reads /dashboard, /competencies and the shared /tracks (plus the shell badge), never /units or /campaign', async () => {
+  it('a mount reads /dashboard, /competencies, the shared /tracks, /due, /stats/weak and /settings/slate (plus the shell badge), never /units or /campaign', async () => {
     const { api, calls } = spyApi();
     renderApp('/', api);
     await screen.findByTestId('due-now');
     await waitFor(() => expect(slateLink('drill:csharp')).toHaveAttribute('href', '/play/202'));
     // the shell's review badge (GET /review/queue?limit=1) is on every page, not the dashboard's
     const page = calls.filter((c) => c !== 'getReviewQueue');
-    expect(new Set(page)).toEqual(new Set(['getDashboard', 'getCompetencies', 'getTracks']));
-    expect(page.length).toBeLessThanOrEqual(3);
+    // merged ab wave: S4's 3 reads + S3's Due now (/due) and Weak spots (/stats/weak) panels + S1's focus card (/settings/slate)
+    expect(new Set(page)).toEqual(new Set(['getDashboard', 'getCompetencies', 'getTracks', 'getDue', 'getWeakSpots', 'getSlateSettings']));
+    expect(page.length).toBeLessThanOrEqual(6);
     expect(calls.filter((c) => c === 'getReviewQueue')).toHaveLength(1);
     expect(calls).not.toContain('getTrackUnits');
     expect(calls).not.toContain('getCampaign');

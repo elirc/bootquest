@@ -415,7 +415,8 @@ export function promoteIfEligible(db: Db, competency: CompetencyId, now: Clock):
  * Drop one notch (floor 1) and log a demotion evidence row. The row is written
  * even at the floor so the event is never silently lost; a demotion that
  * actually lowers the rating resets the promotion window (legs re-earned),
- * a floor demotion does not.
+ * a floor demotion does not. The one caller today (the lapse rule in fsrs.ts)
+ * skips the floor and a second same-day demotion via lapseMayDemote.
  */
 export function demote(db: Db, competency: CompetencyId, now: Clock, observation: string): RatingChange {
   CompetencyId.parse(competency);

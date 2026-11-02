@@ -1,7 +1,7 @@
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
-import { ApiErrorBody, DashboardResponse } from '@bootquest/shared/api';
-import { SlateSettingsResponse } from '@bootquest/shared/api-ext';
+import { ApiErrorBody } from '@bootquest/shared/api';
+import { DashboardResponseExt as DashboardResponse, SlateSettingsResponse } from '@bootquest/shared/api-ext';
 import { DAY_MS } from '../../src/engines/clock.ts';
 import { getSlate } from '../../src/engines/streak.ts';
 import { insertUnit } from '../../src/store/content.ts';

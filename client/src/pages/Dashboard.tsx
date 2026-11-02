@@ -27,14 +27,13 @@ type Loaded<T> = AsyncState<T> & { reload: () => void };
 export function DashboardPage() {
   const api = useApi();
   const q = useAsync(() => api.getDashboard(), [api]);
-  // fix/client-dash: the open retests live on GET /competencies only (the review queue excludes
-  // them by design). Requested alongside the dashboard and laid out once it SETTLES, so the
-  // "Due now" panel never pushes the page down after first paint.
+  // The competency table marks units with a due retest from GET /competencies (the review queue
+  // excludes retests by design). The first paint waits for it to SETTLE so the table never shifts.
+  // ab S3: the "Due now" panel reads its own GET /due (and Weak spots GET /stats/weak), each with
+  // its own Retry, so the rest of the page is not torn down when one of them reloads.
   const comp = useAsync(() => api.getCompetencies(), [api]);
-  // fix/client-review 4: only the FIRST paint waits for /competencies. Once the body is up it stays
-  // mounted while the Due-now panel reloads (its own Retry), so the rest of the page is not torn
-  // down and refetched. ab S4: the slate links come with GET /dashboard (targetUnitId), so a mount
-  // is this page's two reads plus the shell's shared /tracks.
+  // ab S4: the slate links come with GET /dashboard (targetUnitId). A mount reads /dashboard,
+  // /competencies, the shell's shared /tracks, /due, /stats/weak and (focus card) /settings/slate.
   const [painted, setPainted] = useState(false);
   const showBody = q.status === 'ready' && (painted || comp.status !== 'loading');
   if (showBody && !painted) setPainted(true);
@@ -239,7 +238,10 @@ function Slate({ d }: { d: DashboardData }) {
   // missing row is stated neutrally, never as "track exhausted"
   const noDrillSlot = SLATE_DRILL_TRACKS.filter((t) => unlocked(t) && !items.some((s) => slateTrack(s) === t));
   const noCampaign = !items.some((s) => s.kind === 'campaign-step');
-  const reviewOnly = items.every((s) => s.kind === 'review-clear');
+  // an empty slate (every chosen track exhausted, no campaign step, no review card yet) is not a
+  // review-only day: the server never counts it as a slate-day, so only the 20 XP partial rule applies
+  const emptySlate = items.length === 0;
+  const reviewOnly = !emptySlate && items.every((s) => s.kind === 'review-clear');
   const vacuous = vacuousReviewSlot(items, d.reviewQueue.due);
   return (
     <>
@@ -268,6 +270,11 @@ function Slate({ d }: { d: DashboardData }) {
           </li>
         )}
       </ul>
+      {emptySlate && (
+        <p className="slate-note muted small" data-testid="slate-empty">
+          Nothing on today&apos;s slate: no drill set, campaign step or review can be scheduled. Earn 20 XP to keep the streak.
+        </p>
+      )}
       {reviewOnly && (
         <p className="slate-note muted small" data-testid="slate-review-only">
           Review-only day: no drill set and no campaign step can be taken. Clearing the queue counts only after at least one review today; with nothing due, earn 20 XP to keep the streak.

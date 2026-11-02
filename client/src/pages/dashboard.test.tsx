@@ -157,6 +157,13 @@ describe('slate routing and variants', () => {
     expect(screen.getByRole('progressbar', { name: 'Slate items cleared' })).toHaveAttribute('aria-valuemax', '1');
   });
 
+  it('an empty slate is not called a review-only day (ab hub merge item)', async () => {
+    renderApp('/', withSlate([]));
+    expect(await screen.findByTestId('slate-empty')).toHaveTextContent('Earn 20 XP to keep the streak');
+    expect(screen.queryByTestId('slate-review-only')).toBeNull();
+    for (const t of ['js', 'csharp', 'java', 'sysdesign']) expect(slateRow(`drill:${t}`)).toHaveAttribute('data-missing', 'true');
+  });
+
   it('a fresh day with an empty review queue is not counted as cleared work', async () => {
     renderApp('/', withReviewSlot(true, 0));
     await screen.findByTestId('due-now');
