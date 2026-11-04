@@ -18,10 +18,11 @@ import { defaultRunners, type RunnerRegistry } from './runners.ts';
 import { createNodeTestFileRunner } from './runner-node-test-file.ts';
 import { removeWorkParent } from '../runners/node-test-file/index.ts';
 import { createSyncService, resolveSyncPaths, type SyncService } from '../sync/service.ts';
-import { defaultSeedItemDirs, loadSeedItemStoreWithStats, type SeedPackStat } from '../store/seed-items.ts';
+import { defaultSeedItemDirs, loadSeedItemStoreWithStats, withFundamentals, type SeedPackStat } from '../store/seed-items.ts';
 import { DEFAULT_AUTHORED_UNITS, ladderContentEntries, loadLadderIntoDb, readAuthoredUnits, readKataDifficulty, type LadderInputs, type LadderLoadStats } from '../store/ladder.ts';
 import { reconcileSeededReviewCards, type ReviewCardReconcileStats } from '../store/review-cards.ts';
 import { loadStudyQuestsIntoDb, type StudyQuestLoadStats } from '../store/study-quests.ts';
+import { defaultFundamentalsDirs, fundContentEntries, loadFundamentalsIntoDb, loadFundStore, type FundLoadStats } from '../store/fundamentals.ts';
 
 /**
  * Real entrypoint: `node --import tsx server/src/api/serve.ts`
@@ -63,6 +64,11 @@ import { loadStudyQuestsIntoDb, type StudyQuestLoadStats } from '../store/study-
  *   BOOTQUEST_AUTHORED_UNITS (optional, W7) authored unit definitions (content/units/agentic.json:
  *                           G3 / G4); when serve.ts is run directly and this is unset, the repo's
  *                           file is loaded. '' = none.
+ *   BOOTQUEST_FUNDAMENTALS  (optional, fund wave) comma-separated content/fundamentals/<track>/ dirs
+ *                           (topics.json + manifest.json from seed:import:fundamentals): the
+ *                           standalone Fundamentals ladder (store/fundamentals.ts). When serve.ts is
+ *                           run directly and this is unset, every content/fundamentals/<track>/ dir
+ *                           is loaded. '' = none. Bytes that differ from the manifest REFUSE TO START.
  * W7 ladder wiring: after the campaign + seed items load, the ladder loader derives the
  * explain-back / G2 / kata-bank / retest units from the seed items (store/ladder.ts) and
  * asserts loaded === built per family; it re-runs after every successful sync.
@@ -148,6 +154,8 @@ export interface RunningServer {
   studyQuests: StudyQuestLoadStats;
   /** seeded review cards retired / restored against the loaded seed items (store/review-cards.ts) */
   reviewCards: ReviewCardReconcileStats;
+  /** fund wave: the Fundamentals ladder (null when BOOTQUEST_FUNDAMENTALS loads none) */
+  fundamentals: FundLoadStats | null;
 }
 
 /**
@@ -189,6 +197,11 @@ export function defaultPackDirs(root: string = fileURLToPath(new URL('../../../c
     .filter((d) => d.isDirectory() && existsSync(join(root, d.name, 'manifest.json')))
     .map((d) => join(root, d.name))
     .sort();
+}
+
+/** fund wave: every <repo>/content/fundamentals/<track>/ dir with a manifest (default for the real entrypoint). */
+export function defaultFundDirs(root: string = fileURLToPath(new URL('../../../content/fundamentals/', import.meta.url))): string[] {
+  return defaultFundamentalsDirs(root);
 }
 
 /** <repo>/content/campaign when it holds a manifest (default for the real entrypoint), else ''. */
@@ -248,7 +261,13 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
     const campaignDir = (env.BOOTQUEST_CAMPAIGN ?? '').trim();
     const campaign = campaignDir ? loadCampaignIntoDb(db, readCampaign(resolve(campaignDir)), clock) : null;
     const seedDirs = splitList(env.BOOTQUEST_SEED_ITEMS).map((d) => resolve(d));
-    const { store: seedItems, packs: seedPacks } = loadSeedItemStoreWithStats(seedDirs);
+    const { store: seedOnly, packs: seedPacks } = loadSeedItemStoreWithStats(seedDirs);
+    // fund wave: the Fundamentals ladder (lessons, quiz gates, flashcards); its drills are a code pack above
+    const fundDirs = splitList(env.BOOTQUEST_FUNDAMENTALS).map((d) => resolve(d));
+    const fund = fundDirs.length ? loadFundStore(fundDirs) : null;
+    const seedItems = fund ? withFundamentals(seedOnly, fund) : seedOnly;
+    const fundamentals = fund ? loadFundamentalsIntoDb(db, fund, clock) : null;
+    if (fund) sources.push(fundContentEntries(fund));
     // W7: the ladder units (explain-back / G2 / kata bank / retests) + the authored G3/G4 units
     const authoredPath = (env.BOOTQUEST_AUTHORED_UNITS ?? '').trim();
     const authored = authoredPath ? readAuthoredUnits(resolve(authoredPath)) : null;
@@ -319,7 +338,7 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
       });
       return closing;
     };
-    return { server, db, port, host, close, backup: backupKept, packs: packStats, campaign, csharpScratch: csharp?.appDataDir ?? null, javaScratch: java?.appDataDir ?? null, seedPacks, ladder, studyQuests, reviewCards };
+    return { server, db, port, host, close, backup: backupKept, packs: packStats, campaign, csharpScratch: csharp?.appDataDir ?? null, javaScratch: java?.appDataDir ?? null, seedPacks, ladder, studyQuests, reviewCards, fundamentals };
   } catch (err) {
     db.close();
     throw err;
@@ -331,7 +350,7 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
  * tracks, seed packs, ladder families, authored units). Every count printed here was already
  * asserted loaded === built by its loader (a mismatch refuses to start before this prints).
  */
-export function startupSummary(running: Pick<RunningServer, 'packs' | 'campaign' | 'seedPacks' | 'ladder'> & Partial<Pick<RunningServer, 'studyQuests' | 'reviewCards'>>): string[] {
+export function startupSummary(running: Pick<RunningServer, 'packs' | 'campaign' | 'seedPacks' | 'ladder'> & Partial<Pick<RunningServer, 'studyQuests' | 'reviewCards' | 'fundamentals'>>): string[] {
   const out: string[] = [];
   for (const p of running.packs) {
     out.push(
@@ -365,6 +384,10 @@ export function startupSummary(running: Pick<RunningServer, 'packs' | 'campaign'
     for (const o of sq.orphaned) out.push(`[bootquest] study quests: ${o} lost its quest pack after attempts were recorded (gate kept for history, quest content-pending)`);
     for (const r of sq.replaced) out.push(`[bootquest] study quests: ${r} was re-seeded after attempts were recorded (old gate retired for history, new live gate inserted)`);
   }
+  for (const f of running.fundamentals?.tracks ?? []) {
+    out.push(`[bootquest] fundamentals ${f.track}: loaded ${f.loaded} === built ${f.topics} topic(s) (lesson + quiz gate + flashcards; drills in pack fund-${f.track})`);
+  }
+  for (const r of running.fundamentals?.replaced ?? []) out.push(`[bootquest] fundamentals: ${r} was re-seeded after attempts were recorded (old gate retired for history, new live gate inserted)`);
   const rc = running.reviewCards;
   if (rc && (rc.retired.length || rc.restored.length)) {
     out.push(`[bootquest] review cards: ${rc.retired.length} seeded card(s) retired (source item removed by a re-seed), ${rc.restored.length} restored (item back)`);
@@ -409,6 +432,7 @@ if (invokedDirectly) {
     const def = DEFAULT_AUTHORED_UNITS(fileURLToPath(new URL('../../../', import.meta.url)));
     env.BOOTQUEST_AUTHORED_UNITS = existsSync(def) ? def : '';
   }
+  if (env.BOOTQUEST_FUNDAMENTALS === undefined) env.BOOTQUEST_FUNDAMENTALS = defaultFundDirs().join(',');
   startServer({ env })
     .then((running) => {
       installShutdown(running);

@@ -20,6 +20,7 @@ import {
 // the ONE seed-pack verifier (seed:check uses it too); a runtime import only — tools/seed
 // depends on the server package, never the other way round at the package level
 import { loadSeedPack } from '../../../tools/seed/src/factory/pack.ts';
+import type { FundStore } from './fundamentals.ts';
 
 /**
  * W6: the seed items the explain-back and patch-kata players are built from
@@ -50,6 +51,17 @@ export interface SeedItemStore {
   flashcard(key: string): FlashcardItem | undefined;
   /** seed:notes ("Learn more") notes of one quest pack's repo, in pack order (empty when none) */
   notes(repo: string): readonly NoteItem[];
+  /**
+   * fund wave: the Fundamentals ladder (store/fundamentals.ts), when loaded. Its quiz / flashcard items
+   * live under `fund:` keys, never in the seed maps above: the study-quiz gate, review-card text and the
+   * re-seed reconciliation look there for a `fund:` key.
+   */
+  fund?: FundStore;
+}
+
+/** The store plus the Fundamentals items (the seed lookups are unchanged). */
+export function withFundamentals(store: SeedItemStore, fund: FundStore): SeedItemStore {
+  return { ...store, fund };
 }
 
 /** W8: one repo's seed:quests content (the study-quest unit is derived from it, store/study-quests.ts). */

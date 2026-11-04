@@ -2,13 +2,15 @@
 // GET /api/tracks/:id/units payload. Repo / module labels are derived from the unit key alone,
 // so the browser never needs anything beyond what TrackUnitsResponse already carries.
 import type { UnitKind, UnitSummary } from '../api/types';
+import { fundTopicIdOf, isFundKey } from './fundamentals';
 
-export type UnitSection = 'drill' | 'explain-back' | 'other';
+export type UnitSection = 'drill' | 'explain-back' | 'other' | 'fundamentals';
 
 export const SECTION_LABEL: Record<UnitSection, string> = {
   drill: 'Drills',
   'explain-back': 'Explain-backs',
   other: 'Other',
+  fundamentals: 'Fundamentals',
 };
 
 /** The kind-filter bucket a unit kind belongs to. */
@@ -16,6 +18,11 @@ export function sectionOf(kind: UnitKind): UnitSection {
   if (kind === 'drill') return 'drill';
   if (kind === 'explain-back') return 'explain-back';
   return 'other';
+}
+
+/** fund wave: a Fundamentals unit (topic or drill) is filtered as its own section, whatever its kind. */
+export function sectionOfUnit(u: Pick<UnitSummary, 'kind' | 'key'>): UnitSection {
+  return isFundKey(u.key) ? 'fundamentals' : sectionOf(u.kind);
 }
 
 /** `01-estimation` -> `estimation`, `js-fundamentals` -> `js fundamentals`. */
@@ -37,6 +44,9 @@ function prettify(segment: string): string {
 export function groupLabelOf(u: Pick<UnitSummary, 'key' | 'kind'>): string {
   const fallback = SECTION_LABEL[sectionOf(u.kind)];
   const key = u.key;
+  // fund wave: a topic and its drills share one group, numbered so the groups sort in ladder order
+  const topic = fundTopicIdOf(key);
+  if (topic) return `Fundamentals ${topic.slice(0, 2)} · ${prettify(topic)}`;
   if (key.startsWith('ladder/')) {
     const repo = key.split('/')[2]?.trim();
     return repo ? repo : fallback;
@@ -69,8 +79,8 @@ export const NO_FILTER: UnitFilter = { section: 'all', query: '', hideDone: fals
 
 /** Unit counts per kind bucket (unfiltered) for the kind-filter buttons. */
 export function sectionCounts(units: readonly UnitSummary[]): Record<UnitSection | 'all', number> {
-  const counts = { all: units.length, drill: 0, 'explain-back': 0, other: 0 };
-  for (const u of units) counts[sectionOf(u.kind)]++;
+  const counts = { all: units.length, drill: 0, 'explain-back': 0, other: 0, fundamentals: 0 };
+  for (const u of units) counts[sectionOfUnit(u)]++;
   return counts;
 }
 
@@ -99,7 +109,7 @@ export function groupUnits(units: readonly UnitSummary[], f: UnitFilter): UnitGr
   const q = f.query.trim().toLowerCase();
   const byLabel = new Map<string, UnitGroup>();
   for (const u of units) {
-    if (f.section !== 'all' && sectionOf(u.kind) !== f.section) continue;
+    if (f.section !== 'all' && sectionOfUnit(u) !== f.section) continue;
     if (f.hideDone && u.state === 'done') continue;
     const label = groupLabelOf(u);
     if (q && !u.title.toLowerCase().includes(q) && !label.toLowerCase().includes(q) && !u.key.toLowerCase().includes(q)) continue;

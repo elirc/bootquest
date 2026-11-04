@@ -29,8 +29,15 @@ export interface ReviewCardReconcileStats {
 }
 
 function sourceExists(store: SeedItemStore, cardKey: string): boolean | null {
-  if (cardKey.startsWith(QUIZ_MISS_CARD_PREFIX)) return store.quiz(cardKey.slice(QUIZ_MISS_CARD_PREFIX.length)) !== undefined;
-  if (cardKey.startsWith(FLASHCARD_CARD_PREFIX)) return store.flashcard(cardKey.slice(FLASHCARD_CARD_PREFIX.length)) !== undefined;
+  // fund wave: a Fundamentals item (fund: key) lives in the Fundamentals store (store/fundamentals.ts)
+  if (cardKey.startsWith(QUIZ_MISS_CARD_PREFIX)) {
+    const k = cardKey.slice(QUIZ_MISS_CARD_PREFIX.length);
+    return (k.startsWith('fund:') ? store.fund?.quiz(k) : store.quiz(k)) !== undefined;
+  }
+  if (cardKey.startsWith(FLASHCARD_CARD_PREFIX)) {
+    const k = cardKey.slice(FLASHCARD_CARD_PREFIX.length);
+    return (k.startsWith('fund:') ? store.fund?.flashcard(k) : store.flashcard(k)) !== undefined;
+  }
   return null; // not a seeded card
 }
 

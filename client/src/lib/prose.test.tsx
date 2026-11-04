@@ -227,3 +227,27 @@ describe('parseProse: wrapped and loose list items', () => {
     expect(items[0]).toHaveTextContent('upperOrFail(poison) pushes chunk.toUpperCase() for each record.');
   });
 });
+
+describe('fund wave: opt-in headings', () => {
+  it('stays literal text by default (existing content renders unchanged)', () => {
+    expect(parseProse('## Title\nbody')).toEqual([{ kind: 'p', lines: ['## Title', 'body'] }]);
+  });
+
+  it('with { headings: true }: "#"-"####" lines become headings that interrupt a paragraph; fenced lines stay code', () => {
+    expect(parseProse('intro\n## The rule\nbody\n```\n# not a heading\n```\n#### Deep ##', { headings: true })).toEqual([
+      { kind: 'p', lines: ['intro'] },
+      { kind: 'heading', level: 2, text: 'The rule' },
+      { kind: 'p', lines: ['body'] },
+      { kind: 'code', text: '# not a heading', lang: null },
+      { kind: 'heading', level: 4, text: 'Deep' },
+    ]);
+    // no space after the hashes (#region, #!) is not a heading
+    expect(parseProse('#region x', { headings: true })).toEqual([{ kind: 'p', lines: ['#region x'] }]);
+  });
+
+  it('Prose headings: # / ## render as h3, deeper as h4, with inline code', () => {
+    render(<Prose text={'## Use `===`\n\n### Why'} headings />);
+    expect(screen.getByRole('heading', { level: 3, name: 'Use ===' }).querySelector('code')).toHaveTextContent('===');
+    expect(screen.getByRole('heading', { level: 4, name: 'Why' })).toBeInTheDocument();
+  });
+});

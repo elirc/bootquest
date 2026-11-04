@@ -83,6 +83,7 @@ async function main() {
     const def = DEFAULT_AUTHORED_UNITS(ROOT);
     env.BOOTQUEST_AUTHORED_UNITS = existsSync(def) ? def : '';
   }
+  if (env.BOOTQUEST_FUNDAMENTALS === undefined) env.BOOTQUEST_FUNDAMENTALS = serve.defaultFundDirs().join(',');
 
   let running;
   try {

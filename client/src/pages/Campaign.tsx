@@ -11,6 +11,7 @@ import { useTracks } from '../lib/tracks';
 import { TRACK_PLACEHOLDER, isTrackId, progressLabel, progressTitle } from '../lib/view';
 import { SkillTree, ViewToggle, useCampaignView } from './CampaignTree';
 import { TrackUnitsSection } from './TrackUnits';
+import { FundamentalsSection } from './Fundamentals';
 
 const STATE_LABEL: Record<QuestState, string> = {
   done: 'Done',
@@ -92,6 +93,8 @@ function CampaignView({ trackId }: { trackId: TrackId }) {
             <Icon name="lock" /> <strong>{track.name} is locked.</strong> No content is available on this track yet.
           </div>
         )}
+        {/* fund wave: the standalone Fundamentals ladder (language tracks only; renders nothing elsewhere) */}
+        {!locked && <FundamentalsSection trackId={trackId} />}
         {campaign.status === 'ready' ? (
           campaign.data.acts.length === 0 ? (
             <>

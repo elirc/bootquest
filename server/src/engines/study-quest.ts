@@ -42,7 +42,7 @@ export interface StudyQuizGrade {
   missed: string[];
 }
 
-function isCorrect(item: SeedQuizItem, answer: number | string): boolean {
+function isCorrect(item: Pick<SeedQuizItem, 'key' | 'check'>, answer: number | string): boolean {
   const c = item.check;
   if (c.grading === 'choice') return typeof answer === 'number' && answer === c.answerKey;
   if (c.grading === 'exact') return typeof answer === 'string' && answer.trim() === String(c.answerKey).trim();
@@ -50,7 +50,7 @@ function isCorrect(item: SeedQuizItem, answer: number | string): boolean {
 }
 
 /** PURE: grade one full answer set (answers[i] answers items[i]). */
-export function gradeStudyQuiz(items: readonly SeedQuizItem[], answers: readonly (number | string)[], passPct: number): StudyQuizGrade {
+export function gradeStudyQuiz(items: readonly Pick<SeedQuizItem, 'key' | 'check'>[], answers: readonly (number | string)[], passPct: number): StudyQuizGrade {
   if (items.length === 0) throw new StudyQuizShapeError('a study-quest gate needs at least one question');
   if (answers.length !== items.length) {
     throw new StudyQuizShapeError(`send exactly ${items.length} answers (one per question, in order); got ${answers.length}`);

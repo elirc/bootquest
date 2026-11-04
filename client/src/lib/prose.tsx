@@ -32,7 +32,8 @@ export type ProseBlock =
   | { kind: 'p'; lines: string[] }
   | { kind: 'code'; text: string; lang: string | null }
   | { kind: 'list'; items: string[] }
-  | { kind: 'olist'; items: string[]; start: number };
+  | { kind: 'olist'; items: string[]; start: number }
+  | { kind: 'heading'; level: number; text: string };
 
 const FENCE_RE = /^\s{0,3}(```+|~~~+)\s*([\w#+.-]*)\s*$/;
 const INDENT_RE = /^( {4}|\t)/;
@@ -44,6 +45,14 @@ const LIST_RE = /^\s{0,3}[-*+] +(\S.*)$/;
 // an ordered-list item: "1. x" / "2) x". Provably disjoint from NUMBERED_RE (the listing): a
 // listing line has a SPACE directly after the digits, a list item has "." or ")" there.
 const OLIST_RE = /^\s{0,3}(\d{1,3})[.)] +(\S.*)$/;
+// fund wave: an ATX heading ("## Title"), recognised ONLY when the caller opts in (parseProse
+// { headings: true }: the Fundamentals lessons). Existing content keeps its exact rendering.
+const HEADING_RE = /^\s{0,3}(#{1,4}) +(\S.*?)\s*#*\s*$/;
+
+export interface ProseOptions {
+  /** fund wave: "# … ####" lines become headings (default off: they stay literal text) */
+  headings?: boolean;
+}
 
 /** W10: does `line` close a fence opened with `marker` (same character, same or longer run)? */
 export function closesFence(line: string, marker: string): boolean {
@@ -52,7 +61,7 @@ export function closesFence(line: string, marker: string): boolean {
 }
 
 /** Split prose into paragraph and code blocks. Pure; exported for tests. */
-export function parseProse(src: string): ProseBlock[] {
+export function parseProse(src: string, opts: ProseOptions = {}): ProseBlock[] {
   const lines = src.replace(/\r\n?/g, '\n').split('\n');
   const out: ProseBlock[] = [];
   let para: string[] = [];
@@ -76,6 +85,13 @@ export function parseProse(src: string): ProseBlock[] {
     }
     if (line.trim() === '') {
       flush();
+      i++;
+      continue;
+    }
+    const h = opts.headings ? HEADING_RE.exec(line) : null;
+    if (h) {
+      flush();
+      out.push({ kind: 'heading', level: h[1]!.length, text: h[2]! });
       i++;
       continue;
     }
@@ -268,6 +284,15 @@ function renderBlock(b: ProseBlock, key: number): ReactNode {
       );
     case 'p':
       return <p key={key}>{renderLines(b.lines)}</p>;
+    case 'heading': {
+      // lessons sit under the page's h1 and the pane's h2: "#" / "##" render as h3, deeper as h4
+      const Tag = b.level <= 2 ? 'h3' : 'h4';
+      return (
+        <Tag key={key} className="prose-heading">
+          {renderInline(b.text)}
+        </Tag>
+      );
+    }
     default: {
       const never: never = b;
       return never;
@@ -281,10 +306,10 @@ export function ProseBlocks({ blocks }: { blocks: ProseBlock[] }) {
 }
 
 /** Block prose from source text. */
-export function Prose({ text, className }: { text: string; className?: string }) {
+export function Prose({ text, className, headings }: { text: string; className?: string; headings?: boolean }) {
   return (
     <div className={`prose${className ? ` ${className}` : ''}`}>
-      <ProseBlocks blocks={parseProse(text)} />
+      <ProseBlocks blocks={parseProse(text, { headings: headings === true })} />
     </div>
   );
 }

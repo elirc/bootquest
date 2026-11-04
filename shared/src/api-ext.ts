@@ -244,3 +244,37 @@ export type DrillNextResponse = z.infer<typeof DrillNextResponse>;
 
 
 // ---- S5 explain-back weights + score detail -------------------------------------------------------------
+
+// ---- fund wave: Fundamentals ladder -----------------------------------------------------------------------
+// GET /tracks/:id/fundamentals: the track's standalone Fundamentals ladder, in ladder order. Each topic is a
+// study unit (lesson = its instructions, quiz gate = its study-quiz check; flashcards enrol on the first pass)
+// plus its drill units (content/packs/fund-<track>). A topic unit is locked until the previous topic's quiz
+// gate is passed (unit_prerequisite). Topics whose unit is not loaded on this server are omitted.
+
+export const FundTopicDto = z
+  .object({
+    /** NN-kebab topic id, e.g. 01-values-and-types */
+    id: z.string(),
+    order: z.number().int().positive(),
+    title: z.string(),
+    level: z.enum(['beginner', 'intermediate', 'advanced']),
+    summary: z.string(),
+    /** quiz gate size and pass mark (percent) */
+    quizQuestions: z.number().int().nonnegative(),
+    passPct: z.number(),
+    flashcards: z.number().int().nonnegative(),
+    /** the lesson + quiz-gate study unit */
+    unit: api.UnitSummary,
+    /** the topic's live drill units, in authored order (a quarantined drill is absent) */
+    drills: z.array(api.UnitSummary),
+  })
+  .strict();
+export type FundTopicDto = z.infer<typeof FundTopicDto>;
+
+export const FundamentalsResponse = z
+  .object({
+    trackId: TrackId,
+    topics: z.array(FundTopicDto),
+  })
+  .strict();
+export type FundamentalsResponse = z.infer<typeof FundamentalsResponse>;

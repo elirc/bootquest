@@ -9,6 +9,7 @@ import { Chip } from '../components/ui';
 import { InlineProse } from '../lib/prose';
 import { useTracksRefresh } from '../lib/tracks';
 import { readingTitle } from '../lib/view';
+import { isFundTopicKey } from '../lib/fundamentals';
 
 /**
  * W8 study quest (spec §4): an ordered reading list into the repo, then the pre-seeded quiz
@@ -75,8 +76,28 @@ function StudyQuest({ detail, sq }: { detail: UnitDetail; sq: StudyQuestPublic }
     setAnswers(sq.questions.map(() => null));
   };
 
+  // fund wave: a Fundamentals topic has no repo and no reading list; its lesson is the Lesson pane
+  const fund = isFundTopicKey(detail.unit.key);
+
   return (
-    <section className="panel player-work" aria-label="Study quest">
+    <section className="panel player-work" aria-label={fund ? 'Quiz gate' : 'Study quest'}>
+      {fund ? (
+        <>
+          <div className="study-head">
+            <h2 className="panel-title">Quiz gate</h2>
+            {done && (
+              <span data-testid="quest-done">
+                <Chip tone="success">topic passed</Chip>
+              </span>
+            )}
+          </div>
+          <p className="muted small" data-testid="fund-gate-intro">
+            Read the lesson, then take the quiz gate: {sq.questions.length} questions, pass mark {sq.passPct}%. Missed questions come back as review cards;
+            your first pass enrols this topic&apos;s {sq.flashcards} flashcards into your reviews and unlocks the next topic.
+          </p>
+        </>
+      ) : (
+        <>
       <div className="study-head">
         <h2 className="panel-title">Reading list · {sq.repo}</h2>
         {done && (
@@ -104,6 +125,8 @@ function StudyQuest({ detail, sq }: { detail: UnitDetail; sq: StudyQuestPublic }
         ))}
       </ol>
       {sq.readingSteps.length === 0 && <p className="muted">This pack has no reading steps.</p>}
+        </>
+      )}
 
       {!started ? (
         <div className="toolbar">

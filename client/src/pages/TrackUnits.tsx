@@ -74,7 +74,7 @@ function TrackUnitsBody({ trackId, variant }: { trackId: TrackId; variant: Varia
   );
 }
 
-const SECTIONS: readonly (UnitSection | 'all')[] = ['all', 'drill', 'explain-back', 'other'];
+const SECTIONS: readonly (UnitSection | 'all')[] = ['all', 'fundamentals', 'drill', 'explain-back', 'other'];
 
 /** A text query opens its matching groups only while it matches at most this many units. */
 export const AUTO_EXPAND_MAX = 200;
@@ -130,7 +130,7 @@ function UnitBrowser({ units }: { units: UnitSummary[] }) {
           onChange={(e) => set({ query: e.target.value })}
         />
         <div className="tu-kinds" role="group" aria-label="Filter by kind">
-          {SECTIONS.filter((s) => s !== 'other' || counts.other > 0).map((s) => (
+          {SECTIONS.filter((s) => (s !== 'other' && s !== 'fundamentals') || counts[s] > 0).map((s) => (
             <button key={s} type="button" className="btn btn-sm" aria-pressed={filter.section === s} onClick={() => set({ section: s })}>
               {s === 'all' ? 'All' : SECTION_LABEL[s]} ({counts[s]})
             </button>

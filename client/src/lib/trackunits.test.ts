@@ -43,7 +43,7 @@ describe('sectionOf', () => {
   });
 
   it('labels each section', () => {
-    expect(SECTION_LABEL).toEqual({ drill: 'Drills', 'explain-back': 'Explain-backs', other: 'Other' });
+    expect(SECTION_LABEL).toEqual({ drill: 'Drills', 'explain-back': 'Explain-backs', other: 'Other', fundamentals: 'Fundamentals' });
   });
 });
 
@@ -153,12 +153,12 @@ describe('groupUnits', () => {
   });
 
   it('sectionCounts counts every unit, unfiltered', () => {
-    expect(sectionCounts(units)).toEqual({ all: 6, drill: 2, 'explain-back': 3, other: 1 });
+    expect(sectionCounts(units)).toEqual({ all: 6, drill: 2, 'explain-back': 3, other: 1, fundamentals: 0 });
   });
 
   it('a 136-unit track (78 drills in 10 modules + 58 EBs over 29 repos) totals correctly', () => {
     const big = bigTrack();
-    expect(sectionCounts(big)).toEqual({ all: 136, drill: 78, 'explain-back': 58, other: 0 });
+    expect(sectionCounts(big)).toEqual({ all: 136, drill: 78, 'explain-back': 58, other: 0, fundamentals: 0 });
 
     const groups = groupUnits(big, NO_FILTER);
     expect(groups).toHaveLength(39);
@@ -206,5 +206,21 @@ describe('groupTotals', () => {
 
   it('empty input -> no totals', () => {
     expect(groupTotals([]).size).toBe(0);
+  });
+});
+
+describe('fund wave: Fundamentals units', () => {
+  it('a topic and its drills share one ladder-numbered group', () => {
+    expect(groupLabelOf({ key: 'fund/js/01-values-types-and-coercion', kind: 'study' })).toBe('Fundamentals 01 · values types and coercion');
+    expect(groupLabelOf({ key: 'fund-js/01-values-types-and-coercion/01-defaults-that-keep-zero', kind: 'drill' })).toBe('Fundamentals 01 · values types and coercion');
+    expect(groupLabelOf({ key: 'fund-java/12-streams/03-x', kind: 'drill' })).toBe('Fundamentals 12 · streams');
+  });
+
+  it('they count and filter as the Fundamentals section, whatever their kind', () => {
+    const units = [unit({ key: 'fund/js/01-a', kind: 'study' }), unit({ key: 'fund-js/01-a/01-x', kind: 'drill' }), unit({ key: 'jstrain/01-x/y', kind: 'drill' })];
+    expect(sectionCounts(units)).toMatchObject({ all: 3, fundamentals: 2, drill: 1, other: 0 });
+    expect(groupUnits(units, { ...NO_FILTER, section: 'fundamentals' }).flatMap((g) => g.units.map((u) => u.key))).toEqual(['fund/js/01-a', 'fund-js/01-a/01-x']);
+    expect(groupUnits(units, { ...NO_FILTER, section: 'drill' }).flatMap((g) => g.units.map((u) => u.key))).toEqual(['jstrain/01-x/y']);
+    expect(SECTION_LABEL.fundamentals).toBe('Fundamentals');
   });
 });

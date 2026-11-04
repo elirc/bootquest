@@ -1,0 +1,286 @@
+/**
+ * fund wave: the Fundamentals ladder (store/fundamentals.ts) from the REAL compiled
+ * content/fundamentals/<track>/ dirs (seed:import:fundamentals output), plus synthetic stores for the
+ * ladder-order, retire and re-seed cases the one-topic pilot cannot show.
+ *   - the loader refuses edited bytes and a loaded !== built count;
+ *   - one study unit per topic, its ONE check the topic's study-quiz gate (80%), topic N locked
+ *     behind topic N-1; idempotent; a topic that left is retired; a changed gate follows THE re-seed
+ *     policy (in place while unreferenced, retired-and-replaced once attempts reference it);
+ *   - GET /tracks/:id/fundamentals serves metadata + unit states, never a lesson or a key;
+ *   - the unit serves the lesson as instructions, the gate's questions with choices only; a miss
+ *     queues a review card whose text resolves from the Fundamentals store, a first pass enrols the
+ *     topic's flashcards and unlocks the next topic; review-card reconciliation keeps fund cards.
+ */
+import { cpSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { join, resolve } from 'node:path';
+import request from 'supertest';
+import type { Express } from 'express';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { ReviewQueueResponse, SubmitResponse, UnitDetailResponse } from '@bootquest/shared/api';
+import { FundamentalsResponse } from '@bootquest/shared/api-ext';
+import { FundamentalsFile, fundTopicUnitKey, type FundTopic } from '@bootquest/shared/fundamentals';
+import { createApp } from '../../src/api/app.ts';
+import { entriesContentStore } from '../../src/api/content-store.ts';
+import { defaultRunners } from '../../src/api/runners.ts';
+import { DAY_MS, fixedClock } from '../../src/engines/clock.ts';
+import {
+  defaultFundamentalsDirs,
+  FUND_SOURCE_KEY,
+  fundContentEntries,
+  FundamentalsLoadError,
+  loadFundamentalsIntoDb,
+  loadFundStore,
+  mapFundStore,
+  readFundamentalsDir,
+  type FundStore,
+} from '../../src/store/fundamentals.ts';
+import { reconcileSeededReviewCards } from '../../src/store/review-cards.ts';
+import { emptySeedItemStore, withFundamentals } from '../../src/store/seed-items.ts';
+import { localNoon, makeTempDb, submit, type TempDb } from '../helpers.ts';
+
+const REPO = resolve(import.meta.dirname, '..', '..', '..');
+const FUND = join(REPO, 'content', 'fundamentals');
+
+const realFile = (track: string): FundamentalsFile => FundamentalsFile.parse(JSON.parse(readFileSync(join(FUND, track, 'topics.json'), 'utf8')));
+
+/** a second (and third) topic cloned from a real one under a new id, keys re-homed */
+function cloneTopic(t: FundTopic, id: string, order: number, track = 'java'): FundTopic {
+  const rekey = (k: string) => k.replace(`/${t.id}/`, `/${id}/`);
+  return {
+    ...t,
+    id,
+    order,
+    title: `${t.title} (${order})`,
+    quiz: t.quiz.map((q) => ({ ...q, key: rekey(q.key) })),
+    flashcards: t.flashcards.map((c) => ({ ...c, key: rekey(c.key) })),
+    drillKeys: t.drillKeys.map((k) => k.replace(`fund-${track}/${t.id}/`, `fund-${track}/${id}/`)),
+  };
+}
+
+function ladderOf(n: number): FundamentalsFile {
+  const base = realFile('java');
+  const t0 = base.topics[0]!;
+  const topics = [t0, ...Array.from({ length: n - 1 }, (_, i) => cloneTopic(t0, `0${i + 2}-clone-${i + 2}`, i + 2))];
+  return { ...base, topics };
+}
+
+describe('readFundamentalsDir', () => {
+  let tmp: TempDb;
+  beforeEach(() => {
+    tmp = makeTempDb();
+  });
+  afterEach(() => tmp.cleanup());
+
+  it('loads every committed track (bytes bound, counts === manifest)', () => {
+    const dirs = defaultFundamentalsDirs(FUND);
+    expect(dirs.map((d) => d.split(/[\\/]/).pop()).sort()).toEqual(['csharp', 'java', 'js']);
+    const store = loadFundStore(dirs);
+    for (const track of ['js', 'csharp', 'java'] as const) {
+      const topics = store.topics(track);
+      expect(topics.length).toBeGreaterThan(0);
+      for (const t of topics) {
+        expect(t.lesson.length).toBeGreaterThan(600);
+        expect(t.quiz.length).toBeGreaterThanOrEqual(8);
+        expect(t.flashcards.length).toBeGreaterThanOrEqual(4);
+        expect(store.topicOfUnitKey(fundTopicUnitKey(track, t.id))?.topic.id).toBe(t.id);
+        for (const q of t.quiz) expect(store.topicOfItem(q.key)?.track).toBe(track);
+      }
+    }
+  });
+
+  it('refuses topics.json bytes the manifest does not bind', () => {
+    const dir = join(tmp.dir, 'java');
+    cpSync(join(FUND, 'java'), dir, { recursive: true });
+    writeFileSync(join(dir, 'topics.json'), readFileSync(join(dir, 'topics.json'), 'utf8').replace('integer division', 'whole-number division'));
+    expect(() => readFundamentalsDir(dir)).toThrow(FundamentalsLoadError);
+    expect(() => readFundamentalsDir(dir)).toThrow(/manifest binds/);
+  });
+
+  it('refuses loaded !== built (bytes re-bound by hand, counts left stale)', () => {
+    const dir = join(tmp.dir, 'java');
+    cpSync(join(FUND, 'java'), dir, { recursive: true });
+    const f = realFile('java');
+    f.topics[0]!.flashcards.pop();
+    const bytes = `${JSON.stringify(f, null, 2)}\n`;
+    writeFileSync(join(dir, 'topics.json'), bytes);
+    const m = JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8')) as { sha256: string };
+    m.sha256 = createHash('sha256').update(bytes).digest('hex');
+    writeFileSync(join(dir, 'manifest.json'), JSON.stringify(m));
+    expect(() => readFundamentalsDir(dir)).toThrow(/loaded .* !== built/);
+  });
+});
+
+describe('loadFundamentalsIntoDb', () => {
+  let tmp: TempDb;
+  const clock = fixedClock(localNoon(2026, 11, 4));
+  beforeEach(() => {
+    tmp = makeTempDb();
+  });
+  afterEach(() => tmp.cleanup());
+
+  const unitRow = (key: string) =>
+    tmp.db.get<{ id: number; kind: string; track_id: string; title: string; retired_at: number | null; difficulty: number | null }>(
+      'SELECT id, kind, track_id, title, retired_at, difficulty FROM unit WHERE key = ?',
+      key,
+    );
+  const liveGate = (unitId: number) =>
+    tmp.db.all<{ id: number; spec: string; threshold: number | null }>('SELECT id, spec, threshold FROM "check" WHERE unit_id = ? AND retired_at IS NULL', unitId);
+
+  it('one study unit per topic with the topic quiz as its ONE gate; idempotent', () => {
+    const store = loadFundStore(defaultFundamentalsDirs(FUND));
+    const first = loadFundamentalsIntoDb(tmp.db, store, clock);
+    const total = (['js', 'csharp', 'java'] as const).reduce((n, t) => n + store.topics(t).length, 0);
+    expect(first.inserted).toBe(total);
+    for (const s of first.tracks) expect(s.loaded).toBe(s.topics);
+    const t = store.topics('java')[0]!;
+    const u = unitRow(fundTopicUnitKey('java', t.id))!;
+    expect(u).toMatchObject({ kind: 'study', track_id: 'java', retired_at: null, difficulty: 1 });
+    expect(u.title).toBe(`01 · ${t.title}`);
+    const gates = liveGate(u.id);
+    expect(gates).toHaveLength(1);
+    expect(JSON.parse(gates[0]!.spec)).toEqual({ type: 'study-quiz', itemKeys: t.quiz.map((q) => q.key), passPct: 0.8 });
+    expect(gates[0]!.threshold).toBe(0.8);
+    expect(tmp.db.all('SELECT competency_id AS c FROM unit_competency WHERE unit_id = ?', u.id)).toEqual([{ c: 'language-fluency' }]);
+    const again = loadFundamentalsIntoDb(tmp.db, store, clock);
+    expect(again.inserted).toBe(0);
+    expect(again.retired).toBe(0);
+    expect(tmp.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM unit u JOIN source s ON s.id = u.source_id WHERE s.key = ?', FUND_SOURCE_KEY)!.n).toBe(total);
+  });
+
+  it('the ladder order is the gate: topic N has topic N-1 as its only prerequisite', () => {
+    loadFundamentalsIntoDb(tmp.db, mapFundStore([ladderOf(3)]), clock);
+    const ids = ladderOf(3).topics.map((t) => unitRow(fundTopicUnitKey('java', t.id))!.id);
+    const prereq = (id: number) => tmp.db.all<{ p: number }>('SELECT prereq_unit_id AS p FROM unit_prerequisite WHERE unit_id = ?', id).map((r) => r.p);
+    expect(prereq(ids[0]!)).toEqual([]);
+    expect(prereq(ids[1]!)).toEqual([ids[0]]);
+    expect(prereq(ids[2]!)).toEqual([ids[1]]);
+  });
+
+  it('a topic that leaves the file is retired, and comes back with its unit id', () => {
+    loadFundamentalsIntoDb(tmp.db, mapFundStore([ladderOf(2)]), clock);
+    const key = fundTopicUnitKey('java', ladderOf(2).topics[1]!.id);
+    const id = unitRow(key)!.id;
+    const r = loadFundamentalsIntoDb(tmp.db, mapFundStore([ladderOf(1)]), clock);
+    expect(r.retired).toBe(1);
+    expect(unitRow(key)!.retired_at).not.toBeNull();
+    loadFundamentalsIntoDb(tmp.db, mapFundStore([ladderOf(2)]), clock);
+    expect(unitRow(key)).toMatchObject({ id, retired_at: null });
+  });
+
+  it('a changed gate is updated in place while unreferenced, retired-and-replaced once an attempt references it', () => {
+    const f = ladderOf(1);
+    loadFundamentalsIntoDb(tmp.db, mapFundStore([f]), clock);
+    const id = unitRow(fundTopicUnitKey('java', f.topics[0]!.id))!.id;
+    const g0 = liveGate(id)[0]!;
+    const shorter = { ...f, topics: [{ ...f.topics[0]!, quiz: f.topics[0]!.quiz.slice(0, 9) }] };
+    loadFundamentalsIntoDb(tmp.db, mapFundStore([shorter]), clock);
+    const g1 = liveGate(id);
+    expect(g1).toHaveLength(1);
+    expect(g1[0]!.id).toBe(g0.id); // in place
+    expect((JSON.parse(g1[0]!.spec) as { itemKeys: string[] }).itemKeys).toHaveLength(9);
+    // an attempt now references the gate
+    submit(tmp.db, clock, id, { pass: false });
+    const r = loadFundamentalsIntoDb(tmp.db, mapFundStore([f]), clock);
+    expect(r.replaced).toEqual([fundTopicUnitKey('java', f.topics[0]!.id)]);
+    const g2 = liveGate(id);
+    expect(g2).toHaveLength(1);
+    expect(g2[0]!.id).not.toBe(g0.id);
+    expect(tmp.db.get<{ r: number | null }>('SELECT retired_at AS r FROM "check" WHERE id = ?', g0.id)!.r).not.toBeNull();
+  });
+});
+
+describe('Fundamentals over HTTP', () => {
+  let tmp: TempDb;
+  let clock: ReturnType<typeof fixedClock>;
+  let app: Express;
+  let store: FundStore;
+  const ladder = ladderOf(2);
+
+  beforeEach(() => {
+    tmp = makeTempDb();
+    clock = fixedClock(localNoon(2026, 11, 4));
+    store = mapFundStore([ladder, realFile('js'), realFile('csharp')]);
+    loadFundamentalsIntoDb(tmp.db, store, clock);
+    app = createApp({ db: tmp.db, clock, runners: defaultRunners(), seedItems: withFundamentals(emptySeedItemStore, store), content: entriesContentStore(fundContentEntries(store)) });
+  });
+  afterEach(() => tmp.cleanup());
+
+  const topicUnit = (i: number) => tmp.db.get<{ id: number }>('SELECT id FROM unit WHERE key = ?', fundTopicUnitKey('java', ladder.topics[i]!.id))!.id;
+  /** the stored keyed choice's index in the SERVED (permuted) order, per question */
+  async function served(unitId: number, wrong = 0): Promise<number[]> {
+    const d = UnitDetailResponse.parse((await request(app).get(`/api/units/${unitId}`)).body);
+    const topic = store.topicOfUnitKey(d.unit.key)!.topic;
+    return d.studyQuest!.questions.map((q, i) => {
+      const item = topic.quiz.find((x) => x.key === q.itemKey)!;
+      const right = q.choices.indexOf(item.choices[item.answer]!);
+      return i < wrong ? (right + 1) % q.choices.length : right;
+    });
+  }
+
+  it('GET /tracks/:id/fundamentals: topics in order with unit states, never a lesson or a key', async () => {
+    const res = await request(app).get('/api/tracks/java/fundamentals');
+    expect(res.status).toBe(200);
+    const body = FundamentalsResponse.parse(res.body);
+    expect(body.topics.map((t) => t.order)).toEqual([1, 2]);
+    expect(body.topics.map((t) => t.unit.state)).toEqual(['available', 'locked']);
+    expect(body.topics[0]).toMatchObject({ quizQuestions: 10, passPct: 80, flashcards: 8, level: 'beginner' });
+    const raw = JSON.stringify(res.body);
+    expect(raw).not.toContain(ladder.topics[0]!.lesson.slice(0, 40));
+    expect(raw).not.toContain('"answer"');
+    expect(raw).not.toContain(ladder.topics[0]!.quiz[0]!.prompt);
+    // a track without a ladder, and an unknown one
+    expect((await request(app).get('/api/tracks/sysdesign/fundamentals')).body).toEqual({ trackId: 'sysdesign', topics: [] });
+    expect((await request(app).get('/api/tracks/nope/fundamentals')).status).toBe(400);
+  });
+
+  it('the topic unit serves the lesson as instructions and the gate without keys', async () => {
+    const res = await request(app).get(`/api/units/${topicUnit(0)}`);
+    const d = UnitDetailResponse.parse(res.body);
+    expect(d.instructions).toBe(ladder.topics[0]!.lesson);
+    expect(d.studyQuest).toMatchObject({ repo: 'fundamentals', readingSteps: [], passPct: 80, flashcards: 8 });
+    expect(d.studyQuest!.questions).toHaveLength(10);
+    const raw = JSON.stringify(res.body);
+    expect(raw).not.toContain('answerKey');
+    expect(raw).not.toContain(ladder.topics[0]!.quiz[0]!.explanation);
+  });
+
+  it('a miss queues a review card with Fundamentals text; a pass enrols the flashcards and unlocks the next topic', async () => {
+    const u0 = topicUnit(0);
+    const fail = SubmitResponse.parse((await request(app).post(`/api/units/${u0}/submit`).send({ answers: await served(u0, 3) })).body);
+    expect(fail.verdict).toBe('fail');
+    expect(fail.studyQuiz).toMatchObject({ correct: 7, total: 10, passed: false });
+    const misses = tmp.db.all<{ k: string }>(`SELECT card_key AS k FROM review_item WHERE card_key LIKE 'quiz-miss:fund:%' ORDER BY id`).map((r) => r.k);
+    expect(misses).toEqual(ladder.topics[0]!.quiz.slice(0, 3).map((q) => `quiz-miss:${q.key}`));
+
+    const pass = SubmitResponse.parse((await request(app).post(`/api/units/${u0}/submit`).send({ answers: await served(u0) })).body);
+    expect(pass.verdict).toBe('pass');
+    expect(pass.studyQuiz!.flashcardsEnrolled).toBe(8);
+    const states = FundamentalsResponse.parse((await request(app).get('/api/tracks/java/fundamentals')).body).topics.map((t) => t.unit.state);
+    expect(states).toEqual(['done', 'available']);
+
+    // the queue (tomorrow): every card resolves its text from the Fundamentals store
+    clock.advance(DAY_MS + 1);
+    const q = ReviewQueueResponse.parse((await request(app).get('/api/reviews/queue?limit=50')).body);
+    const fund = q.items.filter((it) => it.cardKey.includes('fund:java/'));
+    expect(fund).toHaveLength(3 + 8);
+    for (const it of fund) {
+      expect(it.card?.source).toBe(`Fundamentals · Java · 01 ${ladder.topics[0]!.title}`);
+      expect(it.card?.front.length).toBeGreaterThan(0);
+    }
+    const miss = fund.find((it) => it.cardKey === `quiz-miss:${ladder.topics[0]!.quiz[0]!.key}`)!;
+    const q0 = ladder.topics[0]!.quiz[0]!;
+    expect(miss.card).toMatchObject({ front: q0.prompt, back: `${q0.choices[q0.answer]}\n\n${q0.explanation}` });
+  });
+
+  it('review-card reconciliation keeps fund cards while the store has them, retires them when it does not', async () => {
+    const u0 = topicUnit(0);
+    await request(app).post(`/api/units/${u0}/submit`).send({ answers: await served(u0, 3) });
+    const keep = reconcileSeededReviewCards(tmp.db, withFundamentals(emptySeedItemStore, store), clock);
+    expect(keep.retired).toEqual([]);
+    const gone = reconcileSeededReviewCards(tmp.db, emptySeedItemStore, clock);
+    expect(gone.retired).toHaveLength(3);
+    const back = reconcileSeededReviewCards(tmp.db, withFundamentals(emptySeedItemStore, store), clock);
+    expect(back.restored).toHaveLength(3);
+  });
+});

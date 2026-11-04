@@ -1,0 +1,197 @@
+{
+  "format": "fundamentals-authoring@1",
+  "track": "csharp",
+  "topic": "01-value-and-reference-types",
+  "title": "Value types & reference types",
+  "level": "beginner",
+  "summary": "What assignment really copies: structs versus classes, method parameters and ref, boxing, string and record equality, and nullable value types.",
+  "lesson": "## Two kinds of type\n\nEvery C# type is either a **value type** or a **reference type**, and the difference decides what `=` copies.\n\n- **Value types**: `int`, `double`, `decimal`, `bool`, `char`, `DateTime`, enums, and every `struct` you declare. A variable holds the value itself.\n- **Reference types**: `class`, `string`, arrays, delegates, `record` (a record class), `List<T>`. A variable holds a **reference** to an object on the heap.\n\n## Assignment copies the variable's contents\n\n```csharp\nstruct PointS { public int X; }\nclass  PointC { public int X; }\n\nvar a = new PointS { X = 1 };\nvar b = a;        // copies the whole struct\nb.X = 2;\nConsole.WriteLine(a.X);   // 1\n\nvar c = new PointC { X = 1 };\nvar d = c;        // copies the REFERENCE: c and d name one object\nd.X = 2;\nConsole.WriteLine(c.X);   // 2\n```\n\nArrays are reference types even when their elements are values: after `int[] b = a;`, writing `b[0] = 9` changes `a[0]` too.\n\n## Method parameters are copies too\n\nBy default every argument is passed **by value**: the method gets a copy of the variable. For a class that copy is a copy of the reference, so the method can **mutate** the caller's object but cannot make the caller's variable point somewhere else:\n\n```csharp\nstatic void Mutate(PointC p)   { p.X = 42; }              // caller sees 42\nstatic void Reassign(PointC p) { p = new PointC { X = 100 }; } // caller sees no change\n```\n\n`ref` passes the variable itself: `static void Bump(ref int v) { v++; }` changes the caller's int. `out` is the same, for a variable the method must assign. Use both sparingly; returning a value is clearer.\n\n## Structs inside collections\n\nBecause a struct is copied on every read, `list[0]` returns a **copy** of the element. That is why `list[0].X = 5;` does not compile (CS1612: the copy would be modified and thrown away). Read, modify, write back:\n\n```csharp\nvar tmp = list[0];\ntmp.X = 5;\nlist[0] = tmp;\n```\n\nAn array element is different: `arr[0].X = 7` works, because array indexing gives direct access to the element's storage. The usual advice: keep structs small and **immutable** (`readonly struct`), and prefer classes for anything you mutate.\n\n## Boxing\n\nConverting a value type to `object` (or to an interface) **boxes** it: the runtime copies the value into a new heap object.\n\n```csharp\nint x = 5;\nobject o = x;   // boxed copy\nx = 6;\nConsole.WriteLine((int)o);  // 5\n```\n\nBoxing allocates, which is why generic collections (`List<int>`) replaced the old `ArrayList` of objects.\n\n## Equality: == depends on the type\n\n- Value types: `==` compares values (for your own structs you must define it; `Equals` compares fields by default).\n- Classes: `==` compares **references** unless the class overloads it. Two separate objects with the same fields are not `==`.\n- `string` is a reference type that **overloads** `==` to compare contents, and it is immutable: every \"change\" builds a new string.\n- `record` types generate value equality: `new Pt(1, 2) == new Pt(1, 2)` is true. `with` makes a modified copy: `p with { Y = 3 }`.\n\n`ReferenceEquals(a, b)` always asks \"same object?\", whatever `==` does.\n\n## Defaults and nullable value types\n\nFields and array slots start at their **default**: `0` for numbers, `false` for bool, `null` for references. A value type cannot be null, so \"no value\" needs `Nullable<T>`, written `int?`:\n\n```csharp\nint? discount = null;\ndiscount.HasValue           // false\ndiscount ?? 0               // 0\ndiscount.GetValueOrDefault() // 0\n```\n\nA nullable column in a database (`INT NULL`) maps to `int?` in an entity, never to `int`.\n\n## In CRUD code\n\nDTOs and entities are classes, so passing one into a service passes a reference: a method that \"validates\" by trimming fields mutates the caller's object. Copy deliberately when you need an independent object, and remember that copying an object which holds a `List<T>` copies the reference to that list unless you build a new list.",
+  "quiz": [
+    {
+      "prompt": "`struct P { public int X; }` then `var a = new P { X = 1 }; var b = a; b.X = 2;` What is `a.X`?",
+      "choices": [
+        "1",
+        "2",
+        "0",
+        "It does not compile"
+      ],
+      "answer": 0,
+      "explanation": "A struct is a value type: `var b = a` copies the whole value, so changing b leaves a alone."
+    },
+    {
+      "prompt": "The same code with `class P` instead of `struct P`. What is `a.X` now?",
+      "choices": [
+        "1",
+        "2",
+        "0",
+        "It throws NullReferenceException"
+      ],
+      "answer": 1,
+      "explanation": "For a class, `var b = a` copies the reference: a and b name the same object, so the change through b is visible through a."
+    },
+    {
+      "prompt": "A method `void Reset(Order o) { o = new Order(); }` is called with an existing order (Order is a class). What does the caller see afterwards?",
+      "choices": [
+        "The caller's variable now refers to the new Order",
+        "The caller's Order has all fields reset to defaults",
+        "The caller's variable still refers to the original, unchanged Order",
+        "A compile error: parameters are read-only"
+      ],
+      "answer": 2,
+      "explanation": "The parameter is a copy of the caller's reference. Reassigning the copy points it at a new object; the caller's variable is untouched. Mutating o.Field would have been visible."
+    },
+    {
+      "prompt": "Why does `list[0].X = 5;` fail to compile when `list` is a `List<PointStruct>`?",
+      "choices": [
+        "Struct fields are always read-only",
+        "The indexer returns a copy of the struct, so the assignment would be lost (CS1612)",
+        "List<T> cannot hold value types",
+        "X must be a property, not a field"
+      ],
+      "answer": 1,
+      "explanation": "list[0] calls the indexer, which returns a copy of the element. The compiler refuses to modify a temporary that is immediately thrown away. Read it into a variable, change it, and assign it back."
+    },
+    {
+      "prompt": "`int x = 5; object o = x; x = 6;` What is `(int)o`?",
+      "choices": [
+        "6",
+        "0",
+        "It throws InvalidCastException",
+        "5"
+      ],
+      "answer": 3,
+      "explanation": "Assigning to object boxes the int: the value 5 is copied into a new heap object. Changing x later does not touch that copy."
+    },
+    {
+      "prompt": "`record Pt(int X, int Y);` What is `new Pt(1, 2) == new Pt(1, 2)`?",
+      "choices": [
+        "true: records compare their values",
+        "false: two different objects",
+        "It does not compile",
+        "true only in Release builds"
+      ],
+      "answer": 0,
+      "explanation": "The compiler generates value-based Equals and == for records. A plain class with the same fields would compare references and give false."
+    },
+    {
+      "prompt": "`string s1 = \"ab\"; string s2 = string.Concat(\"a\", \"b\");` What are `s1 == s2` and `(object)s1 == (object)s2`?",
+      "choices": [
+        "True and True",
+        "False and False",
+        "True and False",
+        "False and True"
+      ],
+      "answer": 2,
+      "explanation": "string overloads == to compare contents. Casting both sides to object selects reference equality, and Concat built a separate string object at runtime."
+    },
+    {
+      "prompt": "Which statement about `ref` parameters is true?",
+      "choices": [
+        "They copy a struct argument so the method cannot change it",
+        "They are required to pass a class instance to a method",
+        "They let the method assign to the caller's variable itself",
+        "They make the parameter read-only inside the method"
+      ],
+      "answer": 2,
+      "explanation": "ref passes the variable, not a copy of its value: `v++` inside `Bump(ref int v)` changes the caller's int. Read-only by-reference passing is `in`, not `ref`."
+    },
+    {
+      "prompt": "A database column `discount INT NULL` maps to which entity property type?",
+      "choices": [
+        "int",
+        "object",
+        "Nullable<object>",
+        "int?"
+      ],
+      "answer": 3,
+      "explanation": "int is a value type and can never be null, so a nullable column needs Nullable<int>, written int?. Use HasValue, ?? or GetValueOrDefault to read it."
+    },
+    {
+      "prompt": "`int[] a = { 1, 2 }; var b = a; b[0] = 9;` What is `a[0]`?",
+      "choices": [
+        "9",
+        "1",
+        "0",
+        "It does not compile"
+      ],
+      "answer": 0,
+      "explanation": "Arrays are reference types even when their elements are ints: b and a refer to the same array object."
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "Which C# types are value types?",
+      "back": "Numeric types, bool, char, DateTime, enums and every struct (including Nullable<T>). Classes, strings, arrays, delegates and record classes are reference types."
+    },
+    {
+      "front": "What does passing a class instance \"by value\" let a method do?",
+      "back": "Change the object it points to (its fields are shared), but not repoint the caller's variable: the method holds its own copy of the reference."
+    },
+    {
+      "front": "How do you change one field of a struct stored in a List<T>?",
+      "back": "Copy it out with the indexer, modify the local copy, then assign the copy back to the same index."
+    },
+    {
+      "front": "What is boxing, and why care?",
+      "back": "Converting a value type to object or an interface copies it into a new heap object. It allocates and the box is independent of the original variable."
+    },
+    {
+      "front": "What does == mean for a class, a string and a record?",
+      "back": "Class: same object, unless the class overloads ==. String: same characters (overloaded). Record: generated value equality over its members."
+    },
+    {
+      "front": "ReferenceEquals(a, b) versus a == b",
+      "back": "ReferenceEquals always asks whether both name the same object. == can be overloaded to compare values, as string and records do."
+    },
+    {
+      "front": "Why prefer readonly structs?",
+      "back": "Structs are copied on every read, so mutating one usually changes a copy. Making them immutable removes that whole class of lost-update bugs."
+    },
+    {
+      "front": "Copying an object that holds a List<T>: what is shared?",
+      "back": "A field-by-field copy copies the list REFERENCE, so both objects share one list. Build a new list from the old items for an independent copy."
+    }
+  ],
+  "drills": [
+    {
+      "slug": "01-reset-counters-in-a-list",
+      "title": "Reset struct counters stored in a list",
+      "difficulty": 1,
+      "skills": [
+        "struct copies",
+        "List indexer"
+      ],
+      "instructions": "**Interview prompt.** \"This nightly job is supposed to reset every counter to zero, but the counts never change. The code compiles. What is happening?\"\n\n**Why it matters.** `Counter` is a struct. Reading `counters[i]` (or iterating with `foreach`) hands you a COPY, so setting `Count` on it changes the copy and the list keeps its old values. Writing `counters[i].Count = 0` directly does not even compile (CS1612).\n\n**Your task.** Implement the stubbed local function:\n- `void ResetAll(List<Counter> counters)` sets the `Count` of every counter in the list to 0, keeping each counter's `Name` and its position\n\n**Worked example.** A list holding `(\"signups\", 3)` and `(\"logins\", 9)` holds `(\"signups\", 0)` and `(\"logins\", 0)` afterwards.",
+      "starterHead": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · reset counters in a list                                ★☆☆ core\n//  concepts: struct copies · List indexer · write-back\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Counter is a struct: every read through the indexer is a copy.\n\nusing static Bootcamp.Check;\n\nvoid ResetAll(List<Counter> counters)\n{\n    // TODO: set every Count to 0 (the indexer returns a copy of the struct)\n    throw new NotImplementedException();\n}\n\n",
+      "solutionHead": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · reset counters in a list                                ★☆☆ core\n//  concepts: struct copies · List indexer · write-back\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Counter is a struct: every read through the indexer is a copy.\n\nusing static Bootcamp.Check;\n\nvoid ResetAll(List<Counter> counters)\n{\n    for (int i = 0; i < counters.Count; i++)\n    {\n        var c = counters[i];\n        c.Count = 0;\n        counters[i] = c;\n    }\n}\n\n",
+      "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"every count becomes 0\", () =>\n{\n    var xs = new List<Counter> { new(\"signups\", 3), new(\"logins\", 9) };\n    ResetAll(xs);\n    Eq(xs.Select(c => c.Count).ToList(), new[] { 0, 0 });\n});\n\nTest(\"names and order are kept\", () =>\n{\n    var xs = new List<Counter> { new(\"signups\", 3), new(\"logins\", 9) };\n    ResetAll(xs);\n    Eq(xs.Select(c => c.Name).ToList(), new[] { \"signups\", \"logins\" });\n});\n\nTest(\"a counter already at 0 stays 0\", () =>\n{\n    var xs = new List<Counter> { new(\"errors\", 0) };\n    ResetAll(xs);\n    Eq(xs[0].Count, 0);\n});\n\nTest(\"an empty list stays empty (boundary)\", () =>\n{\n    var xs = new List<Counter>();\n    ResetAll(xs);\n    Eq(xs.Count, 0);\n});\n\n",
+      "tail": "// ──────────────────────────── types ──────────────────────────────────────\n\nstruct Counter\n{\n    public Counter(string name, int count) { Name = name; Count = count; }\n    public string Name;\n    public int Count;\n}\n",
+      "explanation": "The indexer returns a copy, so read it into a local, change the local and store it back:\n\n```csharp\nfor (int i = 0; i < counters.Count; i++)\n{\n    var c = counters[i];\n    c.Count = 0;\n    counters[i] = c;\n}\n```\n\nA `foreach (var c in counters) c.Count = 0;` does not compile (the iteration variable is read-only), and copying into a local without the write-back silently changes nothing. Had `Counter` been a class, `counters[i].Count = 0` would have worked, because the list would hold references.",
+      "hints": [
+        "Every read of a struct out of a List<T> gives you a separate copy of it.",
+        "Loop by index: read counters[i] into a local, change the local, then assign it back to counters[i].",
+        "Walk the list by position, and for each slot copy the counter out, zero its count, and store the changed copy back in the same slot."
+      ]
+    },
+    {
+      "slug": "02-copy-a-cart",
+      "title": "Copy a cart without sharing its item list",
+      "difficulty": 2,
+      "skills": [
+        "reference copies",
+        "shallow vs deep copy"
+      ],
+      "instructions": "**Interview prompt.** \"We clone the cart before applying a promotion so we can show a before/after preview. After the preview, the customer's real cart has the promotional items in it. Why?\"\n\n**Why it matters.** `Cart` is a class holding a `List<string>`. A copy that assigns `Items = cart.Items` copies the REFERENCE to the list, so both carts share one list and adding to the \"copy\" adds to the original. The same goes for `MemberwiseClone`: it is a shallow copy.\n\n**Your task.** Implement the stubbed local function:\n- `Cart CopyCart(Cart cart)` returns a NEW `Cart` with the same `Owner` and the same items in the same order, such that changing the copy's item list never changes the original's (and vice versa)\n\n**Worked example.** Copy a cart owned by \"ana\" holding pen and ink, add \"pad\" to the copy: the copy holds three items, the original still holds two.",
+      "starterHead": "// ─────────────────────────────────────────────────────────────────────────\n//  02 · copy a cart                                             ★★☆ core\n//  concepts: reference copies · shallow vs deep copy\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Cart is a class with a List<string> inside: copy it without sharing the list.\n\nusing static Bootcamp.Check;\n\nCart CopyCart(Cart cart)\n{\n    // TODO: a new Cart with its own list holding the same items\n    throw new NotImplementedException();\n}\n\n",
+      "solutionHead": "// ─────────────────────────────────────────────────────────────────────────\n//  02 · copy a cart                                             ★★☆ core\n//  concepts: reference copies · shallow vs deep copy\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Cart is a class with a List<string> inside: copy it without sharing the list.\n\nusing static Bootcamp.Check;\n\nCart CopyCart(Cart cart)\n{\n    return new Cart { Owner = cart.Owner, Items = new List<string>(cart.Items) };\n}\n\n",
+      "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"the copy has the same owner and items\", () =>\n{\n    var cart = new Cart { Owner = \"ana\", Items = new List<string> { \"pen\", \"ink\" } };\n    var copy = CopyCart(cart);\n    Eq(copy.Owner, \"ana\");\n    Eq(copy.Items, new[] { \"pen\", \"ink\" });\n});\n\nTest(\"the copy is a different Cart object\", () =>\n{\n    var cart = new Cart { Owner = \"ana\", Items = new List<string> { \"pen\" } };\n    Ok(!ReferenceEquals(CopyCart(cart), cart), \"CopyCart must return a new Cart\");\n});\n\nTest(\"adding to the copy leaves the original alone\", () =>\n{\n    var cart = new Cart { Owner = \"ana\", Items = new List<string> { \"pen\", \"ink\" } };\n    var copy = CopyCart(cart);\n    copy.Items.Add(\"pad\");\n    Eq(cart.Items, new[] { \"pen\", \"ink\" });\n});\n\nTest(\"clearing the original leaves the copy alone\", () =>\n{\n    var cart = new Cart { Owner = \"ana\", Items = new List<string> { \"pen\" } };\n    var copy = CopyCart(cart);\n    cart.Items.Clear();\n    Eq(copy.Items, new[] { \"pen\" });\n});\n\nTest(\"an empty cart copies to an empty cart (boundary)\", () =>\n{\n    var cart = new Cart { Owner = \"bo\" };\n    var copy = CopyCart(cart);\n    Eq(copy.Items.Count, 0);\n    Ok(!ReferenceEquals(copy.Items, cart.Items), \"the copy needs its own list\");\n});\n\n",
+      "tail": "// ──────────────────────────── types ──────────────────────────────────────\n\nclass Cart\n{\n    public string Owner = \"\";\n    public List<string> Items = new();\n}\n",
+      "explanation": "Copy the scalar fields, and build a NEW list from the old items:\n\n```csharp\nreturn new Cart { Owner = cart.Owner, Items = new List<string>(cart.Items) };\n```\n\n`new List<string>(cart.Items)` copies the item references into a separate list object; strings are immutable, so sharing the strings themselves is safe. Writing `Items = cart.Items` passes the first two tests and fails the next three: both carts would share one list.",
+      "hints": [
+        "Copying a field that holds a List copies the reference to the list, not the list.",
+        "Create the new Cart with the same Owner and a new List<string> built from the original items.",
+        "Make a fresh cart, give it the same owner, and give it a brand-new list filled with the same items, so the two carts never share a list."
+      ]
+    }
+  ]
+}

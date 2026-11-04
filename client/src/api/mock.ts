@@ -42,8 +42,13 @@ import {
   kataFixtures,
   promotionFixtures,
   studyQuestFixtures,
+  type StudyQuestFixture,
 } from './fixtures/ladder';
 import { writtenFixtures } from './fixtures/written';
+import { fundLadderFixtures, fundStudyFixtures } from './fixtures/fundamentals';
+
+// fund wave: the Fundamentals topic units are study-quiz units like the borrowbox quest (lesson = instructions)
+const allStudyFixtures: Record<string, StudyQuestFixture & { instructions?: string }> = { ...studyQuestFixtures, ...fundStudyFixtures };
 import { createMockSlateSettings } from './mock-slate';
 import {
   ApiError,
@@ -259,7 +264,7 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
   // explain-back alternate sets: two sibling sets of one DESIGN IT question set (sysdesign track)
   for (const u of altSetLadderUnits) units[u.trackId] = [...(units[u.trackId] ?? []), clone(u)];
   // W8: the study-quest fixture units (csharp borrowbox quest)
-  for (const sq of Object.values(studyQuestFixtures)) units[sq.unit.trackId] = [...(units[sq.unit.trackId] ?? []), clone(sq.unit)];
+  for (const sq of Object.values(allStudyFixtures)) units[sq.unit.trackId] = [...(units[sq.unit.trackId] ?? []), clone(sq.unit)];
   // B4: the written-unit fixtures (answer first, then the model answer)
   for (const w of Object.values(writtenFixtures)) units[w.unit.trackId] = [...(units[w.unit.trackId] ?? []), clone(w.unit)];
   const writtenAnswers = new Map<number, { attemptId: number; answer: string; at: number }>();
@@ -343,11 +348,12 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
   }
 
   function detail(u: UnitSummary): DetailFixture {
-    const sq = studyQuestFixtures[String(u.id)];
+    const sq = allStudyFixtures[String(u.id)];
     if (sq) {
       return {
         code: null,
         competencies: ['code-reading'],
+        ...(sq.instructions !== undefined ? { instructions: sq.instructions } : {}),
         check: { id: 9000 + u.id, threshold: 0.8, spec: { type: 'study-quiz', itemKeys: sq.public.questions.map((q) => q.itemKey), passPct: 0.8 } },
         starter: null,
         private: {},
@@ -588,7 +594,7 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
 
   /** W8: mirrors the server's study-quiz submit — full answer set, >= 80%, misses -> review cards (deduped), keys never echoed. */
   function studySubmit(u: UnitSummary, body: { answers?: number[]; selfAssisted: boolean }): SubmitResponse {
-    const sq = studyQuestFixtures[String(u.id)]!;
+    const sq = allStudyFixtures[String(u.id)]!;
     const answers = body.answers;
     if (answers === undefined) throw err(400, 'VALIDATION', 'study-quiz checks take `answers`');
     if (answers.length !== sq.keys.length) throw err(400, 'VALIDATION', `send exactly ${sq.keys.length} answers`);
@@ -611,6 +617,10 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
       xp = firstPass ? { id: nextId++, amount: 50, reason: null } : { id: nextId++, amount: 0, reason: 'already-awarded' };
       studyPassed.add(u.id);
       u.state = 'done';
+      // the server's lock rule (lockStateFor): a locked unit opens once every prerequisite is done (fund wave ladder)
+      const track = units[u.trackId] ?? [];
+      const done = new Set(track.filter((x) => x.state === 'done').map((x) => x.id));
+      for (const x of track) if (x.state === 'locked' && x.prerequisites.length > 0 && x.prerequisites.every((p) => done.has(p))) x.state = 'available';
     }
     const mode = body.selfAssisted ? ('assisted' as const) : ('solo' as const);
     const attemptId = nextId++;
@@ -748,6 +758,34 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
         tracks: trackList.map((t) => ({ id: t.id, name: t.name, locked: t.locked, ...trackCounts(t.id, t.locked) })),
       })),
 
+    // fund wave: mirrors server/src/api/fundamentals-service.ts (topics in order, live unit states)
+    getFundamentals: (trackId) =>
+      wrap(() => {
+        const track = trackList.find((t) => t.id === trackId);
+        if (!track) throw err(404, 'NOT_FOUND', `track ${trackId} not found`);
+        const byId = new Map((units[trackId] ?? []).map((u) => [u.id, u]));
+        const topics = (fundLadderFixtures[trackId] ?? []).flatMap((t) => {
+          const unit = byId.get(t.unitId);
+          if (!unit) return [];
+          const sq = allStudyFixtures[String(t.unitId)];
+          return [
+            {
+              id: t.id,
+              order: t.order,
+              title: t.title,
+              level: t.level,
+              summary: t.summary,
+              quizQuestions: sq?.public.questions.length ?? 0,
+              passPct: 80,
+              flashcards: sq?.public.flashcards ?? 0,
+              unit: clone(unit),
+              drills: t.drillIds.flatMap((id) => (byId.has(id) ? [clone(byId.get(id)!)] : [])),
+            },
+          ];
+        });
+        return { trackId, topics };
+      }),
+
     getTrackUnits: (trackId) =>
       wrap(() => {
         const track = trackList.find((t) => t.id === trackId);
@@ -792,7 +830,7 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
           out.kata = pub;
         }
         // W8: reading list + questions with choices only (the keys stay in the fixture)
-        if (d.check?.spec.type === 'study-quiz') out.studyQuest = studyQuestFixtures[String(id)]?.public ?? null;
+        if (d.check?.spec.type === 'study-quiz') out.studyQuest = allStudyFixtures[String(id)]?.public ?? null;
         // B4: the rubric is withheld until the learner's own answer is recorded
         if (u.kind === 'written') {
           const answered = writtenAnswers.has(id);
@@ -1299,7 +1337,7 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
       wrap((): UnitNotesResponse => {
         const { u, d, spec } = guard(id, { needCheck: false });
         if (spec?.type === 'study-quiz') {
-          const sq = studyQuestFixtures[String(id)];
+          const sq = allStudyFixtures[String(id)];
           const notes = sq ? (notesFixtures[sq.public.repo] ?? []) : [];
           const kinds = new Map<string, NoteDto['targetKind']>([
             ...(sq?.public.questions ?? []).map((q) => [q.itemKey, 'quiz'] as const),

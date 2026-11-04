@@ -1,6 +1,8 @@
 import type { CheckSpec, SeedQuizItem } from '@bootquest/shared';
 import type { CanonicalRunResult, StudyQuestPublic } from '@bootquest/shared/api';
+import { isFundItemKey, type FundQuizItem } from '@bootquest/shared/fundamentals';
 import { FLASHCARD_CARD_PREFIX, gradeStudyQuiz, QUIZ_MISS_CARD_PREFIX, StudyQuizShapeError, type StudyQuizGrade } from '../engines/study-quest.ts';
+import type { FundTopicRef } from '../store/fundamentals.ts';
 import type { QuestPackItems, SeedItemStore } from '../store/seed-items.ts';
 import { HttpError } from './http.ts';
 import { servedChoices, toStoredAnswer, type ChoiceOrderer } from './choice-order.ts';
@@ -27,15 +29,46 @@ function packFor(store: SeedItemStore, spec: Extract<CheckSpec, { type: 'study-q
   return first ? store.questPacks().get(first.provenance.repo) : undefined;
 }
 
-function gateItems(store: SeedItemStore, spec: Extract<CheckSpec, { type: 'study-quiz' }>): SeedQuizItem[] | null {
-  const items = spec.itemKeys.map((k) => store.quiz(k));
-  return items.every((i): i is SeedQuizItem => i !== undefined) ? items : null;
+/** fund wave: the Fundamentals topic a study-quiz gate was derived from (by its first item), or undefined. */
+function fundTopicFor(store: SeedItemStore, spec: Extract<CheckSpec, { type: 'study-quiz' }>): FundTopicRef | undefined {
+  const first = spec.itemKeys[0]!;
+  return isFundItemKey(first) ? store.fund?.topicOfItem(first) : undefined;
+}
+
+/** One gate question, whichever store holds it (a seed:quests item or a Fundamentals item). */
+type GateQuiz = Pick<SeedQuizItem, 'key' | 'prompt' | 'check' | 'explanation'> & { choices: readonly { text: string }[] };
+
+/** A Fundamentals quiz item in the seed-quiz frame (choice-graded, single-keyed). */
+function fundGateQuiz(q: FundQuizItem): GateQuiz {
+  return {
+    key: q.key,
+    prompt: q.prompt,
+    choices: q.choices.map((text) => ({ text })),
+    check: { type: 'quiz', itemKey: q.key, grading: 'choice', answerKey: q.answer, choices: [...q.choices] },
+    explanation: q.explanation,
+  };
+}
+
+function gateQuiz(store: SeedItemStore, key: string): GateQuiz | undefined {
+  if (isFundItemKey(key)) {
+    const q = store.fund?.quiz(key);
+    return q ? fundGateQuiz(q) : undefined;
+  }
+  return store.quiz(key);
+}
+
+function gateItems(store: SeedItemStore, spec: Extract<CheckSpec, { type: 'study-quiz' }>): GateQuiz[] | null {
+  const items = spec.itemKeys.map((k) => gateQuiz(store, k));
+  return items.every((i): i is GateQuiz => i !== undefined) ? items : null;
 }
 
 /** The item's choice TEXTS in stored (authored, keyed) order. */
-function storedChoices(q: SeedQuizItem): string[] {
+function storedChoices(q: GateQuiz): string[] {
   return q.check.choices ?? q.choices.map((c) => c.text);
 }
+
+const FUND_TRACK_LABEL: Readonly<Record<string, string>> = { js: 'JS/TS + React', csharp: 'C#/.NET', java: 'Java' };
+const fundSource = (r: FundTopicRef): string => `Fundamentals · ${FUND_TRACK_LABEL[r.track] ?? r.track} · ${String(r.topic.order).padStart(2, '0')} ${r.topic.title}`;
 
 /**
  * PUBLIC half of a study-quest unit: undefined for other check types; null when the gate's
@@ -44,8 +77,24 @@ function storedChoices(q: SeedQuizItem): string[] {
 export function studyQuestPublicFor(store: SeedItemStore, spec: CheckSpec, order: ChoiceOrderer): StudyQuestPublic | null | undefined {
   if (spec.type !== 'study-quiz') return undefined;
   const items = gateItems(store, spec);
+  if (!items) return null;
+  const fund = fundTopicFor(store, spec);
+  if (fund) {
+    // fund wave: no repo and no reading list — the lesson is the unit's own instructions
+    return {
+      repo: 'fundamentals',
+      sha: '',
+      passPct: Math.round(spec.passPct * 100),
+      readingSteps: [],
+      questions: items.map((q) => {
+        const stored = storedChoices(q);
+        return { itemKey: q.key, prompt: q.prompt, choices: servedChoices(stored, order(q.key, stored.length)) };
+      }),
+      flashcards: fund.topic.flashcards.length,
+    };
+  }
   const pack = packFor(store, spec);
-  if (!items || !pack) return null;
+  if (!pack) return null;
   return {
     repo: pack.repo,
     sha: pack.sha,
@@ -119,7 +168,9 @@ export function gradeStudySubmission(
         failures: missedNos.map((n) => ({ name: `Q${n}`, message: 'incorrect (the key arrives as a review card, due tomorrow)' })),
         durationMs: 0,
       };
-  return { result, grade, flashcardKeys: (packFor(store, spec)?.flashcards ?? []).map((f) => f.key) };
+  const fund = fundTopicFor(store, spec);
+  const flashcardKeys = fund ? fund.topic.flashcards.map((f) => f.key) : (packFor(store, spec)?.flashcards ?? []).map((f) => f.key);
+  return { result, grade, flashcardKeys };
 }
 
 function citeOf(item: { citations: readonly { raw: string; resolved?: string }[]; provenance: { repo: string; sha: string; path: string; lines: { start: number; end: number } } }): string {
@@ -130,6 +181,21 @@ function citeOf(item: { citations: readonly { raw: string; resolved?: string }[]
 
 /** Card text for a seeded review card (quiz miss / flashcard), or undefined for other cards. */
 export function reviewCardText(store: SeedItemStore, cardKey: string): { front: string; back: string; source: string | null } | undefined {
+  if (cardKey.startsWith(QUIZ_MISS_CARD_PREFIX) && isFundItemKey(cardKey.slice(QUIZ_MISS_CARD_PREFIX.length))) {
+    const key = cardKey.slice(QUIZ_MISS_CARD_PREFIX.length);
+    const q = store.fund?.quiz(key);
+    const ref = store.fund?.topicOfItem(key);
+    if (!q || !ref) return undefined;
+    const keyed = q.choices[q.answer] ?? String(q.answer);
+    return { front: q.prompt, back: `${keyed}\n\n${q.explanation}`, source: fundSource(ref) };
+  }
+  if (cardKey.startsWith(FLASHCARD_CARD_PREFIX) && isFundItemKey(cardKey.slice(FLASHCARD_CARD_PREFIX.length))) {
+    const key = cardKey.slice(FLASHCARD_CARD_PREFIX.length);
+    const f = store.fund?.flashcard(key);
+    const ref = store.fund?.topicOfItem(key);
+    if (!f || !ref) return undefined;
+    return { front: f.front, back: f.back, source: fundSource(ref) };
+  }
   if (cardKey.startsWith(QUIZ_MISS_CARD_PREFIX)) {
     const q = store.quiz(cardKey.slice(QUIZ_MISS_CARD_PREFIX.length));
     if (!q) return undefined;

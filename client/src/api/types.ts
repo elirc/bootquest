@@ -80,6 +80,9 @@ import type {
 import type { AltSetDueDto, DueResponse, WeakExampleDto, WeakGroupDto, WeakSignalKind, WeakSpotsResponse } from '@bootquest/shared/api-ext';
 // ab S4: the dashboard's slate items carry targetUnitId; unit search + mixed drills (api-ext)
 import type { DashboardResponseExt, DrillNextResponse, SlateItemDtoExt, UnitSearchHit, UnitSearchResponse } from '@bootquest/shared/api-ext';
+// fund wave: the Fundamentals ladder (GET /tracks/:id/fundamentals)
+import type { FundamentalsResponse, FundTopicDto } from '@bootquest/shared/api-ext';
+export type { FundamentalsResponse, FundTopicDto };
 
 // ---------------------------------------------------------------- re-exported wire types
 
@@ -234,6 +237,8 @@ export interface BootQuestApi {
   getTracks(): Promise<TracksResponse>;
   /** GET /api/tracks/:id/units — the track's units (the campaign map itself is getCampaign). */
   getTrackUnits(trackId: TrackId): Promise<TrackUnitsResponse>;
+  /** fund wave: GET /api/tracks/:id/fundamentals — the track's Fundamentals ladder (topics in order; empty when none). */
+  getFundamentals(trackId: TrackId): Promise<FundamentalsResponse>;
   /** GET /api/units/:id */
   getUnit(unitId: number): Promise<UnitDetail>;
   /** POST /api/units/:id/run — free, writes nothing. 409 RUN_NOT_AVAILABLE for quiz / predict-output. */

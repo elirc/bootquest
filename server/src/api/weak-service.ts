@@ -82,11 +82,13 @@ const clip = (s: string): string => {
 /** The card front (already released wherever this is called), or null when the item is not loaded. */
 function cardLabel(seedItems: SeedItemStore, cardKey: string): string | null {
   if (cardKey.startsWith(QUIZ_MISS_CARD_PREFIX)) {
-    const q = seedItems.quiz(cardKey.slice(QUIZ_MISS_CARD_PREFIX.length));
+    const key = cardKey.slice(QUIZ_MISS_CARD_PREFIX.length);
+    const q = key.startsWith('fund:') ? seedItems.fund?.quiz(key) : seedItems.quiz(key);
     return q ? clip(q.prompt) : null;
   }
   if (cardKey.startsWith(FLASHCARD_CARD_PREFIX)) {
-    const f = seedItems.flashcard(cardKey.slice(FLASHCARD_CARD_PREFIX.length));
+    const key = cardKey.slice(FLASHCARD_CARD_PREFIX.length);
+    const f = key.startsWith('fund:') ? seedItems.fund?.flashcard(key) : seedItems.flashcard(key);
     return f ? clip(f.front) : null;
   }
   return null;

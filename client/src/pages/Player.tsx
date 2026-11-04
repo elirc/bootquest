@@ -27,6 +27,7 @@ import { InlineProse, Prose, ProseBlocks, splitPrompt } from '../lib/prose';
 import { TRACK_LABEL, campaignSourceOf, competencyLabel, languageOf, readingTitle, unitProse } from '../lib/view';
 import { ExplainBackPane, KataPane } from './LadderPanes';
 import { StudyQuestPane } from './StudyQuestPane';
+import { isFundKey, isFundTopicKey } from '../lib/fundamentals';
 import { LearnMoreButton } from '../components/LearnMore';
 import { WrittenPane } from './WrittenPane';
 import { CodeEditor } from './Player/Editor';
@@ -77,6 +78,8 @@ function Player({ detail }: { detail: UnitDetail }) {
   const [revealed, setRevealed] = useState(unit.revealed);
   const [solution, setSolution] = useState<Solution | null>(null);
   const isReading = unit.kind === 'reading';
+  // fund wave: a Fundamentals topic unit — its instructions ARE the lesson (headings rendered)
+  const isFundTopic = isFundTopicKey(unit.key);
   // B4: a written unit's question lives in its answer pane (with the answer box under it)
   const isWritten = unit.kind === 'written';
   // W6 answer-first units: no reveal, and (explain-back) no code shown while answering
@@ -96,6 +99,7 @@ function Player({ detail }: { detail: UnitDetail }) {
         eyebrow={
           <nav aria-label="Breadcrumb" className="crumbs">
             <span>{TRACK_LABEL[unit.trackId]}</span>
+            {isFundKey(unit.key) && <span>Fundamentals</span>}
             {unit.code && <span>{unit.code}</span>}
           </nav>
         }
@@ -116,14 +120,14 @@ function Player({ detail }: { detail: UnitDetail }) {
       <div className="player">
         <section className="panel player-instructions" aria-labelledby="ins-title">
           <h2 className="panel-title" id="ins-title">
-            Instructions
+            {isFundTopic ? 'Lesson' : 'Instructions'}
           </h2>
           {isWritten ? (
             <p className="muted" data-testid="written-ins">
               The question is in the answer pane. Write your answer first; the model answer and its rubric open only after your answer is stored.
             </p>
           ) : prose.instructions.trim() !== '' ? (
-            <Prose text={prose.instructions} className="ins-prose" />
+            <Prose text={prose.instructions} className="ins-prose" headings={isFundTopic} />
           ) : promptOnRight ? (
             <p className="muted">The question is in the answer pane.</p>
           ) : answerFirst && spec && (spec.type === 'study-quiz' ? detail.studyQuest : spec.type === 'patch-kata' ? detail.kata : detail.explainBack) ? (
