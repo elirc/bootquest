@@ -1,0 +1,182 @@
+{
+ "format": "bootquest-fundamentals@1",
+ "track": "csharp",
+ "topics": [
+  {
+   "id": "01-value-and-reference-types",
+   "order": 1,
+   "title": "Value types & reference types",
+   "level": "beginner",
+   "summary": "What assignment really copies: structs versus classes, method parameters and ref, boxing, string and record equality, and nullable value types.",
+   "lesson": "## Two kinds of type\n\nEvery C# type is either a **value type** or a **reference type**, and the difference decides what `=` copies.\n\n- **Value types**: `int`, `double`, `decimal`, `bool`, `char`, `DateTime`, enums, and every `struct` you declare. A variable holds the value itself.\n- **Reference types**: `class`, `string`, arrays, delegates, `record` (a record class), `List<T>`. A variable holds a **reference** to an object on the heap.\n\n## Assignment copies the variable's contents\n\n```csharp\nstruct PointS { public int X; }\nclass  PointC { public int X; }\n\nvar a = new PointS { X = 1 };\nvar b = a;        // copies the whole struct\nb.X = 2;\nConsole.WriteLine(a.X);   // 1\n\nvar c = new PointC { X = 1 };\nvar d = c;        // copies the REFERENCE: c and d name one object\nd.X = 2;\nConsole.WriteLine(c.X);   // 2\n```\n\nArrays are reference types even when their elements are values: after `int[] b = a;`, writing `b[0] = 9` changes `a[0]` too.\n\n## Method parameters are copies too\n\nBy default every argument is passed **by value**: the method gets a copy of the variable. For a class that copy is a copy of the reference, so the method can **mutate** the caller's object but cannot make the caller's variable point somewhere else:\n\n```csharp\nstatic void Mutate(PointC p)   { p.X = 42; }              // caller sees 42\nstatic void Reassign(PointC p) { p = new PointC { X = 100 }; } // caller sees no change\n```\n\n`ref` passes the variable itself: `static void Bump(ref int v) { v++; }` changes the caller's int. `out` is the same, for a variable the method must assign. Use both sparingly; returning a value is clearer.\n\n## Structs inside collections\n\nBecause a struct is copied on every read, `list[0]` returns a **copy** of the element. That is why `list[0].X = 5;` does not compile (CS1612: the copy would be modified and thrown away). Read, modify, write back:\n\n```csharp\nvar tmp = list[0];\ntmp.X = 5;\nlist[0] = tmp;\n```\n\nAn array element is different: `arr[0].X = 7` works, because array indexing gives direct access to the element's storage. The usual advice: keep structs small and **immutable** (`readonly struct`), and prefer classes for anything you mutate.\n\n## Boxing\n\nConverting a value type to `object` (or to an interface) **boxes** it: the runtime copies the value into a new heap object.\n\n```csharp\nint x = 5;\nobject o = x;   // boxed copy\nx = 6;\nConsole.WriteLine((int)o);  // 5\n```\n\nBoxing allocates, which is why generic collections (`List<int>`) replaced the old `ArrayList` of objects.\n\n## Equality: == depends on the type\n\n- Value types: `==` compares values (for your own structs you must define it; `Equals` compares fields by default).\n- Classes: `==` compares **references** unless the class overloads it. Two separate objects with the same fields are not `==`.\n- `string` is a reference type that **overloads** `==` to compare contents, and it is immutable: every \"change\" builds a new string.\n- `record` types generate value equality: `new Pt(1, 2) == new Pt(1, 2)` is true. `with` makes a modified copy: `p with { Y = 3 }`.\n\n`ReferenceEquals(a, b)` always asks \"same object?\", whatever `==` does.\n\n## Defaults and nullable value types\n\nFields and array slots start at their **default**: `0` for numbers, `false` for bool, `null` for references. A value type cannot be null, so \"no value\" needs `Nullable<T>`, written `int?`:\n\n```csharp\nint? discount = null;\ndiscount.HasValue           // false\ndiscount ?? 0               // 0\ndiscount.GetValueOrDefault() // 0\n```\n\nA nullable column in a database (`INT NULL`) maps to `int?` in an entity, never to `int`.\n\n## In CRUD code\n\nDTOs and entities are classes, so passing one into a service passes a reference: a method that \"validates\" by trimming fields mutates the caller's object. Copy deliberately when you need an independent object, and remember that copying an object which holds a `List<T>` copies the reference to that list unless you build a new list.\n",
+   "quiz": [
+    {
+     "key": "fund:csharp/01-value-and-reference-types/q01",
+     "prompt": "`struct P { public int X; }` then `var a = new P { X = 1 }; var b = a; b.X = 2;` What is `a.X`?",
+     "choices": [
+      "1",
+      "2",
+      "0",
+      "It does not compile"
+     ],
+     "answer": 0,
+     "explanation": "A struct is a value type: `var b = a` copies the whole value, so changing b leaves a alone."
+    },
+    {
+     "key": "fund:csharp/01-value-and-reference-types/q02",
+     "prompt": "The same code with `class P` instead of `struct P`. What is `a.X` now?",
+     "choices": [
+      "1",
+      "2",
+      "0",
+      "It throws NullReferenceException"
+     ],
+     "answer": 1,
+     "explanation": "For a class, `var b = a` copies the reference: a and b name the same object, so the change through b is visible through a."
+    },
+    {
+     "key": "fund:csharp/01-value-and-reference-types/q03",
+     "prompt": "A method `void Reset(Order o) { o = new Order(); }` is called with an existing order (Order is a class). What does the caller see afterwards?",
+     "choices": [
+      "The caller's variable now refers to the new Order",
+      "The caller's Order has all fields reset to defaults",
+      "The caller's variable still refers to the original, unchanged Order",
+      "A compile error: parameters are read-only"
+     ],
+     "answer": 2,
+     "explanation": "The parameter is a copy of the caller's reference. Reassigning the copy points it at a new object; the caller's variable is untouched. Mutating o.Field would have been visible."
+    },
+    {
+     "key": "fund:csharp/01-value-and-reference-types/q04",
+     "prompt": "Why does `list[0].X = 5;` fail to compile when `list` is a `List<PointStruct>`?",
+     "choices": [
+      "Struct fields are always read-only",
+      "The indexer returns a copy of the struct, so the assignment would be lost (CS1612)",
+      "List<T> cannot hold value types",
+      "X must be a property, not a field"
+     ],
+     "answer": 1,
+     "explanation": "list[0] calls the indexer, which returns a copy of the element. The compiler refuses to modify a temporary that is immediately thrown away. Read it into a variable, change it, and assign it back."
+    },
+    {
+     "key": "fund:csharp/01-value-and-reference-types/q05",
+     "prompt": "`int x = 5; object o = x; x = 6;` What is `(int)o`?",
+     "choices": [
+      "6",
+      "0",
+      "It throws InvalidCastException",
+      "5"
+     ],
+     "answer": 3,
+     "explanation": "Assigning to object boxes the int: the value 5 is copied into a new heap object. Changing x later does not touch that copy."
+    },
+    {
+     "key": "fund:csharp/01-value-and-reference-types/q06",
+     "prompt": "`record Pt(int X, int Y);` What is `new Pt(1, 2) == new Pt(1, 2)`?",
+     "choices": [
+      "true: records compare their values",
+      "false: two different objects",
+      "It does not compile",
+      "true only in Release builds"
+     ],
+     "answer": 0,
+     "explanation": "The compiler generates value-based Equals and == for records. A plain class with the same fields would compare references and give false."
+    },
+    {
+     "key": "fund:csharp/01-value-and-reference-types/q07",
+     "prompt": "`string s1 = \"ab\"; string s2 = string.Concat(\"a\", \"b\");` What are `s1 == s2` and `(object)s1 == (object)s2`?",
+     "choices": [
+      "True and True",
+      "False and False",
+      "True and False",
+      "False and True"
+     ],
+     "answer": 2,
+     "explanation": "string overloads == to compare contents. Casting both sides to object selects reference equality, and Concat built a separate string object at runtime."
+    },
+    {
+     "key": "fund:csharp/01-value-and-reference-types/q08",
+     "prompt": "Which statement about `ref` parameters is true?",
+     "choices": [
+      "They copy a struct argument so the method cannot change it",
+      "They are required to pass a class instance to a method",
+      "They let the method assign to the caller's variable itself",
+      "They make the parameter read-only inside the method"
+     ],
+     "answer": 2,
+     "explanation": "ref passes the variable, not a copy of its value: `v++` inside `Bump(ref int v)` changes the caller's int. Read-only by-reference passing is `in`, not `ref`."
+    },
+    {
+     "key": "fund:csharp/01-value-and-reference-types/q09",
+     "prompt": "A database column `discount INT NULL` maps to which entity property type?",
+     "choices": [
+      "int",
+      "object",
+      "Nullable<object>",
+      "int?"
+     ],
+     "answer": 3,
+     "explanation": "int is a value type and can never be null, so a nullable column needs Nullable<int>, written int?. Use HasValue, ?? or GetValueOrDefault to read it."
+    },
+    {
+     "key": "fund:csharp/01-value-and-reference-types/q10",
+     "prompt": "`int[] a = { 1, 2 }; var b = a; b[0] = 9;` What is `a[0]`?",
+     "choices": [
+      "9",
+      "1",
+      "0",
+      "It does not compile"
+     ],
+     "answer": 0,
+     "explanation": "Arrays are reference types even when their elements are ints: b and a refer to the same array object."
+    }
+   ],
+   "flashcards": [
+    {
+     "key": "fund:csharp/01-value-and-reference-types/c01",
+     "front": "Which C# types are value types?",
+     "back": "Numeric types, bool, char, DateTime, enums and every struct (including Nullable<T>). Classes, strings, arrays, delegates and record classes are reference types."
+    },
+    {
+     "key": "fund:csharp/01-value-and-reference-types/c02",
+     "front": "What does passing a class instance \"by value\" let a method do?",
+     "back": "Change the object it points to (its fields are shared), but not repoint the caller's variable: the method holds its own copy of the reference."
+    },
+    {
+     "key": "fund:csharp/01-value-and-reference-types/c03",
+     "front": "How do you change one field of a struct stored in a List<T>?",
+     "back": "Copy it out with the indexer, modify the local copy, then assign the copy back to the same index."
+    },
+    {
+     "key": "fund:csharp/01-value-and-reference-types/c04",
+     "front": "What is boxing, and why care?",
+     "back": "Converting a value type to object or an interface copies it into a new heap object. It allocates and the box is independent of the original variable."
+    },
+    {
+     "key": "fund:csharp/01-value-and-reference-types/c05",
+     "front": "What does == mean for a class, a string and a record?",
+     "back": "Class: same object, unless the class overloads ==. String: same characters (overloaded). Record: generated value equality over its members."
+    },
+    {
+     "key": "fund:csharp/01-value-and-reference-types/c06",
+     "front": "ReferenceEquals(a, b) versus a == b",
+     "back": "ReferenceEquals always asks whether both name the same object. == can be overloaded to compare values, as string and records do."
+    },
+    {
+     "key": "fund:csharp/01-value-and-reference-types/c07",
+     "front": "Why prefer readonly structs?",
+     "back": "Structs are copied on every read, so mutating one usually changes a copy. Making them immutable removes that whole class of lost-update bugs."
+    },
+    {
+     "key": "fund:csharp/01-value-and-reference-types/c08",
+     "front": "Copying an object that holds a List<T>: what is shared?",
+     "back": "A field-by-field copy copies the list REFERENCE, so both objects share one list. Build a new list from the old items for an independent copy."
+    }
+   ],
+   "drillKeys": [
+    "fund-csharp/01-value-and-reference-types/01-reset-counters-in-a-list",
+    "fund-csharp/01-value-and-reference-types/02-copy-a-cart"
+   ]
+  }
+ ]
+}
