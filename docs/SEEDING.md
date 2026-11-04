@@ -261,6 +261,51 @@ harness reports as `todo` — a test verdict); a starter that fails to compile, 
 crashes is quarantined. A quarantined exercise blocks the stamp: fix the authoring, never the
 test.
 
+#### Fundamentals (`seed:import:fundamentals`, fund wave)
+
+A standalone, repo-free ladder per language track (js, csharp, java), shown as the
+**Fundamentals** section on each track's Campaign page. Each topic is a lesson, a quiz gate, flashcards
+and drills. The source is hand-written JSON in this repo, one file per topic:
+`tools/seed/authoring/fundamentals/<track>/<NN-topic>.json` (format `fundamentals-authoring@1`,
+Zod `.strict()` in `tools/seed/src/fundamentals/source.ts`): `{ track, topic, title, level
+(beginner|intermediate|advanced), summary, lesson (markdown, `##` headings allowed), quiz: [{ prompt,
+choices, answer, explanation }], flashcards: [{ front, back }], drills: [...] }`. Drills use the
+track's drill-bank authoring shape VERBATIM and go through that bank's `mapExercise`, so every
+drill-bank refusal applies: js = sysdrills shape (drill-js), csharp = csdrills shape (drill-cs,
+jstrain harness), java = javadrills shape (drill-java).
+
+The importer writes two outputs and refuses, before writing anything, a lesson under 600 characters,
+a gate outside 8-12 questions, 3-5 choices, a blank or duplicate choice, an answer outside them, more
+than half of a topic's keys on one choice position, 4-12 flashcards, a flashcard back that contains a
+same-topic keyed answer at token boundaries (the FC-quiz xleak rule), a gap in the topic numbering,
+a file named differently from its topic, and a census other than `FUNDAMENTALS_EXPECTED`:
+- `content/fundamentals/<track>/topics.json` + `manifest.json` (sha256 of topics.json + counts).
+  The server loads it only when the bytes match and the schema re-parses with the same counts.
+  One `study` unit per topic (key `fund/<track>/<topic>`, source `fundamentals:local`): its one
+  check is `study-quiz` over the topic's quiz items (keys `fund:<track>/<topic>/qNN`, pass 80%),
+  the lesson is its instructions, a first pass enrols the flashcards (`fund:<track>/<topic>/cNN`),
+  and topic N has topic N-1 as its prerequisite (locked until that gate is passed).
+- `content/packs/fund-<track>/`, one course per topic with drills (keys
+  `fund-<track>/<topic>/<slug>`, competency language-fluency), stamped by the stock import gate.
+
+```sh
+# authoring -> content/fundamentals/<track>/ + content/packs/fund-<track>/ (writes nothing on a refusal)
+npm run seed:import:fundamentals -- --track all        # or --track js | csharp | java
+# stamp the drills: every reference passes and every starter fails under the REAL runner
+npm run seed:validate -- --source fund-js
+npm run seed:validate -- --source fund-csharp
+npm run seed:validate -- --source fund-java
+```
+
+Add a topic: write `tools/seed/authoring/fundamentals/<track>/NN-topic.json` (next free `NN`),
+run every lesson and quiz claim against the real toolchain first (code-truth: node 22 / .NET 10 /
+JDK 17), bump `FUNDAMENTALS_EXPECTED` in `tools/seed/src/fundamentals/source.ts`, commit the
+authoring, then re-import (so the manifests record a clean HEAD), re-validate the pack and commit the
+outputs with the new `validation.json`. The fundamentals files are outside the seed fingerprint walk
+(`@bootquest/shared/fundamentals` is a subpath export no generator imports), so a new topic never
+restamps the estate. `seed:lint:leaks` / `seed:lint:answers` do not read them: the importer's own
+FC-quiz and answer-position refusals stand in.
+
 ### The import gate: `seed:validate`
 
 `seed:validate` executes EVERY imported reference solution under BootQuest's own
@@ -1796,3 +1841,20 @@ resolved); quiz variety `concept` and flashcard shape `hand-authored`;
     §7.4 two-choice quizzes need a factory change + restamp; the frozen wrong items stay frozen; retiring masteroutline
     fc b8ab1a9d is the cheapest V7 fix; 5 javadrills task lines still hand over a formula (03-streams ×2,
     07-exception-flow, 08-money-math, 10-completablefuture); the Fable review is still owed.
+- **fund wave: Fundamentals ladders — wave 0 + pilot (branch `fund-wave`, 2026-11-04):** a standalone,
+  repo-free ladder on the js, csharp and java tracks (§3 Fundamentals): per topic a lesson, a study-quiz
+  gate (80%), flashcards enrolled on the first pass and drills, topic N locked behind topic N-1. New:
+  `shared/src/fundamentals.ts` (subpath export), `api-ext` FundamentalsResponse, `GET
+  /tracks/:id/fundamentals`, `server/src/store/fundamentals.ts`, `seed:import:fundamentals`, the
+  Campaign page section, a Lesson pane with opt-in prose headings (existing content renders unchanged),
+  a Fundamentals filter in the track browser. `api.ts` and every fingerprinted file are untouched.
+  - **Counts:** pilot = 1 topic per track (10 quiz, 8 cards, 2 drills each): 3 study units + 6 drills in
+    packs fund-js / fund-csharp / fund-java. Planned: about 20 topics per track (waves 2-4).
+  - **Suites:** server 716 + selfrun 20, client 442, tools/seed 2286, cli 120, smoke:api 76/76 (its
+    curated subset sets `BOOTQUEST_FUNDAMENTALS: ''`), demo:promotion 39/39, seed:demo:planted 48/48,
+    test:csharp 46, test:java 23, seed:pins 688/688 OK, restamp:all 700/700 fresh, seed:lint:leaks and
+    seed:lint:answers OK, seed:campaign --check OK.
+  - **Owner items:** framework topics (React, ASP.NET Core, EF Core, Spring) drill the mechanism in plain
+    code: the graders have no framework runtimes. Fundamentals topic units are not in the daily slate
+    (their drills join the drill pools like any pack drill). Quiz explanations reach the learner only on
+    a miss's review card: there is no "Learn more" notes pack for fundamentals yet.

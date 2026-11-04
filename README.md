@@ -124,6 +124,9 @@ serves without re-running anything. At startup the server:
   and the seed packs under `content/seed/`;
 - creates the ladder units (explain-back, patch-kata, retest; see SEEDING.md §7) and
   the authored agentic units in `content/units/`;
+- loads the Fundamentals ladders under `content/fundamentals/<track>/` (JS, C#, Java: lesson +
+  quiz gate + flashcards per topic; drills in `content/packs/fund-<track>`; `BOOTQUEST_FUNDAMENTALS`
+  overrides the dirs, `''` loads none; see SEEDING.md §3 Fundamentals);
 - prints one summary line per source with its counts and a ladder-units line;
 - **refuses to start** on a missing or stale stamp, edited bytes, loaded !== built, a
   duplicate seed-item key, or a busy port.

@@ -313,6 +313,8 @@ async function main() {
           .filter((d) => existsSync(join(d, 'items.json')))
           .join(','),
         BOOTQUEST_AUTHORED_UNITS: join(REPO, 'content', 'units', 'agentic.json'),
+        // fund wave: the Fundamentals ladder stays out of this curated pack subset (its own suite: server/test/api/fundamentals.test.ts)
+        BOOTQUEST_FUNDAMENTALS: '',
         // explicit test-harness opt-out of the import-gate stamp (W2b/F1): the smoke
         // must not depend on a fresh seed:validate sweep. The real serve path never sets it.
         BOOTQUEST_PACKS_ALLOW_UNSTAMPED: '1',
@@ -974,7 +976,7 @@ async function main() {
 
       // 10k. W7: busy-port refusal — a second real server on the SAME port refuses before touching any DB
       const db2 = join(dir, 'second.db');
-      const busy = runNode(SERVE, [], cleanEnv({ BOOTQUEST_DB: db2, BOOTQUEST_PORT: String(port), BOOTQUEST_PACKS: '', BOOTQUEST_CAMPAIGN: '', BOOTQUEST_SEED_ITEMS: '', BOOTQUEST_AUTHORED_UNITS: '' }));
+      const busy = runNode(SERVE, [], cleanEnv({ BOOTQUEST_DB: db2, BOOTQUEST_PORT: String(port), BOOTQUEST_PACKS: '', BOOTQUEST_CAMPAIGN: '', BOOTQUEST_SEED_ITEMS: '', BOOTQUEST_AUTHORED_UNITS: '', BOOTQUEST_FUNDAMENTALS: '' }));
       step(
         'busy-port refusal: a second server on the same port exits 1 ("already in use") and never creates its DB',
         busy.code === 1 && /already in use/.test(busy.out) && !existsSync(db2),
@@ -987,7 +989,7 @@ async function main() {
       writeFileSync(join(tampered, 'items.json'), readFileSync(join(tampered, 'items.json'), 'utf8').replace('"prompt": "', '"prompt": "EDITED '));
       const port3 = await freePort();
       const db3 = join(dir, 'tampered.db');
-      const stamp = runNode(SERVE, [], cleanEnv({ BOOTQUEST_DB: db3, BOOTQUEST_PORT: String(port3), BOOTQUEST_PACKS: '', BOOTQUEST_CAMPAIGN: '', BOOTQUEST_SEED_ITEMS: tampered, BOOTQUEST_AUTHORED_UNITS: '' }));
+      const stamp = runNode(SERVE, [], cleanEnv({ BOOTQUEST_DB: db3, BOOTQUEST_PORT: String(port3), BOOTQUEST_PACKS: '', BOOTQUEST_CAMPAIGN: '', BOOTQUEST_SEED_ITEMS: tampered, BOOTQUEST_AUTHORED_UNITS: '', BOOTQUEST_FUNDAMENTALS: '' }));
       step(
         'stamp refusal: a seed pack edited after validation -> the real entrypoint refuses to start (exit 1, names the stamp), port never bound',
         stamp.code === 1 && /failed to start/.test(stamp.out) && /stamp|sha256/.test(stamp.out) && (await portIsFree(port3)),
@@ -1178,6 +1180,7 @@ async function main() {
           BOOTQUEST_CAMPAIGN: '',
           BOOTQUEST_SEED_ITEMS: [join(SEED_DIR, 'quests', 'storefront'), join(SEED_DIR, 'notes', 'storefront')].join(','),
           BOOTQUEST_AUTHORED_UNITS: '',
+          BOOTQUEST_FUNDAMENTALS: '',
         }),
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
@@ -1242,7 +1245,7 @@ async function main() {
       cpSync(join(SEED_DIR, 'notes', 'storefront'), join(stale, 'notes', 'storefront'), { recursive: true });
       writeFileSync(join(stale, 'quests', 'storefront', 'items.json'), `${readFileSync(join(stale, 'quests', 'storefront', 'items.json'), 'utf8')} `);
       const sPort = await freePort();
-      const staleRun = runNode(SERVE, [], cleanEnv({ BOOTQUEST_DB: join(dir, 'stale.db'), BOOTQUEST_PORT: String(sPort), BOOTQUEST_PACKS: '', BOOTQUEST_CAMPAIGN: '', BOOTQUEST_SEED_ITEMS: [join(stale, 'quests', 'storefront'), join(stale, 'notes', 'storefront')].join(','), BOOTQUEST_AUTHORED_UNITS: '' }));
+      const staleRun = runNode(SERVE, [], cleanEnv({ BOOTQUEST_DB: join(dir, 'stale.db'), BOOTQUEST_PORT: String(sPort), BOOTQUEST_PACKS: '', BOOTQUEST_CAMPAIGN: '', BOOTQUEST_SEED_ITEMS: [join(stale, 'quests', 'storefront'), join(stale, 'notes', 'storefront')].join(','), BOOTQUEST_AUTHORED_UNITS: '', BOOTQUEST_FUNDAMENTALS: '' }));
       step(
         'notes stale refusal: the quest pack changed after its notes were validated -> the real entrypoint refuses to start (exit 1, "stale notes"), port never bound',
         staleRun.code === 1 && /failed to start/.test(staleRun.out) && /stale notes/.test(staleRun.out) && (await portIsFree(sPort)),
