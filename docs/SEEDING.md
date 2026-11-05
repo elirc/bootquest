@@ -1841,15 +1841,20 @@ resolved); quiz variety `concept` and flashcard shape `hand-authored`;
     §7.4 two-choice quizzes need a factory change + restamp; the frozen wrong items stay frozen; retiring masteroutline
     fc b8ab1a9d is the cheapest V7 fix; 5 javadrills task lines still hand over a formula (03-streams ×2,
     07-exception-flow, 08-money-math, 10-completablefuture); the Fable review is still owed.
-- **fund wave: Fundamentals ladders — wave 0 + pilot (branch `fund-wave`, 2026-11-04):** a standalone,
+- **fund wave: Fundamentals ladders — DONE, 60 topics (branch `fund-wave`, 2026-11-04):** a standalone,
   repo-free ladder on the js, csharp and java tracks (§3 Fundamentals): per topic a lesson, a study-quiz
   gate (80%), flashcards enrolled on the first pass and drills, topic N locked behind topic N-1. New:
   `shared/src/fundamentals.ts` (subpath export), `api-ext` FundamentalsResponse, `GET
   /tracks/:id/fundamentals`, `server/src/store/fundamentals.ts`, `seed:import:fundamentals`, the
   Campaign page section, a Lesson pane with opt-in prose headings (existing content renders unchanged),
   a Fundamentals filter in the track browser. `api.ts` and every fingerprinted file are untouched.
-  - **Counts:** pilot = 1 topic per track (10 quiz, 8 cards, 2 drills each): 3 study units + 6 drills in
-    packs fund-js / fund-csharp / fund-java. Planned: about 20 topics per track (waves 2-4).
+  - **Counts:** 20 topics per track, each a lesson + a 10-question gate + 8 cards + 1-2 drills: js 200 quiz /
+    160 cards / 23 drills, csharp 200 / 160 / 21, java 200 / 160 / 21 (`FUNDAMENTALS_EXPECTED`): 60 study units
+    and 65 stamped drills in packs fund-js / fund-csharp / fund-java. Framework topics: JS 15-20 (TypeScript,
+    Node, HTTP, React), C# 15-20 (DI, ASP.NET Core, EF Core), Java 17-20 (Spring IoC, Spring Web, Spring Data
+    JPA). Claims were executed before writing: node 22 + tsc 5.9; .NET 10 (a live ASP.NET Core app probed over
+    HTTP; EF Core 9 + SQLite); JDK 17 (Spring 6.1 container). Spring Web / JPA claims beyond the container
+    are the documented framework behaviour.
   - **Suites:** server 716 + selfrun 20, client 442, tools/seed 2286, cli 120, smoke:api 76/76 (its
     curated subset sets `BOOTQUEST_FUNDAMENTALS: ''`), demo:promotion 39/39, seed:demo:planted 48/48,
     test:csharp 46, test:java 23, seed:pins 688/688 OK, restamp:all 700/700 fresh, seed:lint:leaks and
