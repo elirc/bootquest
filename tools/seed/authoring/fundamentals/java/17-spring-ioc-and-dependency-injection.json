@@ -1,0 +1,175 @@
+{
+  "format": "fundamentals-authoring@1",
+  "track": "java",
+  "topic": "17-spring-ioc-and-dependency-injection",
+  "title": "Spring: IoC & dependency injection",
+  "level": "advanced",
+  "summary": "Beans and the application context, constructor injection, singleton and prototype scopes, resolving several candidates with @Primary, @Qualifier or List injection, circular dependencies, configuration properties and profiles.",
+  "lesson": "## The container builds your object graph\n\n```java\n@Service\npublic class OrderService {\n    private final OrderRepository orders;\n    private final PaymentGateway payments;\n\n    public OrderService(OrderRepository orders, PaymentGateway payments) {   // constructor injection\n        this.orders = orders;\n        this.payments = payments;\n    }\n}\n```\n\nClasses annotated `@Component` (or the specialisations `@Service`, `@Repository`, `@Controller`) are found by component scanning and registered as **beans**. `@Bean` methods in a `@Configuration` class register objects you construct yourself (third-party clients, configured mappers). With a single constructor, Spring injects it without `@Autowired`.\n\nPrefer **constructor injection**: dependencies are explicit, fields can be `final`, and tests construct the class with fakes directly. Field injection (`@Autowired private Repo repo;`) hides dependencies and needs reflection to test.\n\n## Scopes\n\n- **singleton** (the default): one instance per application context, shared by every request and thread. Keep singleton beans **stateless**; a mutable field in a `@Service` is a concurrency bug (topic 14).\n- **prototype**: a new instance every time the bean is requested.\n- **request** / **session** (web apps): one per HTTP request or session.\n\nInjecting a prototype or request-scoped bean into a singleton injects ONE instance at creation time; use `ObjectProvider<T>` (or a scoped proxy) to get fresh ones.\n\n## Several candidates\n\nWith two beans implementing `Notifier`, injecting a single `Notifier` fails at startup (\"expected single matching bean but found 2\"). Resolve it with:\n- `@Primary` on the default implementation\n- `@Qualifier(\"smsNotifier\")` at the injection point (the default bean name is the class name with a lower-case first letter)\n- injecting `List<Notifier>` (every bean, in order) or `Map<String, Notifier>` (by bean name), perfect for strategy and plugin patterns\n\nA missing bean fails at startup too (`NoSuchBeanDefinitionException`), which is the point: wiring errors appear when the app starts, not on the first request.\n\n## Circular dependencies\n\nA needs B in its constructor and B needs A: the context cannot construct either and fails to start (Spring Boot 2.6+ rejects circular references by default). Fix the design: extract the shared logic into a third bean, or invert one dependency with an event.\n\n## Configuration and profiles\n\n```java\n@ConfigurationProperties(prefix = \"payments\")\npublic record PaymentProperties(String apiUrl, Duration timeout, int retries) {}\n```\n\nSpring Boot binds `application.properties` / `application.yml`, environment variables (`PAYMENTS_API_URL` maps to `payments.api-url` through relaxed binding) and command-line arguments, with later sources overriding earlier ones (command line wins over environment over the properties file). `@Profile(\"dev\")` beans and `application-dev.yml` activate with `spring.profiles.active=dev`. Keep secrets out of committed files.\n\n## Proxies: why some annotations need care\n\n`@Transactional`, `@Cacheable` and `@Async` work by wrapping the bean in a **proxy**. Only calls that go THROUGH the proxy (from another bean) get the behaviour; a method calling another method on `this` bypasses it (topic 20).",
+  "quiz": [
+    {
+      "prompt": "What is the default scope of a Spring bean?",
+      "choices": [
+        "prototype",
+        "singleton",
+        "request",
+        "session"
+      ],
+      "answer": 1,
+      "explanation": "One instance per application context, shared by all callers."
+    },
+    {
+      "prompt": "Two beans implement `Notifier` and a class injects a single `Notifier` with no qualifier. What happens?",
+      "choices": [
+        "The first one is injected",
+        "The last one is injected",
+        "null is injected",
+        "Startup fails: expected a single matching bean but found 2"
+      ],
+      "answer": 3,
+      "explanation": "Resolve it with @Primary, @Qualifier, or by injecting List<Notifier>."
+    },
+    {
+      "prompt": "How do you receive EVERY Notifier bean?",
+      "choices": [
+        "Inject List<Notifier> (or Map<String, Notifier>)",
+        "Inject Notifier[] only",
+        "Call new on each",
+        "It is not possible"
+      ],
+      "answer": 0,
+      "explanation": "Collection injection supports strategy and plugin patterns."
+    },
+    {
+      "prompt": "Why is constructor injection preferred over field injection?",
+      "choices": [
+        "It is faster at runtime",
+        "Field injection does not work",
+        "Dependencies are explicit, fields can be final, and tests can construct the class directly",
+        "It enables prototype scope"
+      ],
+      "answer": 2,
+      "explanation": "Field injection hides dependencies and requires reflection in tests."
+    },
+    {
+      "prompt": "A singleton service has a mutable field holding the current user. What is the problem?",
+      "choices": [
+        "None",
+        "The single instance is shared by concurrent requests, so users overwrite each other's data",
+        "It leaks memory only",
+        "It disables injection"
+      ],
+      "answer": 1,
+      "explanation": "Singleton beans must be stateless or use thread-safe, request-independent state."
+    },
+    {
+      "prompt": "Bean A takes B in its constructor and B takes A. What happens at startup?",
+      "choices": [
+        "The context fails to start: the dependency cycle cannot be constructed",
+        "Spring injects proxies automatically",
+        "A gets null",
+        "It works in Spring Boot"
+      ],
+      "answer": 0,
+      "explanation": "Break the cycle by extracting shared logic or inverting a dependency."
+    },
+    {
+      "prompt": "Which environment variable sets `payments.api-url` in Spring Boot?",
+      "choices": [
+        "payments.api-url",
+        "PaymentsApiUrl",
+        "SPRING_PAYMENTS",
+        "PAYMENTS_API_URL"
+      ],
+      "answer": 3,
+      "explanation": "Relaxed binding maps upper-case, underscore-separated names to properties."
+    },
+    {
+      "prompt": "A prototype-scoped bean is injected into a singleton constructor. How many prototype instances does the singleton see?",
+      "choices": [
+        "A new one per method call",
+        "None",
+        "One, created when the singleton was built",
+        "One per thread"
+      ],
+      "answer": 2,
+      "explanation": "Use ObjectProvider<T>.getObject() to get a new instance when needed."
+    },
+    {
+      "prompt": "Why does `@Transactional` on a method called via `this.method()` from the same class not apply?",
+      "choices": [
+        "The behaviour is added by a proxy, and calls on this bypass the proxy",
+        "The annotation is ignored on public methods",
+        "Transactions need static methods",
+        "It only works in tests"
+      ],
+      "answer": 0,
+      "explanation": "Call it from another bean, or restructure the code."
+    },
+    {
+      "prompt": "What is the default name of a bean registered from `class SmsNotifier`?",
+      "choices": [
+        "com.app.SmsNotifier",
+        "smsNotifier",
+        "sms",
+        "notifier"
+      ],
+      "answer": 1,
+      "explanation": "The simple class name with a lower-case first letter, used by @Qualifier."
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "What registers a class as a Spring bean?",
+      "back": "A stereotype annotation such as @Component or @Service found by scanning, or a @Bean method in a @Configuration class."
+    },
+    {
+      "front": "Why constructor injection?",
+      "back": "Dependencies become visible and final, and tests can build the object directly with fakes."
+    },
+    {
+      "front": "Singleton versus prototype scope",
+      "back": "Singleton: one shared instance per context. Prototype: a fresh instance every time the bean is requested."
+    },
+    {
+      "front": "Three ways to resolve several candidate beans",
+      "back": "Mark one @Primary, name one with @Qualifier at the injection point, or inject them all as a List or Map."
+    },
+    {
+      "front": "Why must singleton beans be stateless?",
+      "back": "One instance serves every concurrent request, so mutable per-request state in fields gets shared and overwritten."
+    },
+    {
+      "front": "What does Spring do with circular constructor dependencies?",
+      "back": "It cannot construct the beans and fails at startup; redesign to remove the cycle."
+    },
+    {
+      "front": "Spring Boot property source precedence",
+      "back": "Command-line arguments override environment variables, which override application properties files."
+    },
+    {
+      "front": "Why do some annotations need calls from another bean?",
+      "back": "@Transactional, @Cacheable and @Async are applied by a proxy, which self-invocation through this bypasses."
+    }
+  ],
+  "drills": [
+    {
+      "slug": "01-mini-container",
+      "title": "A tiny container with scopes and @Primary",
+      "difficulty": 3,
+      "skills": [
+        "scopes",
+        "candidate resolution"
+      ],
+      "instructions": "**Interview prompt.** \"Explain what Spring does when two beans implement the same interface, by building a container that behaves the same way.\"\n\n**Why it matters.** Implementing singleton versus prototype, `@Primary` and \"expected single matching bean but found 2\" makes the container's startup errors predictable instead of mysterious.\n\n**Your task.** Complete the nested `Container`:\n- `<T> void register(Class<T> type, String name, boolean primary, Scope scope, Function<Container, ? extends T> factory)` registers a bean of `type` (several beans may share a type; registration order is kept)\n- `<T> T get(Class<T> type)`:\n  - no bean of that type: `IllegalStateException` with a message containing `\"no bean\"`\n  - one bean: that bean\n  - several: the one marked primary; if none or more than one is primary, `IllegalStateException` with a message containing `\"found N\"` (N being the count)\n- `<T> List<T> getAll(Class<T> type)`: every bean of that type in registration order\n- `SINGLETON` beans are created once (on first use) and then shared; `PROTOTYPE` beans are created on every request\n\nFactories receive the container so they can resolve their own dependencies.\n\n**Worked example.** With email (primary) and sms notifiers registered, `get(Notifier.class)` is the email notifier and `getAll` returns both.",
+      "starter": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · a tiny Spring-like container★★★\n//  concepts: singleton/prototype · @Primary · candidate errors\n// ─────────────────────────────────────────────────────────────────────────\n\nimport static bootcamp.Check.*;\n\nimport java.util.*;\nimport java.util.function.*;\n\nclass Exercise {\n\n    enum Scope { SINGLETON, PROTOTYPE }\n    interface Notifier { String channel(); }\n    record Email(String channel) implements Notifier {}\n    record Sms(String channel) implements Notifier {}\n    static final class Clock {}\n    record Service(Notifier notifier, Clock clock) {}\n\n    static final class Container {\n        // TODO: registrations per type, in order; cached singleton instances\n\n        <T> void register(Class<T> type, String name, boolean primary, Scope scope, Function<Container, ? extends T> factory) {\n            throw new UnsupportedOperationException(\"TODO: remember the registration\");\n        }\n\n        <T> T get(Class<T> type) {\n            throw new UnsupportedOperationException(\"TODO: none / one / primary rules\");\n        }\n\n        <T> List<T> getAll(Class<T> type) {\n            throw new UnsupportedOperationException(\"TODO: every bean of the type, in order\");\n        }\n    }\n\n    // ─── tests ───────────────────────────────────────────────────────────\n    public static void main(String[] args) {\n        test(\"singletons are shared, prototypes are new\", () -> {\n            var c = new Container();\n            c.register(Clock.class, \"clock\", false, Scope.SINGLETON, x -> new Clock());\n            c.register(Notifier.class, \"sms\", false, Scope.PROTOTYPE, x -> new Sms(\"sms\"));\n            ok(c.get(Clock.class) == c.get(Clock.class), \"singleton must be shared\");\n            ok(c.get(Notifier.class) != c.get(Notifier.class), \"prototype must be new\");\n        });\n        test(\"the primary bean wins among several\", () -> {\n            var c = new Container();\n            c.register(Notifier.class, \"email\", true, Scope.SINGLETON, x -> new Email(\"email\"));\n            c.register(Notifier.class, \"sms\", false, Scope.SINGLETON, x -> new Sms(\"sms\"));\n            eq(c.get(Notifier.class).channel(), \"email\");\n            eq(c.getAll(Notifier.class).stream().map(Notifier::channel).toList(), List.of(\"email\", \"sms\"));\n        });\n        test(\"several candidates without one primary fail\", () -> {\n            var c = new Container();\n            c.register(Notifier.class, \"email\", false, Scope.SINGLETON, x -> new Email(\"email\"));\n            c.register(Notifier.class, \"sms\", false, Scope.SINGLETON, x -> new Sms(\"sms\"));\n            ok(raises(IllegalStateException.class, () -> c.get(Notifier.class)).getMessage().contains(\"found 2\"), \"message should say found 2\");\n        });\n        test(\"factories resolve their dependencies\", () -> {\n            var c = new Container();\n            c.register(Clock.class, \"clock\", false, Scope.SINGLETON, x -> new Clock());\n            c.register(Notifier.class, \"email\", false, Scope.SINGLETON, x -> new Email(\"email\"));\n            c.register(Service.class, \"service\", false, Scope.SINGLETON, x -> new Service(x.get(Notifier.class), x.get(Clock.class)));\n            ok(c.get(Service.class).clock() == c.get(Clock.class), \"the service got the shared clock\");\n        });\n        test(\"a missing bean fails clearly (boundary)\", () -> ok(raises(IllegalStateException.class, () -> new Container().get(Clock.class)).getMessage().contains(\"no bean\"), \"message should say no bean\"));\n        test(\"getAll of an unknown type is empty\", () -> ok(new Container().getAll(Notifier.class).isEmpty(), \"expected empty\"));\n        System.exit(report());\n    }\n    // ─── end tests ───────────────────────────────────────────────────────\n}\n",
+      "solution": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · a tiny Spring-like container★★★\n//  concepts: singleton/prototype · @Primary · candidate errors\n// ─────────────────────────────────────────────────────────────────────────\n\nimport static bootcamp.Check.*;\n\nimport java.util.*;\nimport java.util.function.*;\n\nclass Exercise {\n\n    enum Scope { SINGLETON, PROTOTYPE }\n    interface Notifier { String channel(); }\n    record Email(String channel) implements Notifier {}\n    record Sms(String channel) implements Notifier {}\n    static final class Clock {}\n    record Service(Notifier notifier, Clock clock) {}\n\n    static final class Container {\n        private static final class Reg {\n            final String name; final boolean primary; final Scope scope; final Function<Container, ?> factory;\n            Object instance;\n            Reg(String name, boolean primary, Scope scope, Function<Container, ?> factory) { this.name = name; this.primary = primary; this.scope = scope; this.factory = factory; }\n        }\n        private final Map<Class<?>, List<Reg>> regs = new HashMap<>();\n\n        <T> void register(Class<T> type, String name, boolean primary, Scope scope, Function<Container, ? extends T> factory) {\n            regs.computeIfAbsent(type, k -> new ArrayList<>()).add(new Reg(name, primary, scope, factory));\n        }\n\n        <T> T get(Class<T> type) {\n            var candidates = regs.getOrDefault(type, List.of());\n            if (candidates.isEmpty()) throw new IllegalStateException(\"no bean of type \" + type.getSimpleName());\n            if (candidates.size() == 1) return type.cast(instance(candidates.get(0)));\n            var primaries = candidates.stream().filter(r -> r.primary).toList();\n            if (primaries.size() != 1) throw new IllegalStateException(\"expected single matching bean but found \" + candidates.size());\n            return type.cast(instance(primaries.get(0)));\n        }\n\n        <T> List<T> getAll(Class<T> type) {\n            var out = new ArrayList<T>();\n            for (var r : regs.getOrDefault(type, List.of())) out.add(type.cast(instance(r)));\n            return out;\n        }\n\n        private Object instance(Reg r) {\n            if (r.scope == Scope.PROTOTYPE) return r.factory.apply(this);\n            if (r.instance == null) r.instance = r.factory.apply(this);\n            return r.instance;\n        }\n    }\n\n    // ─── tests ───────────────────────────────────────────────────────────\n    public static void main(String[] args) {\n        test(\"singletons are shared, prototypes are new\", () -> {\n            var c = new Container();\n            c.register(Clock.class, \"clock\", false, Scope.SINGLETON, x -> new Clock());\n            c.register(Notifier.class, \"sms\", false, Scope.PROTOTYPE, x -> new Sms(\"sms\"));\n            ok(c.get(Clock.class) == c.get(Clock.class), \"singleton must be shared\");\n            ok(c.get(Notifier.class) != c.get(Notifier.class), \"prototype must be new\");\n        });\n        test(\"the primary bean wins among several\", () -> {\n            var c = new Container();\n            c.register(Notifier.class, \"email\", true, Scope.SINGLETON, x -> new Email(\"email\"));\n            c.register(Notifier.class, \"sms\", false, Scope.SINGLETON, x -> new Sms(\"sms\"));\n            eq(c.get(Notifier.class).channel(), \"email\");\n            eq(c.getAll(Notifier.class).stream().map(Notifier::channel).toList(), List.of(\"email\", \"sms\"));\n        });\n        test(\"several candidates without one primary fail\", () -> {\n            var c = new Container();\n            c.register(Notifier.class, \"email\", false, Scope.SINGLETON, x -> new Email(\"email\"));\n            c.register(Notifier.class, \"sms\", false, Scope.SINGLETON, x -> new Sms(\"sms\"));\n            ok(raises(IllegalStateException.class, () -> c.get(Notifier.class)).getMessage().contains(\"found 2\"), \"message should say found 2\");\n        });\n        test(\"factories resolve their dependencies\", () -> {\n            var c = new Container();\n            c.register(Clock.class, \"clock\", false, Scope.SINGLETON, x -> new Clock());\n            c.register(Notifier.class, \"email\", false, Scope.SINGLETON, x -> new Email(\"email\"));\n            c.register(Service.class, \"service\", false, Scope.SINGLETON, x -> new Service(x.get(Notifier.class), x.get(Clock.class)));\n            ok(c.get(Service.class).clock() == c.get(Clock.class), \"the service got the shared clock\");\n        });\n        test(\"a missing bean fails clearly (boundary)\", () -> ok(raises(IllegalStateException.class, () -> new Container().get(Clock.class)).getMessage().contains(\"no bean\"), \"message should say no bean\"));\n        test(\"getAll of an unknown type is empty\", () -> ok(new Container().getAll(Notifier.class).isEmpty(), \"expected empty\"));\n        System.exit(report());\n    }\n    // ─── end tests ───────────────────────────────────────────────────────\n}\n",
+      "explanation": "Keep registrations per type in order, cache singleton instances per registration, and apply the candidate rules in `get`:\n\n```java\nvar candidates = regs.getOrDefault(type, List.of());\nif (candidates.isEmpty()) throw new IllegalStateException(\"no bean of type \" + type.getSimpleName());\nReg chosen = candidates.size() == 1 ? candidates.get(0) : pickPrimary(candidates);\nreturn type.cast(instance(chosen));\n```\n\n`instance` returns the cached object for a singleton (creating it on first use) and calls the factory every time for a prototype. Passing `this` into the factory is how a bean resolves its own dependencies, exactly like constructor injection.",
+      "hints": [
+        "Keep, per type, an ordered list of registrations; each registration remembers its name, primary flag, scope, factory and, for singletons, the created instance.",
+        "In get, throw for zero candidates, return the only one, otherwise filter the primary ones and require exactly one; create singletons lazily and cache them in the registration, prototypes each time.",
+        "Remember every registration under its type in order, hand out the only candidate or the single primary one and complain otherwise, build shared beans once and keep them, and build prototype beans afresh on every request."
+      ]
+    }
+  ]
+}

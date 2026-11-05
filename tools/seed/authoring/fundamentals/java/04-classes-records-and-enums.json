@@ -1,0 +1,175 @@
+{
+  "format": "fundamentals-authoring@1",
+  "track": "java",
+  "topic": "04-classes-records-and-enums",
+  "title": "Classes, records & enums",
+  "level": "intermediate",
+  "summary": "Constructors, fields and encapsulation, static versus instance, records with compact constructors for validated value types, and enums with fields, methods and EnumMap.",
+  "lesson": "## Classes and encapsulation\n\n```java\npublic class Order {\n    private final long id;                 // final: assigned once, in the constructor\n    private final List<Line> lines = new ArrayList<>();\n    private Status status = Status.DRAFT;\n\n    public Order(long id) { this.id = id; }\n\n    public void addLine(String sku, int qty) {\n        if (status != Status.DRAFT) throw new IllegalStateException(\"order is \" + status);\n        if (qty <= 0) throw new IllegalArgumentException(\"qty must be positive\");\n        lines.add(new Line(sku, qty));\n    }\n    public List<Line> lines() { return List.copyOf(lines); }   // callers cannot modify ours\n}\n```\n\nFields are `private`; behaviour methods protect the invariants. Returning the internal mutable list would let callers bypass `addLine`. `final` on a field means the reference cannot change; the object it points to can.\n\n## static\n\n`static` members belong to the class: constants (`static final`), factory methods, pure helpers. Mutable static state is shared by every thread and request: a cache in a static `HashMap` is a race condition and a memory leak waiting to happen (topic 16).\n\n## Records (Java 16+)\n\n```java\npublic record Money(long cents, String currency) {\n    public Money {                                   // compact canonical constructor: validation\n        if (cents < 0) throw new IllegalArgumentException(\"negative\");\n        Objects.requireNonNull(currency, \"currency\");\n    }\n    public Money plus(Money other) {\n        if (!currency.equals(other.currency)) throw new IllegalArgumentException(\"currency mismatch\");\n        return new Money(cents + other.cents, currency);\n    }\n}\nnew Money(150, \"EUR\")              // toString: Money[cents=150, currency=EUR]\nnew Money(1, \"EUR\").equals(new Money(1, \"EUR\"))   // true\n```\n\nA record declares an immutable data carrier: private final fields, accessor methods named like the components (`cents()`, not `getCents()`), and `equals`, `hashCode` and `toString` based on all components. The **compact constructor** runs validation before the fields are assigned. Records are ideal for DTOs, value objects, events and map keys; they cannot extend other classes, and they are a poor fit for JPA entities (topic 19).\n\n## Enums\n\n```java\npublic enum Status {\n    DRAFT(\"d\"), PAID(\"p\"), SHIPPED(\"s\");\n    private final String code;\n    Status(String code) { this.code = code; }\n    public String code() { return code; }\n}\nStatus.valueOf(\"PAID\")   // PAID\nStatus.valueOf(\"paid\")   // IllegalArgumentException: No enum constant ...\nStatus.PAID.ordinal()    // 1  (never persist ordinals: reordering constants corrupts data)\n```\n\nEnums are full classes: fields, constructors, methods, even per-constant behaviour. Compare them with `==` (each constant is a singleton). `EnumMap` and `EnumSet` are compact and keep the constants' declaration order. Persist enums by **name** (or an explicit code), never by ordinal.\n\n## Choosing\n\n| need | use |\n|---|---|\n| entity with identity and lifecycle | class |\n| immutable value, DTO, event | record |\n| a fixed set of named values with behaviour | enum |",
+  "quiz": [
+    {
+      "prompt": "What does `new Money(1, \"EUR\").equals(new Money(1, \"EUR\"))` return for a record?",
+      "choices": [
+        "false",
+        "true",
+        "It does not compile",
+        "Depends on hashCode"
+      ],
+      "answer": 1,
+      "explanation": "Records generate equals and hashCode over all their components."
+    },
+    {
+      "prompt": "What is the accessor for the `cents` component of `record Money(long cents, String currency)`?",
+      "choices": [
+        "getCents()",
+        "cents",
+        "Money.cents(money)",
+        "cents()"
+      ],
+      "answer": 3,
+      "explanation": "Record accessors are named exactly like the components."
+    },
+    {
+      "prompt": "Where does validation for a record usually go?",
+      "choices": [
+        "In a compact canonical constructor",
+        "In a setter",
+        "In toString",
+        "Records cannot validate"
+      ],
+      "answer": 0,
+      "explanation": "The compact constructor runs before the fields are assigned and can throw for invalid input."
+    },
+    {
+      "prompt": "What does `Status.valueOf(\"paid\")` do when the constant is `PAID`?",
+      "choices": [
+        "Returns PAID",
+        "Returns null",
+        "Throws IllegalArgumentException",
+        "Returns the first constant"
+      ],
+      "answer": 2,
+      "explanation": "valueOf matches the exact constant name."
+    },
+    {
+      "prompt": "Why should enums NOT be persisted by ordinal?",
+      "choices": [
+        "Ordinals are slow",
+        "Reordering or inserting constants changes the ordinals and silently corrupts stored data",
+        "Ordinals are not unique",
+        "Databases reject them"
+      ],
+      "answer": 1,
+      "explanation": "Store the name or an explicit code that never changes."
+    },
+    {
+      "prompt": "A class returns its private `List` field directly from a getter. What is the risk?",
+      "choices": [
+        "Callers can modify the internal list and bypass the class's rules",
+        "None",
+        "It is slow",
+        "It does not compile"
+      ],
+      "answer": 0,
+      "explanation": "Return List.copyOf or an unmodifiable view to keep invariants intact."
+    },
+    {
+      "prompt": "What does `final` on a field holding a List guarantee?",
+      "choices": [
+        "The list contents never change",
+        "The list is thread-safe",
+        "Nothing",
+        "The field always refers to the same list object"
+      ],
+      "answer": 3,
+      "explanation": "final fixes the reference, not the referenced object."
+    },
+    {
+      "prompt": "How should enum constants be compared?",
+      "choices": [
+        "With equals only",
+        "With compareTo",
+        "With == (each constant is a singleton)",
+        "By ordinal"
+      ],
+      "answer": 2,
+      "explanation": "== is safe and null-friendly on the left side for enums."
+    },
+    {
+      "prompt": "Can a record extend another class?",
+      "choices": [
+        "No: records implicitly extend java.lang.Record (they can implement interfaces)",
+        "Yes",
+        "Only abstract classes",
+        "Only other records"
+      ],
+      "answer": 0,
+      "explanation": "Records may implement interfaces but cannot extend classes."
+    },
+    {
+      "prompt": "Which type fits an immutable DTO returned by an API?",
+      "choices": [
+        "An enum",
+        "A record",
+        "A class with public mutable fields",
+        "A static nested singleton"
+      ],
+      "answer": 1,
+      "explanation": "Records are concise, immutable and have value semantics."
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "What does a record generate?",
+      "back": "Private final fields, a canonical constructor, accessors named after the components, and equals, hashCode and toString over all components."
+    },
+    {
+      "front": "What is a compact constructor?",
+      "back": "A record constructor without a parameter list, used to validate or normalise components before they are assigned."
+    },
+    {
+      "front": "final field versus immutable object",
+      "back": "final stops the field from being reassigned; the object it refers to can still change unless it is immutable itself."
+    },
+    {
+      "front": "How should a class expose an internal collection?",
+      "back": "As a copy or an unmodifiable view, with methods that enforce the rules for changing it."
+    },
+    {
+      "front": "What can enums contain?",
+      "back": "Fields, constructors and methods, even per-constant method bodies; each constant is a singleton instance."
+    },
+    {
+      "front": "Why never persist enum ordinals?",
+      "back": "Adding or reordering constants changes the numbers and silently reinterprets stored rows."
+    },
+    {
+      "front": "EnumMap and EnumSet",
+      "back": "Compact, fast collections keyed by enum constants that iterate in declaration order."
+    },
+    {
+      "front": "Class, record or enum?",
+      "back": "Class for entities with identity and lifecycle, record for immutable values and DTOs, enum for a fixed set of named values."
+    }
+  ],
+  "drills": [
+    {
+      "slug": "01-order-status-transitions",
+      "title": "An enum that guards its own transitions",
+      "difficulty": 2,
+      "skills": [
+        "enums with behaviour",
+        "EnumSet"
+      ],
+      "instructions": "**Interview prompt.** \"Support agents keep moving shipped orders back to draft. Put the allowed status transitions in the type itself.\"\n\n**Why it matters.** Enums are classes: a constant can carry data and behaviour, so the state machine lives in one place instead of in every service method.\n\n**Your task.** Complete the nested `enum Status { DRAFT, PLACED, PAID, SHIPPED, CANCELLED }`:\n- `boolean canMoveTo(Status target)`: DRAFT → PLACED; PLACED → PAID; PAID → SHIPPED; any of DRAFT, PLACED or PAID → CANCELLED; nothing else (in particular no transition out of SHIPPED or CANCELLED, and no \"transition\" to the same status)\n- `Status moveTo(Status target)` returns `target` when allowed and throws `IllegalStateException` otherwise\n- `static Status parse(String code)` accepts a status name in any letter case with surrounding whitespace (\"  paid \" → PAID) and throws `IllegalArgumentException` for anything else (including null)\n\n**Worked example.** `Status.PAID.canMoveTo(Status.SHIPPED)` is true; `Status.SHIPPED.moveTo(Status.DRAFT)` throws.",
+      "starter": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · enum state machine★★☆\n//  concepts: enum methods · switch on this · Locale.ROOT\n// ─────────────────────────────────────────────────────────────────────────\n\nimport static bootcamp.Check.*;\n\nimport java.util.*;\n\nclass Exercise {\n\n    enum Status {\n        DRAFT, PLACED, PAID, SHIPPED, CANCELLED;\n\n        /** Whether this status may change to target. */\n        boolean canMoveTo(Status target) {\n            throw new UnsupportedOperationException(\"TODO: the allowed transitions\");\n        }\n\n        /** target when allowed, otherwise IllegalStateException. */\n        Status moveTo(Status target) {\n            throw new UnsupportedOperationException(\"TODO: guard the move\");\n        }\n\n        /** A status name in any case, surrounding whitespace allowed. */\n        static Status parse(String code) {\n            throw new UnsupportedOperationException(\"TODO: normalise, then valueOf\");\n        }\n    }\n\n    // ─── tests ───────────────────────────────────────────────────────────\n    public static void main(String[] args) {\n        test(\"the happy path is allowed\", () -> ok(Status.DRAFT.canMoveTo(Status.PLACED) && Status.PLACED.canMoveTo(Status.PAID) && Status.PAID.canMoveTo(Status.SHIPPED), \"draft, placed, paid, shipped\"));\n        test(\"cancel is allowed only before shipping\", () -> ok(Status.PAID.canMoveTo(Status.CANCELLED) && !Status.SHIPPED.canMoveTo(Status.CANCELLED), \"cancel rules\"));\n        test(\"nothing leaves a final status, and no self-moves (boundary)\", () -> ok(!Status.SHIPPED.canMoveTo(Status.DRAFT) && !Status.CANCELLED.canMoveTo(Status.PLACED) && !Status.PAID.canMoveTo(Status.PAID), \"final states\"));\n        test(\"moveTo returns the target or throws\", () -> { eq(Status.PLACED.moveTo(Status.PAID), Status.PAID); raises(IllegalStateException.class, () -> Status.SHIPPED.moveTo(Status.DRAFT)); });\n        test(\"parse ignores case and whitespace\", () -> eq(Status.parse(\"  paid \"), Status.PAID));\n        test(\"parse rejects unknown and null codes\", () -> { raises(IllegalArgumentException.class, () -> Status.parse(\"refunded\")); raises(IllegalArgumentException.class, () -> Status.parse(null)); });\n        System.exit(report());\n    }\n    // ─── end tests ───────────────────────────────────────────────────────\n}\n",
+      "solution": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · enum state machine★★☆\n//  concepts: enum methods · switch on this · Locale.ROOT\n// ─────────────────────────────────────────────────────────────────────────\n\nimport static bootcamp.Check.*;\n\nimport java.util.*;\n\nclass Exercise {\n\n    enum Status {\n        DRAFT, PLACED, PAID, SHIPPED, CANCELLED;\n\n        /** Whether this status may change to target. */\n        boolean canMoveTo(Status target) {\n            return switch (this) {\n                case DRAFT -> target == PLACED || target == CANCELLED;\n                case PLACED -> target == PAID || target == CANCELLED;\n                case PAID -> target == SHIPPED || target == CANCELLED;\n                case SHIPPED, CANCELLED -> false;\n            };\n        }\n\n        /** target when allowed, otherwise IllegalStateException. */\n        Status moveTo(Status target) {\n            if (!canMoveTo(target)) throw new IllegalStateException(this + \" cannot move to \" + target);\n            return target;\n        }\n\n        /** A status name in any case, surrounding whitespace allowed. */\n        static Status parse(String code) {\n            if (code == null) throw new IllegalArgumentException(\"status is required\");\n            return Status.valueOf(code.strip().toUpperCase(Locale.ROOT));\n        }\n    }\n\n    // ─── tests ───────────────────────────────────────────────────────────\n    public static void main(String[] args) {\n        test(\"the happy path is allowed\", () -> ok(Status.DRAFT.canMoveTo(Status.PLACED) && Status.PLACED.canMoveTo(Status.PAID) && Status.PAID.canMoveTo(Status.SHIPPED), \"draft, placed, paid, shipped\"));\n        test(\"cancel is allowed only before shipping\", () -> ok(Status.PAID.canMoveTo(Status.CANCELLED) && !Status.SHIPPED.canMoveTo(Status.CANCELLED), \"cancel rules\"));\n        test(\"nothing leaves a final status, and no self-moves (boundary)\", () -> ok(!Status.SHIPPED.canMoveTo(Status.DRAFT) && !Status.CANCELLED.canMoveTo(Status.PLACED) && !Status.PAID.canMoveTo(Status.PAID), \"final states\"));\n        test(\"moveTo returns the target or throws\", () -> { eq(Status.PLACED.moveTo(Status.PAID), Status.PAID); raises(IllegalStateException.class, () -> Status.SHIPPED.moveTo(Status.DRAFT)); });\n        test(\"parse ignores case and whitespace\", () -> eq(Status.parse(\"  paid \"), Status.PAID));\n        test(\"parse rejects unknown and null codes\", () -> { raises(IllegalArgumentException.class, () -> Status.parse(\"refunded\")); raises(IllegalArgumentException.class, () -> Status.parse(null)); });\n        System.exit(report());\n    }\n    // ─── end tests ───────────────────────────────────────────────────────\n}\n",
+      "explanation": "Give each constant its allowed targets, computed from the rules, and let the methods consult them:\n\n```java\nboolean canMoveTo(Status target) {\n    return switch (this) {\n        case DRAFT -> target == PLACED || target == CANCELLED;\n        case PLACED -> target == PAID || target == CANCELLED;\n        case PAID -> target == SHIPPED || target == CANCELLED;\n        case SHIPPED, CANCELLED -> false;\n    };\n}\n```\n\n`parse` normalises with `strip()` and `toUpperCase(Locale.ROOT)` before `valueOf`, so a Turkish-locale server still parses \"paid\".",
+      "hints": [
+        "The rules depend on the current constant, so the method can switch on this.",
+        "In canMoveTo use a switch over this with one arm per status; moveTo throws IllegalStateException when canMoveTo is false; parse strips, upper-cases with Locale.ROOT and calls valueOf, rejecting null first.",
+        "Let each status answer which targets are legal from where it stands, refuse illegal moves with an exception, and for parsing tidy the text and match the constant name case-insensitively, rejecting a missing value."
+      ]
+    }
+  ]
+}

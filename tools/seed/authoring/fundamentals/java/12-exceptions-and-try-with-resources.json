@@ -1,0 +1,175 @@
+{
+  "format": "fundamentals-authoring@1",
+  "track": "java",
+  "topic": "12-exceptions-and-try-with-resources",
+  "title": "Exceptions & try-with-resources",
+  "level": "intermediate",
+  "summary": "Checked versus unchecked exceptions, try-with-resources and its close order, suppressed exceptions, finally and why never to return from it, exception chaining with causes, multi-catch and translating low-level errors.",
+  "lesson": "## Checked and unchecked\n\n- **Checked** exceptions (`IOException`, `SQLException`, anything extending `Exception` but not `RuntimeException`) must be caught or declared with `throws`. They model recoverable conditions the caller should consider.\n- **Unchecked** exceptions (`RuntimeException` and subclasses: `IllegalArgumentException`, `IllegalStateException`, `NullPointerException`) need no declaration. They usually signal programming errors or violated preconditions.\n- **Errors** (`OutOfMemoryError`, `StackOverflowError`) are not meant to be caught.\n\nModern frameworks (Spring, JPA) mostly use unchecked exceptions; wrap checked ones at the boundary when the caller cannot do anything specific with them: `throw new UncheckedIOException(\"reading \" + path, e)`.\n\n## try-with-resources\n\n```java\ntry (var conn = dataSource.getConnection();\n     var stmt = conn.prepareStatement(sql)) {\n    ...\n}   // stmt.close() runs first, then conn.close(): reverse order of declaration\n```\n\nAnything implementing `AutoCloseable` can be declared there, and `close()` runs whether the block completes or throws. If the body throws AND `close()` also throws, the body's exception propagates and the close failure is attached as a **suppressed** exception (`e.getSuppressed()`), so the original cause is not lost. This is why try-with-resources beats a hand-written `finally { r.close(); }`, where a failing close would hide the real error.\n\n## finally\n\n`finally` runs after the try (and catch) on every path. Never `return` from `finally`: it overrides the try's return value and silently discards any exception being thrown:\n\n```java\nstatic int f() { try { return 1; } finally { return 2; } }   // returns 2\n```\n\n## Chaining: keep the cause\n\n```java\ntry {\n    return repository.load(id);\n} catch (SQLException e) {\n    throw new RepositoryException(\"loading order \" + id, e);   // e becomes getCause()\n}\n```\n\nAlways pass the original exception as the cause. Logging frameworks print the whole chain (\"Caused by: ...\"), which is usually where the real answer is.\n\n## Catching well\n\n- Catch specific types; order from most specific to most general (a superclass first is a compile error for the unreachable subclass catch).\n- **Multi-catch**: `catch (NumberFormatException | DateTimeParseException e)` for identical handling.\n- Do not catch `Exception` to ignore it. An empty catch block turns failures into silent wrong results.\n- Do not use exceptions for normal control flow (validating every row of an import by catching NumberFormatException is slow; check first or use a parse method that reports failure).\n\n## Custom exceptions\n\n`public class OrderNotFoundException extends RuntimeException` with a constructor taking the message (and a cause). Domain exceptions let one global handler (`@ControllerAdvice`, topic 18) map them to HTTP responses consistently.",
+  "quiz": [
+    {
+      "prompt": "Which of these is a CHECKED exception?",
+      "choices": [
+        "IllegalArgumentException",
+        "IOException",
+        "NullPointerException",
+        "IllegalStateException"
+      ],
+      "answer": 1,
+      "explanation": "IOException extends Exception but not RuntimeException, so it must be caught or declared."
+    },
+    {
+      "prompt": "With `try (var a = open(\"a\"); var b = open(\"b\")) { ... }`, in which order are they closed?",
+      "choices": [
+        "a then b",
+        "In parallel",
+        "Only b",
+        "b then a"
+      ],
+      "answer": 3,
+      "explanation": "Resources close in reverse order of declaration."
+    },
+    {
+      "prompt": "The try body throws, and then close() also throws. What propagates?",
+      "choices": [
+        "The body exception, with the close exception attached as suppressed",
+        "The close exception; the body exception is lost",
+        "Both as a list",
+        "Nothing"
+      ],
+      "answer": 0,
+      "explanation": "try-with-resources keeps the original failure and records the other in getSuppressed()."
+    },
+    {
+      "prompt": "What does `try { return 1; } finally { return 2; }` return?",
+      "choices": [
+        "1",
+        "It does not compile",
+        "2",
+        "It throws"
+      ],
+      "answer": 2,
+      "explanation": "A return in finally overrides the try's return and would even swallow an exception."
+    },
+    {
+      "prompt": "How do you translate an SQLException without losing it?",
+      "choices": [
+        "throw new RepositoryException(e.getMessage())",
+        "throw new RepositoryException(\"loading order\", e)",
+        "log it and return null",
+        "catch and ignore"
+      ],
+      "answer": 1,
+      "explanation": "Passing it as the cause keeps the full chain for logs."
+    },
+    {
+      "prompt": "Which syntax handles two exception types with one block?",
+      "choices": [
+        "catch (A | B e)",
+        "catch (A, B e)",
+        "catch (A e) catch (B e)",
+        "catch (A && B e)"
+      ],
+      "answer": 0,
+      "explanation": "Multi-catch uses a vertical bar between the types."
+    },
+    {
+      "prompt": "Why is an empty `catch (Exception e) {}` dangerous?",
+      "choices": [
+        "It does not compile",
+        "It is slow",
+        "It rethrows",
+        "It hides every failure, so bugs become silent wrong results"
+      ],
+      "answer": 3,
+      "explanation": "Handle what you can and let the rest reach a global handler."
+    },
+    {
+      "prompt": "Which errors should application code generally NOT catch?",
+      "choices": [
+        "IllegalArgumentException",
+        "IOException",
+        "Errors like OutOfMemoryError and StackOverflowError",
+        "Custom domain exceptions"
+      ],
+      "answer": 2,
+      "explanation": "Errors signal problems the application cannot reliably recover from."
+    },
+    {
+      "prompt": "What can be declared in a try-with-resources header?",
+      "choices": [
+        "Anything implementing AutoCloseable",
+        "Any object",
+        "Only streams",
+        "Only database connections"
+      ],
+      "answer": 0,
+      "explanation": "Implement AutoCloseable on your own resources to get the same guarantees."
+    },
+    {
+      "prompt": "Why do Spring and JPA mostly use unchecked exceptions?",
+      "choices": [
+        "They are faster",
+        "Callers usually cannot recover locally, so forcing catch-or-declare everywhere adds noise",
+        "Checked exceptions are deprecated",
+        "For thread safety"
+      ],
+      "answer": 1,
+      "explanation": "Translation to unchecked exceptions at boundaries is a common design."
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "Checked versus unchecked exceptions",
+      "back": "Checked ones must be caught or declared and model recoverable situations; unchecked ones extend RuntimeException and usually mean a bug or violated precondition."
+    },
+    {
+      "front": "Close order in try-with-resources",
+      "back": "Resources close in reverse order of declaration, whether the block succeeds or throws."
+    },
+    {
+      "front": "What are suppressed exceptions?",
+      "back": "Failures from close calls attached to the primary exception, so the original error is not hidden by a cleanup failure."
+    },
+    {
+      "front": "Why never return from finally?",
+      "back": "It replaces the try's result and silently discards an exception in flight."
+    },
+    {
+      "front": "How do you wrap an exception correctly?",
+      "back": "Throw a new, more meaningful exception and pass the original as its cause."
+    },
+    {
+      "front": "Multi-catch syntax",
+      "back": "One catch clause listing types separated by a vertical bar, when they need identical handling."
+    },
+    {
+      "front": "Why are domain exceptions useful in web apps?",
+      "back": "A single global handler can map each type to a consistent HTTP response."
+    },
+    {
+      "front": "Exceptions as control flow",
+      "back": "Avoid them for expected outcomes such as invalid rows in an import; check first or use a method that reports failure."
+    }
+  ],
+  "drills": [
+    {
+      "slug": "01-sum-amounts-safely",
+      "title": "Read, translate failures and always close",
+      "difficulty": 2,
+      "skills": [
+        "try-with-resources",
+        "exception chaining"
+      ],
+      "instructions": "**Interview prompt.** \"The settlement importer leaks file handles when a line is bad, reports `NumberFormatException: For input string` without a line number, and wraps IO errors in a way that loses the cause.\"\n\n**Why it matters.** try-with-resources guarantees the close; translating exceptions with a cause and context makes failures actionable.\n\n**Your task.** Implement `static long sumAmounts(Supplier<BufferedReader> open)`:\n- open the reader with try-with-resources and sum one amount in cents per line (`Long.parseLong` of the trimmed line); blank lines are skipped\n- a line that is not a number: throw `IllegalArgumentException` whose message contains `line N` (1-based) and whose cause is the `NumberFormatException`\n- an `IOException` while reading: throw `UncheckedIOException` with that IOException as its cause\n- the reader is closed on every path\n\n**Worked example.** Lines `100`, empty, `250` sum to 350; `100`, `abc` fails with a message mentioning line 2.",
+      "starter": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · read and translate safely★★☆\n//  concepts: try-with-resources · causes · UncheckedIOException\n// ─────────────────────────────────────────────────────────────────────────\n\nimport static bootcamp.Check.*;\n\nimport java.io.*;\nimport java.util.*;\nimport java.util.function.*;\n\nclass Exercise {\n\n    /** Sum of one cents amount per line; translated failures; reader always closed. */\n    static long sumAmounts(Supplier<BufferedReader> open) {\n        throw new UnsupportedOperationException(\"TODO: try-with-resources, a line counter, translated exceptions\");\n    }\n\n    static final class Tracking extends BufferedReader {\n        boolean closed;\n        final int failAfter;\n        int reads;\n        Tracking(String text, int failAfter) { super(new StringReader(text)); this.failAfter = failAfter; }\n        @Override public String readLine() throws IOException {\n            if (reads++ >= failAfter) throw new IOException(\"disk read failed\");\n            return super.readLine();\n        }\n        @Override public void close() throws IOException { closed = true; super.close(); }\n    }\n\n    // ─── tests ───────────────────────────────────────────────────────────\n    public static void main(String[] args) {\n        test(\"sums lines and closes the reader\", () -> {\n            var r = new Tracking(\"100\\n\\n 250 \\n\", Integer.MAX_VALUE);\n            eq(sumAmounts(() -> r), 350L);\n            ok(r.closed, \"reader not closed\");\n        });\n        test(\"a bad line names its number and keeps the cause\", () -> {\n            var r = new Tracking(\"100\\nabc\\n\", Integer.MAX_VALUE);\n            var e = raises(IllegalArgumentException.class, () -> sumAmounts(() -> r));\n            ok(e.getMessage().contains(\"line 2\") && e.getCause() instanceof NumberFormatException, \"message and cause\");\n            ok(r.closed, \"reader not closed after a bad line\");\n        });\n        test(\"an IO failure is wrapped with its cause\", () -> {\n            var r = new Tracking(\"1\\n2\\n\", 1);\n            var e = raises(UncheckedIOException.class, () -> sumAmounts(() -> r));\n            ok(e.getCause() != null && e.getCause().getMessage().equals(\"disk read failed\"), \"cause kept\");\n            ok(r.closed, \"reader not closed after an IO failure\");\n        });\n        test(\"an empty file sums to zero (boundary)\", () -> eq(sumAmounts(() -> new Tracking(\"\", Integer.MAX_VALUE)), 0L));\n        test(\"negative amounts are allowed\", () -> eq(sumAmounts(() -> new Tracking(\"-50\\n20\\n\", Integer.MAX_VALUE)), -30L));\n        System.exit(report());\n    }\n    // ─── end tests ───────────────────────────────────────────────────────\n}\n",
+      "solution": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · read and translate safely★★☆\n//  concepts: try-with-resources · causes · UncheckedIOException\n// ─────────────────────────────────────────────────────────────────────────\n\nimport static bootcamp.Check.*;\n\nimport java.io.*;\nimport java.util.*;\nimport java.util.function.*;\n\nclass Exercise {\n\n    /** Sum of one cents amount per line; translated failures; reader always closed. */\n    static long sumAmounts(Supplier<BufferedReader> open) {\n        try (BufferedReader r = open.get()) {\n            long total = 0;\n            int lineNo = 0;\n            for (String line = r.readLine(); line != null; line = r.readLine()) {\n                lineNo++;\n                if (line.isBlank()) continue;\n                try {\n                    total += Long.parseLong(line.strip());\n                } catch (NumberFormatException e) {\n                    throw new IllegalArgumentException(\"line \" + lineNo + \": not an amount\", e);\n                }\n            }\n            return total;\n        } catch (IOException e) {\n            throw new UncheckedIOException(e);\n        }\n    }\n\n    static final class Tracking extends BufferedReader {\n        boolean closed;\n        final int failAfter;\n        int reads;\n        Tracking(String text, int failAfter) { super(new StringReader(text)); this.failAfter = failAfter; }\n        @Override public String readLine() throws IOException {\n            if (reads++ >= failAfter) throw new IOException(\"disk read failed\");\n            return super.readLine();\n        }\n        @Override public void close() throws IOException { closed = true; super.close(); }\n    }\n\n    // ─── tests ───────────────────────────────────────────────────────────\n    public static void main(String[] args) {\n        test(\"sums lines and closes the reader\", () -> {\n            var r = new Tracking(\"100\\n\\n 250 \\n\", Integer.MAX_VALUE);\n            eq(sumAmounts(() -> r), 350L);\n            ok(r.closed, \"reader not closed\");\n        });\n        test(\"a bad line names its number and keeps the cause\", () -> {\n            var r = new Tracking(\"100\\nabc\\n\", Integer.MAX_VALUE);\n            var e = raises(IllegalArgumentException.class, () -> sumAmounts(() -> r));\n            ok(e.getMessage().contains(\"line 2\") && e.getCause() instanceof NumberFormatException, \"message and cause\");\n            ok(r.closed, \"reader not closed after a bad line\");\n        });\n        test(\"an IO failure is wrapped with its cause\", () -> {\n            var r = new Tracking(\"1\\n2\\n\", 1);\n            var e = raises(UncheckedIOException.class, () -> sumAmounts(() -> r));\n            ok(e.getCause() != null && e.getCause().getMessage().equals(\"disk read failed\"), \"cause kept\");\n            ok(r.closed, \"reader not closed after an IO failure\");\n        });\n        test(\"an empty file sums to zero (boundary)\", () -> eq(sumAmounts(() -> new Tracking(\"\", Integer.MAX_VALUE)), 0L));\n        test(\"negative amounts are allowed\", () -> eq(sumAmounts(() -> new Tracking(\"-50\\n20\\n\", Integer.MAX_VALUE)), -30L));\n        System.exit(report());\n    }\n    // ─── end tests ───────────────────────────────────────────────────────\n}\n",
+      "explanation": "Declare the reader in the try header and translate inside it:\n\n```java\ntry (BufferedReader r = open.get()) {\n    long total = 0;\n    int lineNo = 0;\n    for (String line = r.readLine(); line != null; line = r.readLine()) {\n        lineNo++;\n        if (line.isBlank()) continue;\n        try {\n            total += Long.parseLong(line.strip());\n        } catch (NumberFormatException e) {\n            throw new IllegalArgumentException(\"line \" + lineNo + \": not an amount\", e);\n        }\n    }\n    return total;\n} catch (IOException e) {\n    throw new UncheckedIOException(e);\n}\n```\n\nThe reader closes before the outer catch runs, on success and on both failure paths. Passing `e` as the cause keeps the original exception for the logs.",
+      "hints": [
+        "Declaring the reader in the try header closes it no matter how the method ends.",
+        "Use try (BufferedReader r = open.get()) with a readLine loop and a line counter; catch NumberFormatException per line and rethrow IllegalArgumentException with the cause; catch IOException outside and wrap it in UncheckedIOException.",
+        "Open the reader in a way that guarantees it is closed, count lines as you read, skip blank ones, turn a bad number into an argument error that names the line and keeps the original failure, and turn a read failure into an unchecked one."
+      ]
+    }
+  ]
+}

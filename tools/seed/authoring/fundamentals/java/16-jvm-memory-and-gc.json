@@ -1,0 +1,175 @@
+{
+  "format": "fundamentals-authoring@1",
+  "track": "java",
+  "topic": "16-jvm-memory-and-gc",
+  "title": "JVM memory & garbage collection",
+  "level": "advanced",
+  "summary": "Heap versus stack, generational G1 collection, OutOfMemoryError versus StackOverflowError, classic memory leaks (static collections, unbounded caches, listeners), bounded caches, and the heap settings to know.",
+  "lesson": "## Stack and heap\n\n- Each thread has a **stack** of frames holding local variables and primitives; references on the stack point into the heap. Deep or infinite recursion exhausts it: `StackOverflowError`.\n- **Objects** live on the shared **heap**, managed by the garbage collector. When live objects no longer fit: `OutOfMemoryError: Java heap space`.\n\nBoth are `Error`s: do not catch them to \"recover\"; fix the recursion or the leak.\n\n## Generational garbage collection\n\nMost objects die young. The heap is split into a **young generation** (new objects, collected often and cheaply) and an **old generation** (survivors, collected less often). Since Java 9 the default collector is **G1** (Garbage-First), which splits the heap into regions and aims for a pause-time target; on Java 17 you will see \"G1 Young Generation\" and \"G1 Old Generation\" collectors. ZGC and Shenandoah offer very short pauses for large heaps.\n\nAn object can be collected once nothing **reachable** refers to it. Reachability starts from GC roots: thread stacks, static fields, JNI references. That is why most Java leaks are references you forgot you were holding.\n\n## Classic leaks\n\n- **Static collections that only grow**: `static Map<String, Session> SESSIONS` that is added to and never cleaned. Statics live as long as the class (usually the whole app).\n- **Unbounded caches**: a `HashMap` cache keyed by request parameters grows until the heap is full. Bound it (size and/or time): a `LinkedHashMap` with `removeEldestEntry` for simple LRU, Caffeine in production.\n- **Listeners and callbacks** registered on long-lived objects and never removed.\n- **ThreadLocals** in pooled threads not cleared after each request.\n- **Huge result sets**: loading a million rows into a List instead of streaming or paging.\n\n## Diagnosing\n\n- `-Xmx2g` / `-Xms` set the maximum and initial heap; in containers the JVM sizes the heap from the container's memory limit (`-XX:MaxRAMPercentage` tunes it).\n- `-XX:+HeapDumpOnOutOfMemoryError` writes a heap dump when OOM happens; open it in Eclipse MAT or VisualVM and look at the largest \"retained size\" dominators.\n- `jcmd <pid> GC.heap_info`, Java Flight Recorder, and GC logs (`-Xlog:gc`) show how full the heap is and how long pauses take.\n\n## A bounded LRU cache in a few lines\n\n```java\nstatic <K, V> Map<K, V> lru(int max) {\n    return new LinkedHashMap<>(16, 0.75f, true) {          // true = access order\n        @Override protected boolean removeEldestEntry(Map.Entry<K, V> eldest) { return size() > max; }\n    };\n}\n```\n\nIt is not thread-safe: wrap it with `Collections.synchronizedMap` or use Caffeine for concurrent access.\n\n## Reduce garbage where it matters\n\nStreaming instead of materialising, `StringBuilder` in loops, primitive streams (`mapToLong`), and avoiding needless boxing reduce GC pressure. As always: measure first; in typical CRUD services the database dominates.",
+  "quiz": [
+    {
+      "prompt": "Infinite recursion in a method produces...",
+      "choices": [
+        "OutOfMemoryError: Java heap space",
+        "StackOverflowError",
+        "NullPointerException",
+        "An infinite loop with no error"
+      ],
+      "answer": 1,
+      "explanation": "Each call adds a stack frame until the thread's stack is exhausted."
+    },
+    {
+      "prompt": "Where are objects created with `new` stored?",
+      "choices": [
+        "On the calling thread's stack",
+        "In the class file",
+        "In CPU registers",
+        "On the shared heap, managed by the garbage collector"
+      ],
+      "answer": 3,
+      "explanation": "The stack holds frames, locals and references; objects live on the heap."
+    },
+    {
+      "prompt": "What is the default garbage collector on Java 17?",
+      "choices": [
+        "G1 (Garbage-First)",
+        "Serial",
+        "Parallel",
+        "CMS"
+      ],
+      "answer": 0,
+      "explanation": "G1 has been the default since Java 9; CMS was removed in Java 14."
+    },
+    {
+      "prompt": "Why can a `static Map` cache cause an OutOfMemoryError?",
+      "choices": [
+        "Static maps are slower",
+        "Maps cannot hold many entries",
+        "Statics stay reachable for the life of the app, so entries that are never removed accumulate forever",
+        "Static fields are not collected at all"
+      ],
+      "answer": 2,
+      "explanation": "Bound caches by size or time, or use a cache library."
+    },
+    {
+      "prompt": "What does `new LinkedHashMap<>(16, 0.75f, true)` with `removeEldestEntry` returning `size() > max` give you?",
+      "choices": [
+        "A thread-safe cache",
+        "A size-bounded LRU cache (access order)",
+        "A sorted map",
+        "An immutable map"
+      ],
+      "answer": 1,
+      "explanation": "Access order moves read entries to the end; the eldest is evicted when over the limit."
+    },
+    {
+      "prompt": "When is an object eligible for garbage collection?",
+      "choices": [
+        "When it is no longer reachable from any GC root",
+        "When it goes out of scope in its constructor",
+        "After 60 seconds",
+        "When System.gc() is called"
+      ],
+      "answer": 0,
+      "explanation": "Reachability from stacks, statics and other roots decides it."
+    },
+    {
+      "prompt": "Which JVM flag writes a heap dump when the heap runs out?",
+      "choices": [
+        "-Xss",
+        "-verbose",
+        "-Xmx",
+        "-XX:+HeapDumpOnOutOfMemoryError"
+      ],
+      "answer": 3,
+      "explanation": "Analyse the dump to find what retains the most memory."
+    },
+    {
+      "prompt": "Should application code catch `OutOfMemoryError` to keep going?",
+      "choices": [
+        "Yes, always",
+        "Only in loops",
+        "No: it is an Error; fix the leak or size the heap",
+        "Only in tests"
+      ],
+      "answer": 2,
+      "explanation": "After an OOM the JVM state may be inconsistent."
+    },
+    {
+      "prompt": "Why do most objects get collected cheaply in the young generation?",
+      "choices": [
+        "Most objects die young, so collecting the young generation frees a lot quickly",
+        "They are small",
+        "Young objects are not tracked",
+        "They are on the stack"
+      ],
+      "answer": 0,
+      "explanation": "The generational hypothesis is why young collections are frequent and fast."
+    },
+    {
+      "prompt": "A ThreadLocal set during a request on a pooled thread is never cleared. What can happen?",
+      "choices": [
+        "Nothing",
+        "The value leaks into later requests on the same thread and stays reachable",
+        "It is cleared automatically",
+        "The thread dies"
+      ],
+      "answer": 1,
+      "explanation": "Always remove ThreadLocal values in a finally block or a filter."
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "Stack versus heap in the JVM",
+      "back": "Each thread's stack holds frames, primitives and references; objects live on the shared heap cleaned by the GC."
+    },
+    {
+      "front": "StackOverflowError versus OutOfMemoryError",
+      "back": "The first comes from too-deep recursion exhausting a thread's stack; the second from live objects no longer fitting in the heap."
+    },
+    {
+      "front": "What decides whether an object can be collected?",
+      "back": "Whether it is still reachable from a GC root such as a thread stack or a static field."
+    },
+    {
+      "front": "Four classic Java memory leaks",
+      "back": "Ever-growing static collections, unbounded caches, listeners never removed, and ThreadLocals left set on pooled threads."
+    },
+    {
+      "front": "How do you build a simple LRU cache?",
+      "back": "A LinkedHashMap in access order whose removeEldestEntry returns true when the size exceeds the limit."
+    },
+    {
+      "front": "Default collector on Java 17",
+      "back": "G1, a region-based generational collector aiming at a pause-time target."
+    },
+    {
+      "front": "How do you investigate an OutOfMemoryError?",
+      "back": "Enable heap dumps on OOM and inspect the objects with the largest retained size in a tool like Eclipse MAT."
+    },
+    {
+      "front": "How does the JVM size the heap in a container?",
+      "back": "From the container's memory limit, adjustable with MaxRAMPercentage, or explicitly with -Xmx."
+    }
+  ],
+  "drills": [
+    {
+      "slug": "01-bounded-lru-cache",
+      "title": "Replace a leaking cache with a bounded LRU",
+      "difficulty": 2,
+      "skills": [
+        "LinkedHashMap access order",
+        "bounded caches"
+      ],
+      "instructions": "**Interview prompt.** \"Our exchange-rate service caches lookups in a static HashMap keyed by (currency, date). After two weeks in production the heap is full. Bound it.\"\n\n**Why it matters.** An unbounded cache is a memory leak with good intentions. A LinkedHashMap in access order with `removeEldestEntry` is a correct size-bounded LRU in a few lines.\n\n**Your task.** Implement `static <K, V> Map<K, V> lruCache(int maxEntries)`:\n- the returned map never holds more than `maxEntries` entries\n- when a put would exceed the limit, the LEAST RECENTLY USED entry is evicted\n- `get` and `put` both count as uses (a read moves the entry to most-recent); `containsKey` does not\n- iteration order is least recently used first\n- `maxEntries` below 1 throws `IllegalArgumentException`\n\n**Worked example.** Max 2: put a, put b, get a, put c: b is evicted and the keys are `[a, c]`.",
+      "starter": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · bounded LRU cache★★☆\n//  concepts: LinkedHashMap access order · removeEldestEntry\n// ─────────────────────────────────────────────────────────────────────────\n\nimport static bootcamp.Check.*;\n\nimport java.util.*;\n\nclass Exercise {\n\n    /** A size-bounded map that evicts the least recently used entry. */\n    static <K, V> Map<K, V> lruCache(int maxEntries) {\n        throw new UnsupportedOperationException(\"TODO: LinkedHashMap in access order + removeEldestEntry\");\n    }\n\n    // ─── tests ───────────────────────────────────────────────────────────\n    public static void main(String[] args) {\n        test(\"a read refreshes an entry\", () -> {\n            Map<String, Integer> c = lruCache(2);\n            c.put(\"a\", 1);\n            c.put(\"b\", 2);\n            c.get(\"a\");\n            c.put(\"c\", 3);\n            eq(new ArrayList<>(c.keySet()), List.of(\"a\", \"c\"));\n        });\n        test(\"never more than the limit\", () -> {\n            Map<Integer, Integer> c = lruCache(100);\n            for (int i = 0; i < 10_000; i++) c.put(i, i);\n            eq(c.size(), 100);\n            ok(c.containsKey(9_999) && !c.containsKey(0), \"keeps the newest entries\");\n        });\n        test(\"containsKey does not count as a use\", () -> {\n            Map<String, Integer> c = lruCache(2);\n            c.put(\"a\", 1);\n            c.put(\"b\", 2);\n            c.containsKey(\"a\");\n            c.put(\"c\", 3);\n            ok(!c.containsKey(\"a\"), \"a should have been evicted\");\n        });\n        test(\"a limit of one keeps the latest entry (boundary)\", () -> {\n            Map<String, Integer> c = lruCache(1);\n            c.put(\"a\", 1);\n            c.put(\"b\", 2);\n            eq(c, Map.of(\"b\", 2));\n        });\n        test(\"a limit below one is rejected\", () -> raises(IllegalArgumentException.class, () -> lruCache(0)));\n        System.exit(report());\n    }\n    // ─── end tests ───────────────────────────────────────────────────────\n}\n",
+      "solution": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · bounded LRU cache★★☆\n//  concepts: LinkedHashMap access order · removeEldestEntry\n// ─────────────────────────────────────────────────────────────────────────\n\nimport static bootcamp.Check.*;\n\nimport java.util.*;\n\nclass Exercise {\n\n    /** A size-bounded map that evicts the least recently used entry. */\n    static <K, V> Map<K, V> lruCache(int maxEntries) {\n        if (maxEntries < 1) throw new IllegalArgumentException(\"maxEntries must be >= 1\");\n        return new LinkedHashMap<>(16, 0.75f, true) {\n            @Override\n            protected boolean removeEldestEntry(Map.Entry<K, V> eldest) {\n                return size() > maxEntries;\n            }\n        };\n    }\n\n    // ─── tests ───────────────────────────────────────────────────────────\n    public static void main(String[] args) {\n        test(\"a read refreshes an entry\", () -> {\n            Map<String, Integer> c = lruCache(2);\n            c.put(\"a\", 1);\n            c.put(\"b\", 2);\n            c.get(\"a\");\n            c.put(\"c\", 3);\n            eq(new ArrayList<>(c.keySet()), List.of(\"a\", \"c\"));\n        });\n        test(\"never more than the limit\", () -> {\n            Map<Integer, Integer> c = lruCache(100);\n            for (int i = 0; i < 10_000; i++) c.put(i, i);\n            eq(c.size(), 100);\n            ok(c.containsKey(9_999) && !c.containsKey(0), \"keeps the newest entries\");\n        });\n        test(\"containsKey does not count as a use\", () -> {\n            Map<String, Integer> c = lruCache(2);\n            c.put(\"a\", 1);\n            c.put(\"b\", 2);\n            c.containsKey(\"a\");\n            c.put(\"c\", 3);\n            ok(!c.containsKey(\"a\"), \"a should have been evicted\");\n        });\n        test(\"a limit of one keeps the latest entry (boundary)\", () -> {\n            Map<String, Integer> c = lruCache(1);\n            c.put(\"a\", 1);\n            c.put(\"b\", 2);\n            eq(c, Map.of(\"b\", 2));\n        });\n        test(\"a limit below one is rejected\", () -> raises(IllegalArgumentException.class, () -> lruCache(0)));\n        System.exit(report());\n    }\n    // ─── end tests ───────────────────────────────────────────────────────\n}\n",
+      "explanation": "Use the three-argument constructor with `accessOrder = true` and override `removeEldestEntry`:\n\n```java\nif (maxEntries < 1) throw new IllegalArgumentException(\"maxEntries must be >= 1\");\nreturn new LinkedHashMap<>(16, 0.75f, true) {\n    @Override protected boolean removeEldestEntry(Map.Entry<K, V> eldest) {\n        return size() > maxEntries;\n    }\n};\n```\n\nThe map calls `removeEldestEntry` after each insertion; returning true evicts the head of the list, which in access order is the least recently used entry. With `accessOrder = false` (the default) you would get FIFO eviction, which fails the \"get refreshes\" test.",
+      "hints": [
+        "LinkedHashMap can keep its entries in access order and has a hook that runs after every insertion.",
+        "Create new LinkedHashMap<>(16, 0.75f, true) as an anonymous subclass overriding removeEldestEntry to return size() > maxEntries; validate maxEntries first.",
+        "Use a map that remembers which entries were touched most recently, and tell it to drop its oldest entry whenever adding one pushes it past the limit."
+      ]
+    }
+  ]
+}

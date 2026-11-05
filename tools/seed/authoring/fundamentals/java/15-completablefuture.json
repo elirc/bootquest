@@ -1,0 +1,175 @@
+{
+  "format": "fundamentals-authoring@1",
+  "track": "java",
+  "topic": "15-completablefuture",
+  "title": "CompletableFuture",
+  "level": "advanced",
+  "summary": "supplyAsync and the common pool, thenApply versus thenCompose versus thenCombine, allOf for fan-out, exceptionally and handle for errors, join versus get, and timeouts with orTimeout and completeOnTimeout.",
+  "lesson": "## Composing asynchronous work\n\n```java\nCompletableFuture<Price> price = CompletableFuture.supplyAsync(() -> pricing.quote(sku), ioPool);\nCompletableFuture<Stock> stock = CompletableFuture.supplyAsync(() -> inventory.check(sku), ioPool);\n\nCompletableFuture<Offer> offer = price.thenCombine(stock, Offer::new)   // both results\n    .thenApply(o -> o.withDiscount(rules))                              // transform\n    .orTimeout(2, TimeUnit.SECONDS);                                    // fail if too slow\n```\n\n- `thenApply(f)`: transform the value (like `map`).\n- `thenCompose(f)`: `f` returns another CompletableFuture; flatten it (like `flatMap`): `getUser(id).thenCompose(u -> getOrders(u))`.\n- `thenCombine(other, f)`: wait for two independent futures and merge their results.\n- `thenAccept` / `thenRun`: side effects at the end of a chain.\n\n## Fan-out with allOf\n\n```java\nList<CompletableFuture<Quote>> futures = symbols.stream().map(s -> fetch(s)).toList();   // all started\nCompletableFuture<List<Quote>> all = CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))\n    .thenApply(v -> futures.stream().map(CompletableFuture::join).toList());   // join is safe: all done\n```\n\n`allOf` completes when every future is done (exceptionally if any failed); it has no results of its own, so collect them with `join` afterwards. `anyOf` completes with the first one.\n\n## Errors\n\n- `exceptionally(e -> fallback)` recovers from a failure.\n- `handle((value, error) -> ...)` sees both outcomes.\n- `join()` rethrows a failure wrapped in unchecked `CompletionException`; `get()` wraps it in checked `ExecutionException`. Unwrap with `getCause()` before mapping errors to responses.\n- A chain without an error handler that nobody joins swallows the failure silently.\n\n## Threads\n\n`supplyAsync(task)` without an executor runs on `ForkJoinPool.commonPool()`, which is sized for CPU work and shared with parallel streams. Blocking I/O there can starve the whole JVM's async work: pass your own executor for I/O (`supplyAsync(task, ioPool)`).\n\n## Timeouts\n\n- `orTimeout(d, unit)`: the future fails with `TimeoutException` if not done in time.\n- `completeOnTimeout(fallback, d, unit)`: completes with a fallback value instead.\n\nThe underlying work is NOT cancelled; you just stop waiting for it.\n\n## When to use it\n\nFan-out of independent remote calls (price, stock, recommendations), pipelines that must not block request threads, and integrating with async clients. For simple sequential code, plain blocking calls on virtual threads (Java 21) or a thread pool are often easier to read. Spring's `@Async` methods can return `CompletableFuture` too.",
+  "quiz": [
+    {
+      "prompt": "Which method chains a function that itself returns a CompletableFuture, without nesting?",
+      "choices": [
+        "thenApply",
+        "thenCompose",
+        "thenAccept",
+        "handle"
+      ],
+      "answer": 1,
+      "explanation": "thenCompose flattens, like flatMap; thenApply would produce a future of a future."
+    },
+    {
+      "prompt": "Which method waits for two independent futures and merges their results?",
+      "choices": [
+        "thenCompose",
+        "allOf",
+        "exceptionally",
+        "thenCombine"
+      ],
+      "answer": 3,
+      "explanation": "thenCombine(other, (a, b) -> ...) runs when both complete."
+    },
+    {
+      "prompt": "What does `join()` throw when the future failed?",
+      "choices": [
+        "CompletionException wrapping the cause",
+        "The original exception unwrapped",
+        "ExecutionException",
+        "Nothing; it returns null"
+      ],
+      "answer": 0,
+      "explanation": "get() throws the checked ExecutionException instead."
+    },
+    {
+      "prompt": "Which pool runs `supplyAsync(task)` when no executor is passed?",
+      "choices": [
+        "A new thread per task",
+        "The main thread",
+        "The ForkJoinPool common pool",
+        "A cached thread pool"
+      ],
+      "answer": 2,
+      "explanation": "Pass your own executor for blocking I/O so the shared pool is not starved."
+    },
+    {
+      "prompt": "What does `CompletableFuture.allOf(f1, f2)` complete with?",
+      "choices": [
+        "A list of results",
+        "Void (no results); collect them with join afterwards",
+        "The first result",
+        "A map"
+      ],
+      "answer": 1,
+      "explanation": "allOf only signals completion; the individual futures hold the values."
+    },
+    {
+      "prompt": "What does `exceptionally(e -> -1)` do?",
+      "choices": [
+        "Recovers a failed stage with the value -1",
+        "Rethrows",
+        "Logs only",
+        "Cancels the future"
+      ],
+      "answer": 0,
+      "explanation": "Successful values pass through unchanged."
+    },
+    {
+      "prompt": "After `orTimeout(50, MILLISECONDS)` fires, is the underlying work cancelled?",
+      "choices": [
+        "Yes, always",
+        "Only for I/O",
+        "Only in Java 21",
+        "No: the future fails with TimeoutException but the task may keep running"
+      ],
+      "answer": 3,
+      "explanation": "Timeouts stop the waiting, not the work."
+    },
+    {
+      "prompt": "Which completes with a fallback value instead of failing on timeout?",
+      "choices": [
+        "orTimeout",
+        "exceptionally",
+        "completeOnTimeout",
+        "join(timeout)"
+      ],
+      "answer": 2,
+      "explanation": "completeOnTimeout(value, time, unit) supplies the value when time runs out."
+    },
+    {
+      "prompt": "Which sees both the value and the error of a stage?",
+      "choices": [
+        "handle",
+        "thenApply",
+        "exceptionally",
+        "thenAccept"
+      ],
+      "answer": 0,
+      "explanation": "handle((v, e) -> ...) runs on success and on failure."
+    },
+    {
+      "prompt": "Why is blocking I/O inside the common pool risky?",
+      "choices": [
+        "It throws",
+        "The pool is small and shared, so blocked threads stall unrelated async work and parallel streams",
+        "It is not allowed",
+        "It leaks memory"
+      ],
+      "answer": 1,
+      "explanation": "Use a dedicated executor sized for I/O."
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "thenApply, thenCompose and thenCombine",
+      "back": "Transform a value; chain another async step that returns a future; merge the results of two independent futures."
+    },
+    {
+      "front": "join versus get on failure",
+      "back": "join throws an unchecked CompletionException; get throws a checked ExecutionException. Unwrap the cause in both cases."
+    },
+    {
+      "front": "How do you collect the results of allOf?",
+      "back": "After allOf completes, call join on each original future, which no longer blocks."
+    },
+    {
+      "front": "Which thread pool does supplyAsync use by default?",
+      "back": "The shared ForkJoinPool common pool, which should not be blocked by I/O."
+    },
+    {
+      "front": "exceptionally versus handle",
+      "back": "exceptionally runs only on failure to supply a fallback; handle runs on both outcomes."
+    },
+    {
+      "front": "orTimeout versus completeOnTimeout",
+      "back": "orTimeout fails the future with a TimeoutException; completeOnTimeout completes it with a fallback value."
+    },
+    {
+      "front": "Does a timeout cancel the underlying work?",
+      "back": "No; it only stops waiting, so the task may still be running."
+    },
+    {
+      "front": "How can CompletableFuture failures go unnoticed?",
+      "back": "A chain without an error handler whose result nobody joins drops the exception silently."
+    }
+  ],
+  "drills": [
+    {
+      "slug": "01-fan-out-with-fallbacks",
+      "title": "Fan out calls with per-item fallbacks",
+      "difficulty": 3,
+      "skills": [
+        "allOf",
+        "exceptionally"
+      ],
+      "instructions": "**Interview prompt.** \"The product page calls the reviews service once per product, one after another, and a single failing product breaks the whole page. Call them concurrently and show a placeholder for the ones that fail.\"\n\n**Why it matters.** Starting every future before waiting gives one round of latency instead of N; recovering each future individually with `exceptionally` keeps one failure from failing the rest.\n\n**Your task.** Implement `static CompletableFuture<List<String>> fetchAll(List<String> ids, Function<String, CompletableFuture<String>> fetch, String fallback)`:\n- call `fetch` for every id, all started before any result is awaited\n- each failed fetch contributes `fallback` instead of failing the whole result\n- the returned future completes with one value per id, in the INPUT order\n- an empty id list completes immediately with an empty list\n\n**Worked example.** With fetches of 100 ms each for 4 ids, the whole call completes in about 100 ms, and an id whose fetch throws shows the fallback.",
+      "starter": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · fan-out with fallbacks★★★\n//  concepts: CompletableFuture.allOf · exceptionally · ordering\n// ─────────────────────────────────────────────────────────────────────────\n\nimport static bootcamp.Check.*;\n\nimport java.util.*;\nimport java.util.concurrent.*;\nimport java.util.function.*;\n\nclass Exercise {\n\n    /** One value per id in input order; failed fetches become the fallback; all started at once. */\n    static CompletableFuture<List<String>> fetchAll(List<String> ids, Function<String, CompletableFuture<String>> fetch, String fallback) {\n        throw new UnsupportedOperationException(\"TODO: recover each future, then allOf + join in order\");\n    }\n\n    static CompletableFuture<String> delayed(String value, long ms) {\n        return CompletableFuture.supplyAsync(() -> {\n            try { Thread.sleep(ms); } catch (InterruptedException e) { throw new IllegalStateException(e); }\n            return value;\n        }, POOL);\n    }\n\n    static final ExecutorService POOL = Executors.newFixedThreadPool(8, r -> { var t = new Thread(r); t.setDaemon(true); return t; });\n\n    // ─── tests ───────────────────────────────────────────────────────────\n    public static void main(String[] args) {\n        test(\"results keep input order\", () -> eq(fetchAll(List.of(\"a\", \"b\", \"c\"), id -> delayed(id.toUpperCase(), id.equals(\"a\") ? 80 : 10), \"?\").join(), List.of(\"A\", \"B\", \"C\")));\n        test(\"a failing fetch becomes the fallback\", () -> eq(fetchAll(List.of(\"ok\", \"bad\"), id -> id.equals(\"bad\") ? CompletableFuture.failedFuture(new IllegalStateException(\"down\")) : delayed(id, 5), \"n/a\").join(), List.of(\"ok\", \"n/a\")));\n        test(\"the fetches run concurrently\", () -> {\n            long t0 = System.nanoTime();\n            fetchAll(List.of(\"1\", \"2\", \"3\", \"4\"), id -> delayed(id, 150), \"?\").join();\n            long ms = (System.nanoTime() - t0) / 1_000_000;\n            ok(ms < 450, \"took \" + ms + \" ms; expected well under 600\");\n        });\n        test(\"no ids completes with an empty list (boundary)\", () -> eq(fetchAll(List.of(), id -> delayed(id, 1), \"?\").join(), List.of()));\n        test(\"a fetch that throws synchronously is not recovered\", () -> raises(IllegalArgumentException.class, () -> fetchAll(List.of(\"x\"), id -> { throw new IllegalArgumentException(\"bad id\"); }, \"?\")));\n        System.exit(report());\n    }\n    // ─── end tests ───────────────────────────────────────────────────────\n}\n",
+      "solution": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · fan-out with fallbacks★★★\n//  concepts: CompletableFuture.allOf · exceptionally · ordering\n// ─────────────────────────────────────────────────────────────────────────\n\nimport static bootcamp.Check.*;\n\nimport java.util.*;\nimport java.util.concurrent.*;\nimport java.util.function.*;\n\nclass Exercise {\n\n    /** One value per id in input order; failed fetches become the fallback; all started at once. */\n    static CompletableFuture<List<String>> fetchAll(List<String> ids, Function<String, CompletableFuture<String>> fetch, String fallback) {\n        List<CompletableFuture<String>> futures = ids.stream()\n            .map(id -> fetch.apply(id).exceptionally(e -> fallback))\n            .toList();\n        return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))\n            .thenApply(v -> futures.stream().map(CompletableFuture::join).toList());\n    }\n\n    static CompletableFuture<String> delayed(String value, long ms) {\n        return CompletableFuture.supplyAsync(() -> {\n            try { Thread.sleep(ms); } catch (InterruptedException e) { throw new IllegalStateException(e); }\n            return value;\n        }, POOL);\n    }\n\n    static final ExecutorService POOL = Executors.newFixedThreadPool(8, r -> { var t = new Thread(r); t.setDaemon(true); return t; });\n\n    // ─── tests ───────────────────────────────────────────────────────────\n    public static void main(String[] args) {\n        test(\"results keep input order\", () -> eq(fetchAll(List.of(\"a\", \"b\", \"c\"), id -> delayed(id.toUpperCase(), id.equals(\"a\") ? 80 : 10), \"?\").join(), List.of(\"A\", \"B\", \"C\")));\n        test(\"a failing fetch becomes the fallback\", () -> eq(fetchAll(List.of(\"ok\", \"bad\"), id -> id.equals(\"bad\") ? CompletableFuture.failedFuture(new IllegalStateException(\"down\")) : delayed(id, 5), \"n/a\").join(), List.of(\"ok\", \"n/a\")));\n        test(\"the fetches run concurrently\", () -> {\n            long t0 = System.nanoTime();\n            fetchAll(List.of(\"1\", \"2\", \"3\", \"4\"), id -> delayed(id, 150), \"?\").join();\n            long ms = (System.nanoTime() - t0) / 1_000_000;\n            ok(ms < 450, \"took \" + ms + \" ms; expected well under 600\");\n        });\n        test(\"no ids completes with an empty list (boundary)\", () -> eq(fetchAll(List.of(), id -> delayed(id, 1), \"?\").join(), List.of()));\n        test(\"a fetch that throws synchronously is not recovered\", () -> raises(IllegalArgumentException.class, () -> fetchAll(List.of(\"x\"), id -> { throw new IllegalArgumentException(\"bad id\"); }, \"?\")));\n        System.exit(report());\n    }\n    // ─── end tests ───────────────────────────────────────────────────────\n}\n",
+      "explanation": "Recover each future on its own, then wait for all of them and join in order:\n\n```java\nList<CompletableFuture<String>> futures = ids.stream()\n    .map(id -> fetch.apply(id).exceptionally(e -> fallback))\n    .toList();\nreturn CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))\n    .thenApply(v -> futures.stream().map(CompletableFuture::join).toList());\n```\n\n`toList()` materialises the stream, so every fetch starts before `allOf` is built. Putting `exceptionally` on each future (not on the `allOf` result) is what turns one failure into one fallback instead of a failed page.",
+      "hints": [
+        "Recover from failures per item, before combining, so one failure cannot fail the whole result.",
+        "Map each id to fetch.apply(id).exceptionally(e -> fallback) and collect to a list, then allOf of those futures followed by thenApply that joins each one in order.",
+        "Start a recovered lookup for every id right away, wait for the whole group to finish, and then read each lookup's value in the original order."
+      ]
+    }
+  ]
+}

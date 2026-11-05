@@ -1,0 +1,175 @@
+{
+  "format": "fundamentals-authoring@1",
+  "track": "java",
+  "topic": "18-spring-web-controllers-and-errors",
+  "title": "Spring Web: controllers, validation & errors",
+  "level": "advanced",
+  "summary": "@RestController mappings, path variables, request params and bodies, ResponseEntity and status codes, @Valid with MethodArgumentNotValidException, @RestControllerAdvice and the most specific @ExceptionHandler, and ProblemDetail responses.",
+  "lesson": "## Controllers\n\n```java\n@RestController\n@RequestMapping(\"/api/orders\")\npublic class OrderController {\n    private final OrderService service;\n    public OrderController(OrderService service) { this.service = service; }\n\n    @GetMapping(\"/{id}\")\n    public OrderDto get(@PathVariable long id) { return service.get(id); }   // 200 + JSON\n\n    @GetMapping\n    public Page<OrderDto> list(@RequestParam(defaultValue = \"0\") int page, @RequestParam(required = false) String status) { ... }\n\n    @PostMapping\n    public ResponseEntity<OrderDto> create(@Valid @RequestBody CreateOrder body) {\n        OrderDto created = service.create(body);\n        return ResponseEntity.created(URI.create(\"/api/orders/\" + created.id())).body(created);   // 201 + Location\n    }\n\n    @DeleteMapping(\"/{id}\")\n    @ResponseStatus(HttpStatus.NO_CONTENT)\n    public void delete(@PathVariable long id) { service.delete(id); }\n}\n```\n\nReturn DTOs (records), never JPA entities: entities leak internal fields, trigger lazy-loading errors during serialisation (topic 20) and invite over-posting when used as request bodies.\n\n## Status codes Spring produces for you\n\n- No handler for the path: **404**. A handler exists for the path but not the method: **405**.\n- `@PathVariable long id` with `/api/orders/abc`: **400** (type mismatch). (ASP.NET Core route constraints give a 404 instead; Spring matches the route first and then fails to convert.)\n- Malformed JSON body: **400** (`HttpMessageNotReadableException`). Wrong `Content-Type`: **415**.\n- `@Valid` failing on a `@RequestBody`: **400**, from `MethodArgumentNotValidException`, which lists every field error.\n\n## Validation\n\n```java\npublic record CreateOrder(@NotBlank String sku, @Positive int quantity, @Email String contactEmail) {}\n```\n\nJakarta Bean Validation annotations (`@NotNull`, `@NotBlank`, `@Size`, `@Min`, `@Positive`, `@Email`, `@Pattern`) check the request in isolation; business rules that need data (stock, uniqueness) belong in the service and usually map to 409 or 422.\n\n## Central error handling\n\n```java\n@RestControllerAdvice\npublic class ApiErrors {\n    @ExceptionHandler(OrderNotFoundException.class)\n    ProblemDetail notFound(OrderNotFoundException e) {\n        return ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, e.getMessage());\n    }\n    @ExceptionHandler(ConflictException.class)\n    ProblemDetail conflict(ConflictException e) { return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, e.getMessage()); }\n    @ExceptionHandler(Exception.class)\n    ProblemDetail unexpected(Exception e) {\n        log.error(\"unhandled\", e);\n        return ProblemDetail.forStatus(HttpStatus.INTERNAL_SERVER_ERROR);   // no internal details\n    }\n}\n```\n\nWhen several handlers could match, Spring picks the one for the **closest exception type** in the class hierarchy: `OrderNotFoundException extends NotFoundException extends RuntimeException` uses a `NotFoundException` handler before an `Exception` handler. `ProblemDetail` (Spring 6) is the RFC 9457 problem-details shape; in Spring Boot 3, `spring.mvc.problemdetails.enabled=true` makes the framework's own errors use it too.\n\n## Keep controllers thin\n\nBind, validate, call one service method, map the result. Transactions, business rules and persistence live below the controller, which keeps them testable without HTTP.",
+  "quiz": [
+    {
+      "prompt": "A request for `/api/orders/abc` reaches `@GetMapping(\"/{id}\") get(@PathVariable long id)`. What status does Spring return?",
+      "choices": [
+        "404",
+        "400: the path variable cannot be converted to long",
+        "500",
+        "405"
+      ],
+      "answer": 1,
+      "explanation": "The route matches; conversion then fails with a type mismatch, answered as 400."
+    },
+    {
+      "prompt": "What happens when a `@Valid @RequestBody` fails validation?",
+      "choices": [
+        "The method runs with null fields",
+        "A 500",
+        "The invalid fields are ignored",
+        "A 400 response from MethodArgumentNotValidException listing the field errors"
+      ],
+      "answer": 3,
+      "explanation": "Validation runs before the controller method."
+    },
+    {
+      "prompt": "How do you return 201 Created with a Location header?",
+      "choices": [
+        "ResponseEntity.created(uri).body(dto)",
+        "return body;",
+        "@ResponseStatus(OK)",
+        "ResponseEntity.ok(dto)"
+      ],
+      "answer": 0,
+      "explanation": "ResponseEntity.created sets both the status and the Location header."
+    },
+    {
+      "prompt": "Handlers exist for `NotFoundException` and `Exception`. An `OrderNotFoundException extends NotFoundException` is thrown. Which runs?",
+      "choices": [
+        "The Exception handler",
+        "Both",
+        "The NotFoundException handler: the closest type in the hierarchy wins",
+        "Neither"
+      ],
+      "answer": 2,
+      "explanation": "Spring orders matching handlers by exception depth."
+    },
+    {
+      "prompt": "Why should controllers return DTOs rather than JPA entities?",
+      "choices": [
+        "Entities cannot be serialised",
+        "Entities leak internal fields, can trigger lazy-loading errors during serialisation and invite over-posting",
+        "DTOs are faster",
+        "Spring forbids entities"
+      ],
+      "answer": 1,
+      "explanation": "Map entities to records shaped for the API."
+    },
+    {
+      "prompt": "What does `@RequestParam(defaultValue = \"0\") int page` do when `page` is absent?",
+      "choices": [
+        "Uses 0",
+        "Throws 400",
+        "Uses null",
+        "Uses 1"
+      ],
+      "answer": 0,
+      "explanation": "Without defaultValue or required = false, a missing parameter would be a 400."
+    },
+    {
+      "prompt": "What is ProblemDetail in Spring 6?",
+      "choices": [
+        "A logging class",
+        "A validation annotation",
+        "A test helper",
+        "A representation of the RFC 9457 problem-details error body"
+      ],
+      "answer": 3,
+      "explanation": "Return it from @ExceptionHandler methods for consistent errors."
+    },
+    {
+      "prompt": "A POST with `Content-Type: text/plain` hits a `@RequestBody` JSON endpoint. The status is...",
+      "choices": [
+        "400",
+        "406",
+        "415 Unsupported Media Type",
+        "200"
+      ],
+      "answer": 2,
+      "explanation": "No message converter can read text/plain into the DTO."
+    },
+    {
+      "prompt": "What should a catch-all `@ExceptionHandler(Exception.class)` return to the client?",
+      "choices": [
+        "A generic 500 problem without internal details, after logging the exception",
+        "The stack trace",
+        "The exception message",
+        "A 200"
+      ],
+      "answer": 0,
+      "explanation": "Never leak internals; the log keeps the details."
+    },
+    {
+      "prompt": "Where does the rule \"SKU must be in stock\" belong?",
+      "choices": [
+        "A @Positive annotation",
+        "In the service, reported as a conflict or unprocessable request",
+        "In the controller signature",
+        "In the JSON mapper"
+      ],
+      "answer": 1,
+      "explanation": "Annotations check shape; rules needing data live in services."
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "Path variable type mismatch in Spring versus ASP.NET Core",
+      "back": "Spring matches the route, fails conversion and answers 400; an ASP.NET Core route constraint simply does not match and answers 404."
+    },
+    {
+      "front": "What does @Valid on a @RequestBody give you?",
+      "back": "Bean Validation before the method runs, and a 400 from MethodArgumentNotValidException listing every field error."
+    },
+    {
+      "front": "How do you send 201 with Location?",
+      "back": "Use ResponseEntity's created factory with the new resource's URI, then attach the DTO as the body."
+    },
+    {
+      "front": "Which @ExceptionHandler wins?",
+      "back": "The one declared for the exception type closest to the thrown exception in the class hierarchy."
+    },
+    {
+      "front": "What is @RestControllerAdvice for?",
+      "back": "Central exception handlers shared by all controllers, so every error maps to a consistent response."
+    },
+    {
+      "front": "Why DTOs instead of entities in controllers?",
+      "back": "They control exactly what is exposed or accepted and avoid lazy-loading errors and over-posting."
+    },
+    {
+      "front": "Bean Validation versus business validation",
+      "back": "Annotations check a request in isolation; rules needing data or state live in services and map to 409 or 422."
+    },
+    {
+      "front": "What makes a controller thin?",
+      "back": "It only binds, validates, calls one service method and maps the result to a response."
+    }
+  ],
+  "drills": [
+    {
+      "slug": "01-resolve-exception-handler",
+      "title": "Pick the closest exception handler",
+      "difficulty": 2,
+      "skills": [
+        "class hierarchy",
+        "error mapping"
+      ],
+      "instructions": "**Interview prompt.** \"With handlers for NotFoundException and Exception, why does an OrderNotFoundException become a 404 and not a 500? Implement the resolution.\"\n\n**Why it matters.** `@RestControllerAdvice` chooses the handler declared for the CLOSEST type in the thrown exception's class hierarchy. Getting that order right is what makes a catch-all handler safe.\n\n**Your task.** Implement `static Problem resolve(Throwable error, Map<Class<? extends Throwable>, Function<Throwable, Problem>> handlers)` (`Problem` is a nested record):\n- starting at the exception's own class, walk up its superclasses; use the handler registered for the first class found\n- if no class up to and including `Throwable` has a handler, return `new Problem(500, \"Internal Server Error\", null)`\n- a `null` error also yields that 500 problem\n- the handler receives the original exception\n\n**Worked example.** With handlers for `NotFoundException` (404) and `Exception` (500), an `OrderNotFoundException` resolves to the 404 handler.",
+      "starter": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · closest exception handler★★☆\n//  concepts: class hierarchy · handler resolution · problem details\n// ─────────────────────────────────────────────────────────────────────────\n\nimport static bootcamp.Check.*;\n\nimport java.util.*;\nimport java.util.function.*;\n\nclass Exercise {\n\n    record Problem(int status, String title, String detail) {}\n    static class NotFoundException extends RuntimeException { NotFoundException(String m) { super(m); } }\n    static class OrderNotFoundException extends NotFoundException { OrderNotFoundException(long id) { super(\"order \" + id + \" not found\"); } }\n    static class ConflictException extends RuntimeException { ConflictException(String m) { super(m); } }\n\n    /** The handler for the closest type in the exception's hierarchy, else a generic 500 problem. */\n    static Problem resolve(Throwable error, Map<Class<? extends Throwable>, Function<Throwable, Problem>> handlers) {\n        throw new UnsupportedOperationException(\"TODO: walk getSuperclass() from the concrete type\");\n    }\n\n    static Map<Class<? extends Throwable>, Function<Throwable, Problem>> handlers() {\n        var m = new HashMap<Class<? extends Throwable>, Function<Throwable, Problem>>();\n        m.put(Exception.class, e -> new Problem(500, \"Internal Server Error\", null));\n        m.put(NotFoundException.class, e -> new Problem(404, \"Not Found\", e.getMessage()));\n        m.put(ConflictException.class, e -> new Problem(409, \"Conflict\", e.getMessage()));\n        return m;\n    }\n\n    // ─── tests ───────────────────────────────────────────────────────────\n    public static void main(String[] args) {\n        test(\"a subclass uses its closest handler\", () -> eq(resolve(new OrderNotFoundException(42), handlers()), new Problem(404, \"Not Found\", \"order 42 not found\")));\n        test(\"an exact match is used\", () -> eq(resolve(new ConflictException(\"stale version\"), handlers()).status(), 409));\n        test(\"unknown exceptions fall back to the Exception handler\", () -> eq(resolve(new IllegalStateException(\"bug\"), handlers()), new Problem(500, \"Internal Server Error\", null)));\n        test(\"no handler at all gives a generic 500 (boundary)\", () -> eq(resolve(new AssertionError(\"x\"), Map.of()), new Problem(500, \"Internal Server Error\", null)));\n        test(\"a null error is a generic 500\", () -> eq(resolve(null, handlers()).status(), 500));\n        System.exit(report());\n    }\n    // ─── end tests ───────────────────────────────────────────────────────\n}\n",
+      "solution": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · closest exception handler★★☆\n//  concepts: class hierarchy · handler resolution · problem details\n// ─────────────────────────────────────────────────────────────────────────\n\nimport static bootcamp.Check.*;\n\nimport java.util.*;\nimport java.util.function.*;\n\nclass Exercise {\n\n    record Problem(int status, String title, String detail) {}\n    static class NotFoundException extends RuntimeException { NotFoundException(String m) { super(m); } }\n    static class OrderNotFoundException extends NotFoundException { OrderNotFoundException(long id) { super(\"order \" + id + \" not found\"); } }\n    static class ConflictException extends RuntimeException { ConflictException(String m) { super(m); } }\n\n    static final Problem INTERNAL = new Problem(500, \"Internal Server Error\", null);\n\n    /** The handler for the closest type in the exception's hierarchy, else a generic 500 problem. */\n    static Problem resolve(Throwable error, Map<Class<? extends Throwable>, Function<Throwable, Problem>> handlers) {\n        if (error == null) return INTERNAL;\n        for (Class<?> c = error.getClass(); c != null; c = c.getSuperclass()) {\n            var handler = handlers.get(c);\n            if (handler != null) return handler.apply(error);\n        }\n        return INTERNAL;\n    }\n\n    static Map<Class<? extends Throwable>, Function<Throwable, Problem>> handlers() {\n        var m = new HashMap<Class<? extends Throwable>, Function<Throwable, Problem>>();\n        m.put(Exception.class, e -> new Problem(500, \"Internal Server Error\", null));\n        m.put(NotFoundException.class, e -> new Problem(404, \"Not Found\", e.getMessage()));\n        m.put(ConflictException.class, e -> new Problem(409, \"Conflict\", e.getMessage()));\n        return m;\n    }\n\n    // ─── tests ───────────────────────────────────────────────────────────\n    public static void main(String[] args) {\n        test(\"a subclass uses its closest handler\", () -> eq(resolve(new OrderNotFoundException(42), handlers()), new Problem(404, \"Not Found\", \"order 42 not found\")));\n        test(\"an exact match is used\", () -> eq(resolve(new ConflictException(\"stale version\"), handlers()).status(), 409));\n        test(\"unknown exceptions fall back to the Exception handler\", () -> eq(resolve(new IllegalStateException(\"bug\"), handlers()), new Problem(500, \"Internal Server Error\", null)));\n        test(\"no handler at all gives a generic 500 (boundary)\", () -> eq(resolve(new AssertionError(\"x\"), Map.of()), new Problem(500, \"Internal Server Error\", null)));\n        test(\"a null error is a generic 500\", () -> eq(resolve(null, handlers()).status(), 500));\n        System.exit(report());\n    }\n    // ─── end tests ───────────────────────────────────────────────────────\n}\n",
+      "explanation": "Walk the superclass chain from the concrete type and stop at the first registered handler:\n\n```java\nif (error == null) return INTERNAL;\nfor (Class<?> c = error.getClass(); c != null; c = c.getSuperclass()) {\n    var handler = handlers.get(c);\n    if (handler != null) return handler.apply(error);\n}\nreturn INTERNAL;\n```\n\nChecking `handlers.get(error.getClass())` alone would miss subclasses; iterating the map and taking the first `isInstance` match would depend on map order and might choose `Exception` over `NotFoundException`.",
+      "hints": [
+        "The closest handler is the one whose type is reached first when walking from the concrete class up to its parents.",
+        "Loop with Class<?> c = error.getClass(); c != null; c = c.getSuperclass(), returning handlers.get(c).apply(error) for the first non-null handler; fall back to the 500 problem.",
+        "Start from the thrown exception's exact type, climb one parent type at a time, use the first type that has a handler, and fall back to a generic server error when none does or when there is no exception at all."
+      ]
+    }
+  ]
+}

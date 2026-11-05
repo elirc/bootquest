@@ -1,0 +1,175 @@
+{
+  "format": "fundamentals-authoring@1",
+  "track": "java",
+  "topic": "20-jpa-transactions-lazy-loading-and-n-plus-1",
+  "title": "JPA transactions, lazy loading & N+1",
+  "level": "advanced",
+  "summary": "@Transactional boundaries and proxies, rollback rules for checked exceptions, LazyInitializationException and open-in-view, default fetch types, the N+1 problem and its fixes (JOIN FETCH, entity graphs, batch fetching, DTO projections), and optimistic locking.",
+  "lesson": "## @Transactional\n\n```java\n@Service\npublic class CheckoutService {\n    @Transactional\n    public Order checkout(long cartId) { ... }          // one transaction: all or nothing\n\n    @Transactional(readOnly = true)\n    public OrderView view(long id) { ... }              // hints the flush mode and the driver\n}\n```\n\n- The annotation works through a **proxy**: only calls that come from another bean start the transaction. `this.checkout(...)` from inside the same class bypasses it (self-invocation).\n- Default propagation is `REQUIRED`: join an existing transaction or start one.\n- **Rollback rules**: by default only unchecked exceptions (`RuntimeException`) and `Error`s roll back. A **checked** exception thrown out of the method COMMITS the transaction unless you declare `@Transactional(rollbackFor = Exception.class)`.\n- Put transactions on service methods (a business operation), not on controllers or repositories one by one.\n\n## Lazy loading and LazyInitializationException\n\nDefault fetch types: `@ManyToOne` and `@OneToOne` are **EAGER**, `@OneToMany` and `@ManyToMany` are **LAZY**. Mark `@ManyToOne` lazy explicitly (`fetch = FetchType.LAZY`) to avoid loading half the database.\n\nA lazy association is a proxy that queries when first touched. Touching it after the persistence context closed throws `LazyInitializationException: could not initialize proxy - no Session`. Classic triggers: serialising an entity to JSON in a controller after the service transaction ended, or accessing `order.getLines()` in a background thread.\n\nSpring Boot enables **open-in-view** by default (and logs a warning about it): the persistence context stays open until the response is written, which hides LazyInitializationException but runs lazy queries during view rendering, outside your transaction, often as N+1. Many teams set `spring.jpa.open-in-view=false` and load what each use case needs explicitly.\n\n## The N+1 problem\n\n```java\nList<Order> orders = repo.findAll();                // 1 query\nfor (Order o : orders) o.getCustomer().getName();   // + 1 query per order (lazy customer)\n```\n\nFixes:\n- **JOIN FETCH**: `@Query(\"select o from Order o join fetch o.customer\")` loads both in one query.\n- **Entity graphs**: `@EntityGraph(attributePaths = \"customer\") List<Order> findByStatus(String s);`\n- **Batch fetching**: `@BatchSize(size = 100)` or `hibernate.default_batch_fetch_size` loads lazy associations for many parents with `WHERE id IN (...)` queries: N+1 becomes 1 + N/100.\n- **DTO projections**: `select new com.x.OrderRow(o.id, c.name) from Order o join o.customer c`, ideal for read endpoints.\n\nCaveat: `join fetch` of a COLLECTION combined with pagination makes Hibernate apply the limit in memory (it warns: HHH90003004). Page the parent ids first, then fetch their children.\n\n## Optimistic locking\n\nA `@Version` field is checked and incremented on every update; if another transaction updated the row first, the save fails with an optimistic locking exception (`ObjectOptimisticLockingFailureException` in Spring), which an API maps to **409 Conflict**.\n\n## Checklist for a read endpoint\n\n`@Transactional(readOnly = true)` service method, an explicit fetch plan (join fetch, entity graph or a DTO projection), a page size cap, and the generated SQL checked once in the logs (`spring.jpa.show-sql` or `logging.level.org.hibernate.SQL=debug`).",
+  "quiz": [
+    {
+      "prompt": "A `@Transactional` method throws a CHECKED exception (no rollbackFor). What happens to the transaction?",
+      "choices": [
+        "It rolls back",
+        "It commits",
+        "It stays open",
+        "It is retried"
+      ],
+      "answer": 1,
+      "explanation": "Only RuntimeException and Error roll back by default; add rollbackFor for checked exceptions."
+    },
+    {
+      "prompt": "Method `a()` in a bean calls `this.b()`, where only `b()` is `@Transactional`. Is a transaction started for b?",
+      "choices": [
+        "Yes",
+        "Only for public methods",
+        "Only in tests",
+        "No: self-invocation bypasses the proxy that applies the annotation"
+      ],
+      "answer": 3,
+      "explanation": "Move b to another bean or annotate the entry point."
+    },
+    {
+      "prompt": "What is the default fetch type of `@ManyToOne`?",
+      "choices": [
+        "EAGER",
+        "LAZY",
+        "BATCH",
+        "NONE"
+      ],
+      "answer": 0,
+      "explanation": "ToOne associations are eager by default; collections are lazy."
+    },
+    {
+      "prompt": "When is `LazyInitializationException` thrown?",
+      "choices": [
+        "When an entity has no id",
+        "When two transactions conflict",
+        "When a lazy association is touched after the persistence context has closed",
+        "When a query returns no rows"
+      ],
+      "answer": 2,
+      "explanation": "Load what you need inside the transaction or map to DTOs there."
+    },
+    {
+      "prompt": "Listing 200 orders and reading each order's lazy customer issues how many queries?",
+      "choices": [
+        "1",
+        "201",
+        "2",
+        "200"
+      ],
+      "answer": 1,
+      "explanation": "One for the orders plus one per order: the N+1 problem."
+    },
+    {
+      "prompt": "Which fixes the N+1 for order customers in ONE query?",
+      "choices": [
+        "select o from Order o join fetch o.customer",
+        "FetchType.LAZY",
+        "readOnly = true",
+        "A larger connection pool"
+      ],
+      "answer": 0,
+      "explanation": "join fetch loads the association together with the orders."
+    },
+    {
+      "prompt": "What does `@BatchSize(size = 100)` on a lazy association change?",
+      "choices": [
+        "Nothing",
+        "It makes it eager",
+        "It limits the number of rows",
+        "Lazy loads for many parents are grouped into IN queries of up to 100 ids"
+      ],
+      "answer": 3,
+      "explanation": "N+1 becomes roughly 1 + N/100."
+    },
+    {
+      "prompt": "What is a known risk of Spring Boot's default open-in-view?",
+      "choices": [
+        "Faster responses",
+        "It disables lazy loading",
+        "Lazy queries run during response rendering outside the transaction, hiding N+1 problems",
+        "It forbids transactions"
+      ],
+      "answer": 2,
+      "explanation": "Many teams disable it and fetch explicitly per use case."
+    },
+    {
+      "prompt": "Two users update the same order; it has a `@Version` field. The second commit...",
+      "choices": [
+        "fails with an optimistic locking exception, usually mapped to 409",
+        "overwrites silently",
+        "merges both",
+        "waits for a lock"
+      ],
+      "answer": 0,
+      "explanation": "The version check detects the concurrent update."
+    },
+    {
+      "prompt": "Why is `join fetch` of a collection plus pagination problematic?",
+      "choices": [
+        "It is a syntax error",
+        "Hibernate applies the limit in memory after loading all matching rows",
+        "It returns duplicates only",
+        "It is not supported in Spring Data"
+      ],
+      "answer": 1,
+      "explanation": "Page the parent ids first, then fetch the children for that page."
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "Default rollback rules of @Transactional",
+      "back": "Unchecked exceptions and errors roll back; checked exceptions commit unless rollbackFor includes them."
+    },
+    {
+      "front": "Why can @Transactional silently not apply?",
+      "back": "It is applied by a proxy, so a method invoked through this from the same bean runs without it."
+    },
+    {
+      "front": "Default JPA fetch types",
+      "back": "ManyToOne and OneToOne are eager; OneToMany and ManyToMany are lazy."
+    },
+    {
+      "front": "What causes LazyInitializationException?",
+      "back": "Touching a lazy association after its persistence context has closed, for example while serialising outside the transaction."
+    },
+    {
+      "front": "Four fixes for N+1 in JPA",
+      "back": "join fetch, an entity graph, batch fetching with IN queries, or a DTO projection query."
+    },
+    {
+      "front": "What is open-in-view?",
+      "back": "Keeping the persistence context open until the response is written; it hides lazy-loading errors but runs queries outside your transaction."
+    },
+    {
+      "front": "Collection fetch join plus pagination",
+      "back": "Hibernate warns and paginates in memory; page the parents first, then fetch their children."
+    },
+    {
+      "front": "Optimistic locking with @Version",
+      "back": "Each update checks and bumps the version; a stale update fails and should become a 409 response."
+    }
+  ],
+  "drills": [
+    {
+      "slug": "01-batched-customer-loading",
+      "title": "Turn N+1 into batched IN queries",
+      "difficulty": 3,
+      "skills": [
+        "N+1",
+        "batch fetching"
+      ],
+      "instructions": "**Interview prompt.** \"The order export loads each order's customer lazily: 50,000 orders, 50,001 queries. The database allows at most 500 ids per IN list. Load customers in batches.\"\n\n**Why it matters.** Batch fetching (what `@BatchSize` and `hibernate.default_batch_fetch_size` do) collects the ids you will need and loads them with a few `WHERE id IN (...)` queries, respecting the database's IN-list limit.\n\n**Your task.** Implement `static List<OrderRow> withCustomers(List<Order> orders, Function<Set<Long>, Map<Long, Customer>> loadCustomers, int batchSize)`:\n- collect the DISTINCT customer ids of the orders, in first-seen order\n- call `loadCustomers` with batches of at most `batchSize` ids each, every id in exactly one batch (so the number of calls is the distinct count divided by the batch size, rounded up)\n- return one `OrderRow(orderId, customerName)` per order, in the orders' order; a customer missing from every result gives the name `\"(unknown)\"`\n- no orders: no calls and an empty list; `batchSize` below 1 throws `IllegalArgumentException`\n\n**Worked example.** 5 orders for customers 1, 2, 3, 1, 4 with batch size 2 cause 2 calls ({1, 2} and {3, 4}).",
+      "starter": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · batched customer loading★★★\n//  concepts: N+1 · batch fetching · IN-list limits\n// ─────────────────────────────────────────────────────────────────────────\n\nimport static bootcamp.Check.*;\n\nimport java.util.*;\nimport java.util.function.*;\n\nclass Exercise {\n\n    record Order(long id, long customerId) {}\n    record Customer(long id, String name) {}\n    record OrderRow(long orderId, String customerName) {}\n\n    /** Rows with customer names, loading customers in IN-list batches of at most batchSize ids. */\n    static List<OrderRow> withCustomers(List<Order> orders, Function<Set<Long>, Map<Long, Customer>> loadCustomers, int batchSize) {\n        throw new UnsupportedOperationException(\"TODO: distinct ids, batches, one lookup map, rows in order\");\n    }\n\n    static Function<Set<Long>, Map<Long, Customer>> recording(List<Set<Long>> calls) {\n        return ids -> {\n            calls.add(new TreeSet<>(ids));\n            var m = new HashMap<Long, Customer>();\n            for (long id : ids) if (id != 99) m.put(id, new Customer(id, \"c\" + id));\n            return m;\n        };\n    }\n\n    // ─── tests ───────────────────────────────────────────────────────────\n    public static void main(String[] args) {\n        test(\"distinct ids are loaded in batches\", () -> {\n            var calls = new ArrayList<Set<Long>>();\n            withCustomers(List.of(new Order(1, 1), new Order(2, 2), new Order(3, 3), new Order(4, 1), new Order(5, 4)), recording(calls), 2);\n            eq(calls, List.of(Set.of(1L, 2L), Set.of(3L, 4L)));\n        });\n        test(\"rows keep the order sequence\", () -> {\n            var rows = withCustomers(List.of(new Order(10, 2), new Order(11, 1)), recording(new ArrayList<>()), 100);\n            eq(rows, List.of(new OrderRow(10, \"c2\"), new OrderRow(11, \"c1\")));\n        });\n        test(\"the number of calls rounds up\", () -> {\n            var calls = new ArrayList<Set<Long>>();\n            var orders = new ArrayList<Order>();\n            for (long i = 1; i <= 1001; i++) orders.add(new Order(i, i));\n            withCustomers(orders, recording(calls), 500);\n            eq(calls.size(), 3);\n            ok(calls.stream().allMatch(c -> c.size() <= 500), \"a batch exceeded the limit\");\n        });\n        test(\"a missing customer gets a placeholder\", () -> eq(withCustomers(List.of(new Order(1, 99)), recording(new ArrayList<>()), 10).get(0).customerName(), \"(unknown)\"));\n        test(\"no orders, no calls (boundary)\", () -> {\n            var calls = new ArrayList<Set<Long>>();\n            ok(withCustomers(List.of(), recording(calls), 10).isEmpty() && calls.isEmpty(), \"no calls expected\");\n            raises(IllegalArgumentException.class, () -> withCustomers(List.of(), recording(calls), 0));\n        });\n        System.exit(report());\n    }\n    // ─── end tests ───────────────────────────────────────────────────────\n}\n",
+      "solution": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · batched customer loading★★★\n//  concepts: N+1 · batch fetching · IN-list limits\n// ─────────────────────────────────────────────────────────────────────────\n\nimport static bootcamp.Check.*;\n\nimport java.util.*;\nimport java.util.function.*;\n\nclass Exercise {\n\n    record Order(long id, long customerId) {}\n    record Customer(long id, String name) {}\n    record OrderRow(long orderId, String customerName) {}\n\n    /** Rows with customer names, loading customers in IN-list batches of at most batchSize ids. */\n    static List<OrderRow> withCustomers(List<Order> orders, Function<Set<Long>, Map<Long, Customer>> loadCustomers, int batchSize) {\n        if (batchSize < 1) throw new IllegalArgumentException(\"batchSize must be >= 1\");\n        var ids = new ArrayList<>(new LinkedHashSet<>(orders.stream().map(Order::customerId).toList()));\n        var customers = new HashMap<Long, Customer>();\n        for (int i = 0; i < ids.size(); i += batchSize) {\n            customers.putAll(loadCustomers.apply(new LinkedHashSet<>(ids.subList(i, Math.min(i + batchSize, ids.size())))));\n        }\n        return orders.stream()\n            .map(o -> new OrderRow(o.id(), Optional.ofNullable(customers.get(o.customerId())).map(Customer::name).orElse(\"(unknown)\")))\n            .toList();\n    }\n\n    static Function<Set<Long>, Map<Long, Customer>> recording(List<Set<Long>> calls) {\n        return ids -> {\n            calls.add(new TreeSet<>(ids));\n            var m = new HashMap<Long, Customer>();\n            for (long id : ids) if (id != 99) m.put(id, new Customer(id, \"c\" + id));\n            return m;\n        };\n    }\n\n    // ─── tests ───────────────────────────────────────────────────────────\n    public static void main(String[] args) {\n        test(\"distinct ids are loaded in batches\", () -> {\n            var calls = new ArrayList<Set<Long>>();\n            withCustomers(List.of(new Order(1, 1), new Order(2, 2), new Order(3, 3), new Order(4, 1), new Order(5, 4)), recording(calls), 2);\n            eq(calls, List.of(Set.of(1L, 2L), Set.of(3L, 4L)));\n        });\n        test(\"rows keep the order sequence\", () -> {\n            var rows = withCustomers(List.of(new Order(10, 2), new Order(11, 1)), recording(new ArrayList<>()), 100);\n            eq(rows, List.of(new OrderRow(10, \"c2\"), new OrderRow(11, \"c1\")));\n        });\n        test(\"the number of calls rounds up\", () -> {\n            var calls = new ArrayList<Set<Long>>();\n            var orders = new ArrayList<Order>();\n            for (long i = 1; i <= 1001; i++) orders.add(new Order(i, i));\n            withCustomers(orders, recording(calls), 500);\n            eq(calls.size(), 3);\n            ok(calls.stream().allMatch(c -> c.size() <= 500), \"a batch exceeded the limit\");\n        });\n        test(\"a missing customer gets a placeholder\", () -> eq(withCustomers(List.of(new Order(1, 99)), recording(new ArrayList<>()), 10).get(0).customerName(), \"(unknown)\"));\n        test(\"no orders, no calls (boundary)\", () -> {\n            var calls = new ArrayList<Set<Long>>();\n            ok(withCustomers(List.of(), recording(calls), 10).isEmpty() && calls.isEmpty(), \"no calls expected\");\n            raises(IllegalArgumentException.class, () -> withCustomers(List.of(), recording(calls), 0));\n        });\n        System.exit(report());\n    }\n    // ─── end tests ───────────────────────────────────────────────────────\n}\n",
+      "explanation": "Deduplicate with a `LinkedHashSet`, slice it into batches, merge every batch's result into one map, then build the rows:\n\n```java\nvar ids = new ArrayList<>(new LinkedHashSet<>(orders.stream().map(Order::customerId).toList()));\nvar customers = new HashMap<Long, Customer>();\nfor (int i = 0; i < ids.size(); i += batchSize) {\n    customers.putAll(loadCustomers.apply(new LinkedHashSet<>(ids.subList(i, Math.min(i + batchSize, ids.size())))));\n}\nreturn orders.stream()\n    .map(o -> new OrderRow(o.id(), Optional.ofNullable(customers.get(o.customerId())).map(Customer::name).orElse(\"(unknown)\")))\n    .toList();\n```\n\nThis is exactly what Hibernate does for a lazy `@ManyToOne` with a batch size: one query per batch instead of one per row.",
+      "hints": [
+        "First work out the set of ids you will need, then split that set into chunks no bigger than the limit.",
+        "Collect distinct customer ids with a LinkedHashSet, loop i from 0 by batchSize taking subList windows, putAll each loader result into one map, then map every order to a row with a fallback name.",
+        "Gather each customer id once in the order first seen, fetch them in windows of at most the allowed size, combine all the answers into one lookup, and build a row for every order, using the placeholder when a customer was not returned."
+      ]
+    }
+  ]
+}

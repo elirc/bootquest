@@ -1,0 +1,175 @@
+{
+  "format": "fundamentals-authoring@1",
+  "track": "java",
+  "topic": "19-spring-data-jpa-entities-and-repositories",
+  "title": "Spring Data JPA: entities & repositories",
+  "level": "advanced",
+  "summary": "Mapping entities, the persistence context and dirty checking, what save() really does, derived query methods and @Query, relationships with mappedBy, cascade and orphanRemoval, and equals/hashCode for entities.",
+  "lesson": "## Entities\n\n```java\n@Entity\n@Table(name = \"orders\")\npublic class Order {\n    @Id @GeneratedValue(strategy = GenerationType.IDENTITY)\n    private Long id;\n    @Column(nullable = false) private String status;\n    @ManyToOne(fetch = FetchType.LAZY) private Customer customer;\n    @OneToMany(mappedBy = \"order\", cascade = CascadeType.ALL, orphanRemoval = true)\n    private List<OrderLine> lines = new ArrayList<>();\n    @Version private long version;                  // optimistic locking (topic 20)\n\n    protected Order() {}                            // JPA needs a no-arg constructor\n    public void addLine(OrderLine line) { lines.add(line); line.setOrder(this); }   // keep both sides in sync\n}\n```\n\nJPA requires a no-argument constructor and non-final classes (for lazy proxies), and it mutates fields as it loads and tracks them: **records are not suitable as entities**. Use records for DTOs and projections.\n\n## The persistence context and dirty checking\n\nInside a transaction, every loaded entity is **managed** by the persistence context (Hibernate's first-level cache):\n- loading the same id twice returns the SAME instance\n- changes to a managed entity are detected and written automatically at flush/commit (**dirty checking**): no `save()` call is needed for an entity you loaded in the same `@Transactional` method\n- after the transaction ends, entities are **detached**: changes are no longer tracked\n\n## Repositories\n\n```java\npublic interface OrderRepository extends JpaRepository<Order, Long> {\n    List<Order> findByStatusOrderByCreatedAtDesc(String status);\n    Optional<Order> findByIdAndCustomerId(Long id, Long customerId);   // scope by owner: no IDOR\n    boolean existsByCustomerEmail(String email);\n    long countByStatus(String status);\n    @Query(\"select o from Order o where o.total > :min\")\n    List<Order> findLarge(@Param(\"min\") BigDecimal min);\n}\n```\n\nSpring Data parses **derived query** method names (`find...By`, `count...By`, `exists...By`, `delete...By`, properties joined with `And` / `Or`, keywords like `GreaterThan`, `Containing`, `IgnoreCase`, `OrderBy...Desc`) into JPQL at startup; a misspelled property fails at startup. Use `@Query` when a name would become unreadable.\n\n`save(entity)` calls `persist` for a new entity and `merge` for an existing one. `merge` copies the given object's state onto a managed instance and returns THAT instance: keep using the returned object, not the argument.\n\n## Relationships\n\n- The side with `mappedBy` is the inverse side; the side with the foreign key (`@ManyToOne`) **owns** the relationship. Only changes to the owning side are written.\n- `cascade = ALL` propagates persist/remove from the parent to its children; `orphanRemoval = true` deletes a child removed from the collection.\n- Bidirectional associations need helper methods that set both sides.\n\n## equals and hashCode on entities\n\nAn auto-generated id is null until the entity is persisted, so equals/hashCode based on the id change at save time and break HashSets. Common choices: compare by a stable natural key (an order number, an email), or compare by id when non-null with a constant `hashCode`. Avoid Lombok `@Data` on entities (it generates equals/hashCode/toString over lazy associations).",
+  "quiz": [
+    {
+      "prompt": "Inside a `@Transactional` method you load an Order and change its status. Do you need to call `save()`?",
+      "choices": [
+        "Yes, always",
+        "No: the managed entity is dirty-checked and updated at commit",
+        "Only for new entities... and also here",
+        "Only with flush()"
+      ],
+      "answer": 1,
+      "explanation": "Managed entities are written automatically at flush/commit."
+    },
+    {
+      "prompt": "Why are Java records unsuitable as JPA entities?",
+      "choices": [
+        "Records cannot have annotations",
+        "Records are slower",
+        "Records cannot have ids",
+        "JPA needs a no-arg constructor and mutable, non-final classes it can populate and proxy"
+      ],
+      "answer": 3,
+      "explanation": "Use records for DTOs and projections instead."
+    },
+    {
+      "prompt": "What does Spring Data generate for `countByStatus(String status)`?",
+      "choices": [
+        "A query counting orders with that status, derived from the method name",
+        "Nothing; you must implement it",
+        "A full table scan in Java",
+        "A compile error"
+      ],
+      "answer": 0,
+      "explanation": "Derived query methods are parsed into JPQL at startup."
+    },
+    {
+      "prompt": "What does `repository.save(detached)` return for an existing entity?",
+      "choices": [
+        "The same object you passed",
+        "null",
+        "The managed instance produced by merge, which you should use from then on",
+        "A copy that is not tracked"
+      ],
+      "answer": 2,
+      "explanation": "merge copies state onto a managed instance and returns it."
+    },
+    {
+      "prompt": "In a bidirectional Order-OrderLine relationship with `@OneToMany(mappedBy = \"order\")`, which side owns it?",
+      "choices": [
+        "The Order side",
+        "The OrderLine side with the @ManyToOne foreign key",
+        "Both",
+        "Neither"
+      ],
+      "answer": 1,
+      "explanation": "Only changes to the owning side are written to the database."
+    },
+    {
+      "prompt": "What does `orphanRemoval = true` do?",
+      "choices": [
+        "Deletes child rows removed from the parent's collection",
+        "Removes the parent when the last child goes",
+        "Prevents deletion",
+        "Disables cascading"
+      ],
+      "answer": 0,
+      "explanation": "Removing a line from the collection deletes its row."
+    },
+    {
+      "prompt": "Within one persistence context, loading Order 7 twice returns...",
+      "choices": [
+        "Two different objects",
+        "A copy and a proxy",
+        "An exception",
+        "The same instance (first-level cache)"
+      ],
+      "answer": 3,
+      "explanation": "The persistence context guarantees one instance per row."
+    },
+    {
+      "prompt": "Why is `findByIdAndCustomerId(id, customerId)` safer than `findById(id)` in a customer-facing endpoint?",
+      "choices": [
+        "It is faster",
+        "It avoids lazy loading",
+        "It scopes the lookup to the caller, preventing access to other customers' orders (IDOR)",
+        "It caches the result"
+      ],
+      "answer": 2,
+      "explanation": "Insecure direct object references are a top API vulnerability."
+    },
+    {
+      "prompt": "What is the risk of equals/hashCode based on a generated id?",
+      "choices": [
+        "The id is null before persist, so the hash changes on save and breaks hash-based collections",
+        "Ids are strings",
+        "It is slow",
+        "Nothing"
+      ],
+      "answer": 0,
+      "explanation": "Use a natural key, or the id with a constant hashCode."
+    },
+    {
+      "prompt": "A derived query method misspells a property name. When do you find out?",
+      "choices": [
+        "On the first call",
+        "At application startup",
+        "Never",
+        "At compile time"
+      ],
+      "answer": 1,
+      "explanation": "Spring Data validates derived queries when the repository is created."
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "What is dirty checking?",
+      "back": "Changes to managed entities are detected at flush or commit and written automatically, without an explicit save."
+    },
+    {
+      "front": "Managed versus detached entities",
+      "back": "Managed entities are tracked by an open persistence context; after the transaction ends they are detached and changes are ignored."
+    },
+    {
+      "front": "What does save() do in Spring Data JPA?",
+      "back": "persist for a new entity, merge for an existing one; merge returns the managed instance you should keep using."
+    },
+    {
+      "front": "Owning versus inverse side",
+      "back": "The side holding the foreign key owns the relationship; the mappedBy side is inverse, and only owning-side changes are persisted."
+    },
+    {
+      "front": "cascade versus orphanRemoval",
+      "back": "Cascade propagates operations such as persist and remove to children; orphanRemoval deletes children removed from the collection."
+    },
+    {
+      "front": "Why not records as entities?",
+      "back": "JPA needs a no-argument constructor and mutable, non-final classes for loading, tracking and lazy proxies."
+    },
+    {
+      "front": "Derived query methods",
+      "back": "Repository method names like findByStatusOrderByCreatedAtDesc are parsed into queries at startup."
+    },
+    {
+      "front": "Safe equality for JPA entities",
+      "back": "Compare a stable natural key, or the id when set with a constant hashCode; avoid Lombok @Data."
+    }
+  ],
+  "drills": [
+    {
+      "slug": "01-parse-derived-query",
+      "title": "Parse a derived query method name",
+      "difficulty": 3,
+      "skills": [
+        "Spring Data naming",
+        "parsing"
+      ],
+      "instructions": "**Interview prompt.** \"How does Spring Data turn `findByStatusAndTotalGreaterThanOrderByCreatedAtDesc` into a query? Write the parser for a useful subset.\"\n\n**Why it matters.** Knowing the grammar of derived queries means you can read any repository at a glance and know when a name has become too clever for its own good (use `@Query`).\n\n**Your task.** Implement `static QuerySpec parse(String method)` (nested records):\n- the method starts with one of `find`, `count`, `exists`, `delete`, then anything up to the first `By` (e.g. `findAllBy`, `findTop10By`; the part between is ignored), giving the action\n- after `By`: conditions joined with `And`; each condition is a property name optionally followed by one operator suffix: `GreaterThan`, `LessThan`, `Containing`, `IsNull`; no suffix means `EQUALS`\n- optionally followed by `OrderBy` and one or more properties, each ending in `Asc` or `Desc` (`OrderByStatusAscCreatedAtDesc`); a final property without a direction sorts ascending (`OrderByName`)\n- property names are returned with a lower-case first letter (`CreatedAt` → `createdAt`)\n- unsupported input (no `By`, another prefix, `Or`, an empty property) throws `IllegalArgumentException`\n\n**Worked example.** `findByStatusAndTotalGreaterThanOrderByCreatedAtDesc` gives action find, conditions status EQUALS and total GREATER_THAN, order createdAt DESC.",
+      "starter": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · derived query parser★★★\n//  concepts: Spring Data naming · regex · records\n// ─────────────────────────────────────────────────────────────────────────\n\nimport static bootcamp.Check.*;\n\nimport java.util.*;\nimport java.util.regex.*;\n\nclass Exercise {\n\n    enum Op { EQUALS, GREATER_THAN, LESS_THAN, CONTAINING, IS_NULL }\n    record Condition(String property, Op op) {}\n    record Sort(String property, boolean descending) {}\n    record QuerySpec(String action, List<Condition> conditions, List<Sort> orderBy) {}\n\n    /** A small derived-query grammar: action, And-joined conditions, optional OrderBy. */\n    static QuerySpec parse(String method) {\n        throw new UnsupportedOperationException(\"TODO: action, conditions, order\");\n    }\n\n    // ─── tests ───────────────────────────────────────────────────────────\n    public static void main(String[] args) {\n        test(\"conditions and ordering\", () -> eq(parse(\"findByStatusAndTotalGreaterThanOrderByCreatedAtDesc\"), new QuerySpec(\"find\", List.of(new Condition(\"status\", Op.EQUALS), new Condition(\"total\", Op.GREATER_THAN)), List.of(new Sort(\"createdAt\", true)))));\n        test(\"count and exists actions\", () -> eq(List.of(parse(\"countByStatus\").action(), parse(\"existsByCustomerEmail\").action()), List.of(\"count\", \"exists\")));\n        test(\"subject words before By are ignored\", () -> eq(parse(\"findTop10ByNameContaining\").conditions(), List.of(new Condition(\"name\", Op.CONTAINING))));\n        test(\"a property without a direction sorts ascending\", () -> eq(parse(\"findByShippedAtIsNullOrderByName\"), new QuerySpec(\"find\", List.of(new Condition(\"shippedAt\", Op.IS_NULL)), List.of(new Sort(\"name\", false)))));\n        test(\"explicit Asc and Desc keys\", () -> eq(parse(\"findByStatusOrderByStatusAscCreatedAtDesc\").orderBy(), List.of(new Sort(\"status\", false), new Sort(\"createdAt\", true))));\n        test(\"unsupported names are rejected (boundary)\", () -> { for (var bad : new String[] { \"findAll\", \"getByStatus\", \"findByStatusOrName\", \"findByStatusAnd\", \"findBy\" }) raises(IllegalArgumentException.class, () -> parse(bad)); });\n        System.exit(report());\n    }\n    // ─── end tests ───────────────────────────────────────────────────────\n}\n",
+      "solution": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · derived query parser★★★\n//  concepts: Spring Data naming · regex · records\n// ─────────────────────────────────────────────────────────────────────────\n\nimport static bootcamp.Check.*;\n\nimport java.util.*;\nimport java.util.regex.*;\n\nclass Exercise {\n\n    enum Op { EQUALS, GREATER_THAN, LESS_THAN, CONTAINING, IS_NULL }\n    record Condition(String property, Op op) {}\n    record Sort(String property, boolean descending) {}\n    record QuerySpec(String action, List<Condition> conditions, List<Sort> orderBy) {}\n\n    static final Pattern SHAPE = Pattern.compile(\"^(find|count|exists|delete)\\\\w*?By(.+?)(?:OrderBy(.+))?$\");\n    static final Map<String, Op> SUFFIXES = new LinkedHashMap<>(Map.of(\n        \"GreaterThan\", Op.GREATER_THAN, \"LessThan\", Op.LESS_THAN, \"Containing\", Op.CONTAINING, \"IsNull\", Op.IS_NULL));\n\n    /** A small derived-query grammar: action, And-joined conditions, optional OrderBy. */\n    static QuerySpec parse(String method) {\n        if (method == null) throw new IllegalArgumentException(\"method name is required\");\n        Matcher m = SHAPE.matcher(method);\n        if (!m.matches()) throw new IllegalArgumentException(\"unsupported method name: \" + method);\n        if (m.group(2).contains(\"Or\")) throw new IllegalArgumentException(\"Or is not supported: \" + method);\n        var conditions = new ArrayList<Condition>();\n        for (var part : m.group(2).split(\"And\", -1)) conditions.add(condition(part));\n        var orderBy = new ArrayList<Sort>();\n        if (m.group(3) != null) {\n            for (var part : m.group(3).split(\"(?<=Asc|Desc)\")) {\n                boolean desc = part.endsWith(\"Desc\");\n                String prop = part.endsWith(\"Desc\") ? part.substring(0, part.length() - 4) : part.endsWith(\"Asc\") ? part.substring(0, part.length() - 3) : part;\n                orderBy.add(new Sort(property(prop), desc));\n            }\n        }\n        return new QuerySpec(m.group(1), conditions, orderBy);\n    }\n\n    static Condition condition(String part) {\n        for (var e : SUFFIXES.entrySet()) {\n            if (part.endsWith(e.getKey())) return new Condition(property(part.substring(0, part.length() - e.getKey().length())), e.getValue());\n        }\n        return new Condition(property(part), Op.EQUALS);\n    }\n\n    static String property(String raw) {\n        if (raw.isEmpty()) throw new IllegalArgumentException(\"empty property name\");\n        return Character.toLowerCase(raw.charAt(0)) + raw.substring(1);\n    }\n\n    // ─── tests ───────────────────────────────────────────────────────────\n    public static void main(String[] args) {\n        test(\"conditions and ordering\", () -> eq(parse(\"findByStatusAndTotalGreaterThanOrderByCreatedAtDesc\"), new QuerySpec(\"find\", List.of(new Condition(\"status\", Op.EQUALS), new Condition(\"total\", Op.GREATER_THAN)), List.of(new Sort(\"createdAt\", true)))));\n        test(\"count and exists actions\", () -> eq(List.of(parse(\"countByStatus\").action(), parse(\"existsByCustomerEmail\").action()), List.of(\"count\", \"exists\")));\n        test(\"subject words before By are ignored\", () -> eq(parse(\"findTop10ByNameContaining\").conditions(), List.of(new Condition(\"name\", Op.CONTAINING))));\n        test(\"a property without a direction sorts ascending\", () -> eq(parse(\"findByShippedAtIsNullOrderByName\"), new QuerySpec(\"find\", List.of(new Condition(\"shippedAt\", Op.IS_NULL)), List.of(new Sort(\"name\", false)))));\n        test(\"explicit Asc and Desc keys\", () -> eq(parse(\"findByStatusOrderByStatusAscCreatedAtDesc\").orderBy(), List.of(new Sort(\"status\", false), new Sort(\"createdAt\", true))));\n        test(\"unsupported names are rejected (boundary)\", () -> { for (var bad : new String[] { \"findAll\", \"getByStatus\", \"findByStatusOrName\", \"findByStatusAnd\", \"findBy\" }) raises(IllegalArgumentException.class, () -> parse(bad)); });\n        System.exit(report());\n    }\n    // ─── end tests ───────────────────────────────────────────────────────\n}\n",
+      "explanation": "Split the name into its three parts, then split each part by its keywords:\n\n```java\nvar m = Pattern.compile(\"^(find|count|exists|delete)\\\\w*?By(.+?)(?:OrderBy(.+))?$\").matcher(method);\nif (!m.matches()) throw new IllegalArgumentException(\"unsupported: \" + method);\nfor (var part : m.group(2).split(\"And\")) conditions.add(condition(part));   // Or is rejected\n```\n\nEach condition strips a known suffix (`GreaterThan`, `LessThan`, `Containing`, `IsNull`) to find its operator, and the order part is split with a lookbehind after `Asc` / `Desc`. Spring Data's real parser handles many more keywords, nested properties and `IgnoreCase`, but the structure is the same.",
+      "hints": [
+        "The name has three regions: an action prefix up to By, the conditions, and an optional OrderBy tail.",
+        "Use a regex like ^(find|count|exists|delete)\\w*?By(.+?)(?:OrderBy(.+))?$, split the conditions on And, strip a known operator suffix from each, and split the order part after each Asc or Desc.",
+        "Read the action from the start, cut the rest into the condition list and the ordering list, work out each condition's operator from its ending, give each ordering a direction, lower-case the first letter of every property, and reject anything outside this small grammar."
+      ]
+    }
+  ]
+}

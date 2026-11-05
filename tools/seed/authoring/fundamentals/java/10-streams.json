@@ -1,0 +1,175 @@
+{
+  "format": "fundamentals-authoring@1",
+  "track": "java",
+  "topic": "10-streams",
+  "title": "Streams",
+  "level": "intermediate",
+  "summary": "Lazy pipelines with intermediate and terminal operations, short-circuiting, single use, collectors (groupingBy, partitioningBy, toMap and its duplicate-key trap), reduce, flatMap, and Stream.toList versus Collectors.toList.",
+  "lesson": "## A lazy pipeline\n\n```java\nList<String> topCustomers = orders.stream()\n    .filter(o -> o.status() == Status.PAID)          // intermediate (lazy)\n    .collect(Collectors.groupingBy(Order::customer, Collectors.summingLong(Order::totalCents)))\n    .entrySet().stream()\n    .sorted(Map.Entry.<String, Long>comparingByValue().reversed())\n    .limit(10)\n    .map(Map.Entry::getKey)\n    .toList();                                        // terminal: runs the pipeline\n```\n\nIntermediate operations (`filter`, `map`, `sorted`, `distinct`, `limit`) only describe work. Nothing runs until a **terminal** operation (`toList`, `collect`, `count`, `findFirst`, `anyMatch`, `forEach`). Elements flow one at a time, and short-circuiting terminals stop early: `Stream.of(1, 2, 3).filter(...).findFirst()` evaluates the filter only until the first match.\n\n## Streams are single-use\n\nA stream can be consumed once; calling a second terminal operation throws `IllegalStateException: stream has already been operated upon or closed`. Keep the collection (or a `Supplier<Stream<T>>`) if you need to traverse twice.\n\n## Collectors you use daily\n\n```java\nCollectors.groupingBy(Order::status)                                  // Map<Status, List<Order>>\nCollectors.groupingBy(Order::customer, TreeMap::new, Collectors.counting())   // sorted keys, counts\nCollectors.partitioningBy(o -> o.totalCents() > 10_000)               // Map<Boolean, List<Order>>\nCollectors.toMap(Order::id, o -> o)                                   // Map<Long, Order>\nCollectors.joining(\", \")\n```\n\n`toMap` throws `IllegalStateException: Duplicate key` when two elements map to the same key. Pass a merge function (`(a, b) -> a` or `Long::sum`) whenever keys can repeat, and a map supplier (`LinkedHashMap::new`) when order matters.\n\n## toList: two flavours\n\n`stream.toList()` (Java 16+) returns an **unmodifiable** list; `collect(Collectors.toList())` returns a mutable `ArrayList` in practice (unspecified, but code relies on it). Calling `add` on the first throws `UnsupportedOperationException`.\n\n## reduce and empty streams\n\n`reduce(0, Integer::sum)` returns the identity for an empty stream. Without an identity, `reduce(Integer::sum)` returns an `Optional`; `IntStream.max()` and `average()` return `OptionalInt` / `OptionalDouble`, empty for no elements: handle \"no data\" explicitly.\n\n## flatMap\n\n`orders.stream().flatMap(o -> o.lines().stream())` turns a stream of orders into a stream of all their lines.\n\n## Rules of thumb\n\n- Keep lambdas in pipelines **side-effect free**; do not add to an outside list in `forEach` when `collect` can build it.\n- `sorted` is stable.\n- Use `mapToLong(...).sum()` rather than boxing to `Long` for numeric totals.\n- `parallelStream()` rarely helps in request handling (it uses the shared common pool) and breaks code with side effects; measure first.\n- A plain loop is fine when the logic is stateful or needs checked exceptions.",
+  "quiz": [
+    {
+      "prompt": "When do the intermediate operations of a stream pipeline run?",
+      "choices": [
+        "Immediately when called",
+        "When a terminal operation is invoked",
+        "On a background thread",
+        "When the stream is garbage-collected"
+      ],
+      "answer": 1,
+      "explanation": "Intermediate operations are lazy; the terminal operation pulls elements through."
+    },
+    {
+      "prompt": "What happens when you call a second terminal operation on the same stream?",
+      "choices": [
+        "It re-runs",
+        "It returns the cached result",
+        "It returns empty",
+        "IllegalStateException: stream has already been operated upon or closed"
+      ],
+      "answer": 3,
+      "explanation": "Streams are single-use."
+    },
+    {
+      "prompt": "`Stream.of(\"a\", \"a\").collect(Collectors.toMap(s -> s, s -> 1))` does what?",
+      "choices": [
+        "Throws IllegalStateException: Duplicate key",
+        "Returns {a=1}",
+        "Returns {a=2}",
+        "Returns an empty map"
+      ],
+      "answer": 0,
+      "explanation": "Provide a merge function when keys can repeat."
+    },
+    {
+      "prompt": "What does `stream.toList().add(x)` do?",
+      "choices": [
+        "Adds x",
+        "Returns false",
+        "Throws UnsupportedOperationException: Stream.toList returns an unmodifiable list",
+        "Creates a copy"
+      ],
+      "answer": 2,
+      "explanation": "Use collect(Collectors.toList()) or new ArrayList<>(...) if you need to modify it."
+    },
+    {
+      "prompt": "What does `Stream.<Integer>empty().reduce(Integer::sum)` return?",
+      "choices": [
+        "0",
+        "Optional.empty()",
+        "null",
+        "It throws"
+      ],
+      "answer": 1,
+      "explanation": "Without an identity there is no sensible result for no elements, so reduce returns an Optional."
+    },
+    {
+      "prompt": "Which collector splits orders into two groups by a condition?",
+      "choices": [
+        "partitioningBy",
+        "groupingBy",
+        "toMap",
+        "joining"
+      ],
+      "answer": 0,
+      "explanation": "partitioningBy always produces a Map with true and false keys."
+    },
+    {
+      "prompt": "In `Stream.of(1, 2, 3).filter(...).findFirst()`, how many times does the filter run if element 2 is the first match?",
+      "choices": [
+        "3",
+        "1",
+        "0",
+        "2"
+      ],
+      "answer": 3,
+      "explanation": "Elements flow one at a time and findFirst short-circuits after the match."
+    },
+    {
+      "prompt": "What does `flatMap(o -> o.lines().stream())` produce from a stream of orders?",
+      "choices": [
+        "A stream of lists",
+        "A map",
+        "A stream of all lines of all orders",
+        "A count"
+      ],
+      "answer": 2,
+      "explanation": "flatMap replaces each element by the elements of the stream it maps to."
+    },
+    {
+      "prompt": "Why avoid `forEach(x -> results.add(x))` into an external list?",
+      "choices": [
+        "It is a side effect: collect builds the result safely, even in parallel",
+        "forEach is deprecated",
+        "It is slower in all cases",
+        "It does not compile"
+      ],
+      "answer": 0,
+      "explanation": "Side-effect-free pipelines are clearer and safe if they are ever parallelised."
+    },
+    {
+      "prompt": "Is `parallelStream()` a good default inside a web request handler?",
+      "choices": [
+        "Yes",
+        "No: it competes for the shared common pool and rarely helps; measure first",
+        "Only for lists",
+        "It is required for performance"
+      ],
+      "answer": 1,
+      "explanation": "Request-level parallelism usually comes from serving many requests, not parallel streams."
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "Intermediate versus terminal operations",
+      "back": "Intermediate ones such as filter and map are lazy descriptions; a terminal one such as toList or count runs the pipeline."
+    },
+    {
+      "front": "Can a stream be reused?",
+      "back": "No. After one terminal operation it is consumed, and another throws IllegalStateException."
+    },
+    {
+      "front": "The toMap duplicate-key trap",
+      "back": "Without a merge function, two elements with the same key throw IllegalStateException."
+    },
+    {
+      "front": "Stream.toList versus Collectors.toList",
+      "back": "The first returns an unmodifiable list; the collector returns a mutable list in practice."
+    },
+    {
+      "front": "reduce with and without identity",
+      "back": "With an identity it returns that value for an empty stream; without one it returns an Optional."
+    },
+    {
+      "front": "groupingBy versus partitioningBy",
+      "back": "groupingBy groups by any key into a map of lists; partitioningBy splits into exactly two groups by a predicate."
+    },
+    {
+      "front": "What does short-circuiting mean for streams?",
+      "back": "Operations like findFirst, anyMatch and limit stop pulling elements as soon as the answer is known."
+    },
+    {
+      "front": "When is a plain loop better than a stream?",
+      "back": "When the logic is stateful, needs checked exceptions or early exits with complex conditions."
+    }
+  ],
+  "drills": [
+    {
+      "slug": "01-revenue-report",
+      "title": "A revenue report with collectors",
+      "difficulty": 2,
+      "skills": [
+        "groupingBy",
+        "sorting entries"
+      ],
+      "instructions": "**Interview prompt.** \"The finance report totals paid revenue per customer, highest first, top N. The current version loops three times and throws 'Duplicate key' for repeat customers.\"\n\n**Why it matters.** `groupingBy` with a downstream collector does the totals in one pass; sorting the entries and collecting into a `LinkedHashMap` keeps the order.\n\n**Your task.** Implement `static Map<String, Long> topRevenue(List<Order> orders, int n)`:\n- only orders whose status is `\"paid\"` count\n- one entry per customer: the sum of `totalCents`\n- ordered by total descending, ties by customer name ascending\n- at most `n` entries\n- the returned map iterates in that order\n\n**Worked example.** Paid orders ana 500, bo 700, ana 300 and an open bo 9999 give `{ana=800, bo=700}`.",
+      "starter": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · revenue report★★☆\n//  concepts: groupingBy · summingLong · LinkedHashMap\n// ─────────────────────────────────────────────────────────────────────────\n\nimport static bootcamp.Check.*;\n\nimport java.util.*;\nimport java.util.stream.*;\n\nclass Exercise {\n\n    record Order(String customer, String status, long totalCents) {}\n\n    /** Paid revenue per customer, highest first (ties by name), at most n entries, in order. */\n    static Map<String, Long> topRevenue(List<Order> orders, int n) {\n        throw new UnsupportedOperationException(\"TODO: groupingBy + summingLong, sort entries, LinkedHashMap\");\n    }\n\n    // ─── tests ───────────────────────────────────────────────────────────\n    public static void main(String[] args) {\n        test(\"sums paid orders per customer\", () -> eq(topRevenue(List.of(new Order(\"ana\", \"paid\", 500), new Order(\"bo\", \"paid\", 700), new Order(\"ana\", \"paid\", 300), new Order(\"bo\", \"open\", 9999)), 10).toString(), \"{ana=800, bo=700}\"));\n        test(\"ties are ordered by name\", () -> eq(new ArrayList<>(topRevenue(List.of(new Order(\"cy\", \"paid\", 10), new Order(\"al\", \"paid\", 10), new Order(\"bo\", \"paid\", 20)), 3).keySet()), List.of(\"bo\", \"al\", \"cy\")));\n        test(\"at most n entries\", () -> eq(topRevenue(List.of(new Order(\"a\", \"paid\", 1), new Order(\"b\", \"paid\", 2), new Order(\"c\", \"paid\", 3)), 2).keySet(), new LinkedHashSet<>(List.of(\"c\", \"b\"))));\n        test(\"no paid orders gives an empty map (boundary)\", () -> ok(topRevenue(List.of(new Order(\"a\", \"open\", 5)), 3).isEmpty(), \"expected empty\"));\n        test(\"repeat customers never throw Duplicate key\", () -> eq(topRevenue(List.of(new Order(\"a\", \"paid\", 1), new Order(\"a\", \"paid\", 1), new Order(\"a\", \"paid\", 1)), 1).get(\"a\"), 3L));\n        System.exit(report());\n    }\n    // ─── end tests ───────────────────────────────────────────────────────\n}\n",
+      "solution": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · revenue report★★☆\n//  concepts: groupingBy · summingLong · LinkedHashMap\n// ─────────────────────────────────────────────────────────────────────────\n\nimport static bootcamp.Check.*;\n\nimport java.util.*;\nimport java.util.stream.*;\n\nclass Exercise {\n\n    record Order(String customer, String status, long totalCents) {}\n\n    /** Paid revenue per customer, highest first (ties by name), at most n entries, in order. */\n    static Map<String, Long> topRevenue(List<Order> orders, int n) {\n        return orders.stream()\n            .filter(o -> o.status().equals(\"paid\"))\n            .collect(Collectors.groupingBy(Order::customer, Collectors.summingLong(Order::totalCents)))\n            .entrySet().stream()\n            .sorted(Map.Entry.<String, Long>comparingByValue(Comparator.reverseOrder()).thenComparing(Map.Entry.comparingByKey()))\n            .limit(n)\n            .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue, (a, b) -> a, LinkedHashMap::new));\n    }\n\n    // ─── tests ───────────────────────────────────────────────────────────\n    public static void main(String[] args) {\n        test(\"sums paid orders per customer\", () -> eq(topRevenue(List.of(new Order(\"ana\", \"paid\", 500), new Order(\"bo\", \"paid\", 700), new Order(\"ana\", \"paid\", 300), new Order(\"bo\", \"open\", 9999)), 10).toString(), \"{ana=800, bo=700}\"));\n        test(\"ties are ordered by name\", () -> eq(new ArrayList<>(topRevenue(List.of(new Order(\"cy\", \"paid\", 10), new Order(\"al\", \"paid\", 10), new Order(\"bo\", \"paid\", 20)), 3).keySet()), List.of(\"bo\", \"al\", \"cy\")));\n        test(\"at most n entries\", () -> eq(topRevenue(List.of(new Order(\"a\", \"paid\", 1), new Order(\"b\", \"paid\", 2), new Order(\"c\", \"paid\", 3)), 2).keySet(), new LinkedHashSet<>(List.of(\"c\", \"b\"))));\n        test(\"no paid orders gives an empty map (boundary)\", () -> ok(topRevenue(List.of(new Order(\"a\", \"open\", 5)), 3).isEmpty(), \"expected empty\"));\n        test(\"repeat customers never throw Duplicate key\", () -> eq(topRevenue(List.of(new Order(\"a\", \"paid\", 1), new Order(\"a\", \"paid\", 1), new Order(\"a\", \"paid\", 1)), 1).get(\"a\"), 3L));\n        System.exit(report());\n    }\n    // ─── end tests ───────────────────────────────────────────────────────\n}\n",
+      "explanation": "Group and sum in one collector, then sort the entries and collect into an insertion-ordered map:\n\n```java\nreturn orders.stream()\n    .filter(o -> o.status().equals(\"paid\"))\n    .collect(Collectors.groupingBy(Order::customer, Collectors.summingLong(Order::totalCents)))\n    .entrySet().stream()\n    .sorted(Map.Entry.<String, Long>comparingByValue(Comparator.reverseOrder()).thenComparing(Map.Entry.comparingByKey()))\n    .limit(n)\n    .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue, (a, b) -> a, LinkedHashMap::new));\n```\n\nThe `LinkedHashMap::new` supplier is what keeps the sorted order; a plain `toMap` returns a HashMap and scrambles it. The merge function is required by that overload even though the keys are already unique.",
+      "hints": [
+        "Totals per key are a groupingBy with a summing downstream collector; order needs a map that remembers insertion order.",
+        "Filter paid orders, groupingBy customer with summingLong, stream the entrySet sorted by value descending then key, limit n, and toMap with a LinkedHashMap supplier.",
+        "Keep the paid orders, add up each customer's totals in one grouping step, rank the resulting pairs by amount and then name, keep the first few, and gather them into a map that preserves that order."
+      ]
+    }
+  ]
+}

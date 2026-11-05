@@ -1,0 +1,175 @@
+{
+  "format": "fundamentals-authoring@1",
+  "track": "java",
+  "topic": "14-threads-executors-and-synchronization",
+  "title": "Threads, executors & synchronization",
+  "level": "advanced",
+  "summary": "Executors instead of raw threads, race conditions on shared counters, synchronized, AtomicInteger and ConcurrentHashMap, volatile visibility, futures and lost exceptions, deadlocks, and shutting executors down.",
+  "lesson": "## Use executors, not raw threads\n\n```java\nExecutorService pool = Executors.newFixedThreadPool(4);\ntry {\n    Future<Report> f = pool.submit(() -> buildReport(id));\n    Report r = f.get(5, TimeUnit.SECONDS);   // waits; a task exception arrives wrapped in ExecutionException\n} finally {\n    pool.shutdown();                          // let queued tasks finish, accept no new ones\n    pool.awaitTermination(10, TimeUnit.SECONDS);\n}\n```\n\nAn executor reuses a bounded set of threads and queues the rest. Always shut down the executors you create (or threads leak and the JVM may not exit). In Spring, inject a managed `TaskExecutor` instead of creating pools per request. (Virtual threads, `Executors.newVirtualThreadPerTaskExecutor()`, arrived in Java 21; they are not available on Java 17.)\n\nAn exception thrown inside a task passed to `submit` is stored in its Future: if nobody calls `get()`, it disappears silently. Call `get()`, or log inside the task.\n\n## Race conditions\n\n`count++` is read, add, write: three steps. Eight threads incrementing a shared `int` 100,000 times each end up with LESS than 800,000. Shared mutable state needs coordination:\n\n```java\nsynchronized (lock) { count++; }                 // mutual exclusion + visibility\nAtomicInteger hits = new AtomicInteger();        // lock-free atomic operations\nhits.incrementAndGet();\nConcurrentHashMap<String, Integer> counts = new ConcurrentHashMap<>();\ncounts.merge(word, 1, Integer::sum);             // atomic per key\n```\n\n`synchronized` methods and blocks lock on a monitor: only one thread at a time runs code guarded by the same lock, and changes made inside are visible to the next thread that takes the lock.\n\n## Visibility and volatile\n\nWithout synchronisation, one thread may never see another thread's write (CPU caches, compiler reordering). `volatile` guarantees visibility of a single variable (a `running` flag) but NOT atomicity of compound actions: `volatile int count; count++` is still a race.\n\n## Thread-safe collections\n\n`HashMap` and `ArrayList` are not safe for concurrent writes. Use `ConcurrentHashMap` (and its atomic `merge`, `compute`, `computeIfAbsent`), `CopyOnWriteArrayList` for read-mostly lists, or confine data to one thread. Check-then-act on a concurrent map (`if (!map.containsKey(k)) map.put(k, v)`) is still a race: use `putIfAbsent` / `computeIfAbsent`.\n\n## Deadlock\n\nThread 1 holds lock A and waits for B; thread 2 holds B and waits for A: both wait forever. Prevent it by always acquiring locks in the same global order, holding locks briefly, and never calling unknown code (callbacks, I/O) while holding a lock.\n\n## Prefer not sharing\n\nThe easiest thread safety is none needed: immutable objects (records, `List.copyOf`), local variables, and message passing between tasks. In a typical Spring service, each request has its own objects; bugs come from mutable fields in singleton beans (topic 17).",
+  "quiz": [
+    {
+      "prompt": "Eight threads each run `count++` 100,000 times on a shared int with no synchronisation. The final count is typically...",
+      "choices": [
+        "Exactly 800,000",
+        "Less than 800,000: increments are lost to the race",
+        "More than 800,000",
+        "0"
+      ],
+      "answer": 1,
+      "explanation": "count++ is a read-modify-write sequence; interleavings overwrite each other's updates."
+    },
+    {
+      "prompt": "Which makes a shared counter correct under concurrency?",
+      "choices": [
+        "volatile int",
+        "A local variable copy",
+        "Thread.yield()",
+        "AtomicInteger.incrementAndGet()"
+      ],
+      "answer": 3,
+      "explanation": "Atomic classes perform the read-modify-write as one indivisible operation."
+    },
+    {
+      "prompt": "What does `volatile` guarantee?",
+      "choices": [
+        "Visibility of writes to that variable across threads, not atomicity of compound actions",
+        "Atomic increments",
+        "Mutual exclusion",
+        "Deadlock freedom"
+      ],
+      "answer": 0,
+      "explanation": "volatile suits flags; use atomics or locks for counters."
+    },
+    {
+      "prompt": "A task submitted with `submit()` throws, and nobody calls `get()`. What happens to the exception?",
+      "choices": [
+        "It crashes the JVM",
+        "It is printed automatically",
+        "It is stored in the Future and silently lost",
+        "It is rethrown in main"
+      ],
+      "answer": 2,
+      "explanation": "Call get() or handle errors inside the task."
+    },
+    {
+      "prompt": "What does `future.get()` throw when the task failed?",
+      "choices": [
+        "The task's exception directly",
+        "ExecutionException wrapping the task's exception",
+        "InterruptedException always",
+        "Nothing"
+      ],
+      "answer": 1,
+      "explanation": "Unwrap with getCause() to see what the task threw."
+    },
+    {
+      "prompt": "Why must you call `shutdown()` on an executor you created?",
+      "choices": [
+        "Otherwise its threads keep running and can prevent the JVM from exiting",
+        "To free memory immediately",
+        "It is optional",
+        "To clear the queue"
+      ],
+      "answer": 0,
+      "explanation": "Non-daemon pool threads stay alive until the executor is shut down."
+    },
+    {
+      "prompt": "Two threads take locks A then B and B then A respectively. What can happen?",
+      "choices": [
+        "Nothing",
+        "Starvation only",
+        "An exception",
+        "Deadlock: each waits forever for the other"
+      ],
+      "answer": 3,
+      "explanation": "Acquire locks in one consistent order everywhere."
+    },
+    {
+      "prompt": "Is `if (!map.containsKey(k)) map.put(k, v);` on a ConcurrentHashMap thread-safe?",
+      "choices": [
+        "Yes",
+        "Only with volatile keys",
+        "No: the check and the put are separate steps; use putIfAbsent or computeIfAbsent",
+        "Only for String keys"
+      ],
+      "answer": 2,
+      "explanation": "Each call is atomic, but the combination is not."
+    },
+    {
+      "prompt": "Are virtual threads available on Java 17?",
+      "choices": [
+        "No: they became standard in Java 21",
+        "Yes",
+        "Only with a flag in 11",
+        "Only on Linux"
+      ],
+      "answer": 0,
+      "explanation": "On 17 you use platform-thread executors."
+    },
+    {
+      "prompt": "Where do most thread-safety bugs in Spring services come from?",
+      "choices": [
+        "Local variables",
+        "Mutable fields in singleton beans shared by concurrent requests",
+        "Records",
+        "Final fields"
+      ],
+      "answer": 1,
+      "explanation": "Singleton beans serve every request at once; keep them stateless."
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "Why is count++ unsafe across threads?",
+      "back": "It is a read, an add and a write; two threads can read the same value and one update is lost."
+    },
+    {
+      "front": "synchronized versus AtomicInteger",
+      "back": "synchronized gives mutual exclusion and visibility for a block of code; AtomicInteger makes single-variable updates atomic without a lock."
+    },
+    {
+      "front": "What does volatile do and not do?",
+      "back": "It makes writes visible to other threads but does not make compound actions such as increments atomic."
+    },
+    {
+      "front": "Where does an exception from a submitted task go?",
+      "back": "Into its Future; get() rethrows it wrapped in ExecutionException, and if nobody calls get() it is lost."
+    },
+    {
+      "front": "How should executors be shut down?",
+      "back": "Call shutdown, then awaitTermination, usually in a finally block, so pool threads do not leak."
+    },
+    {
+      "front": "Check-then-act on concurrent maps",
+      "back": "Separate contains and put calls race; use putIfAbsent, computeIfAbsent or merge, which are atomic."
+    },
+    {
+      "front": "How do you prevent deadlocks?",
+      "back": "Acquire locks in a single consistent order, hold them briefly, and avoid calling unknown code while holding one."
+    },
+    {
+      "front": "The simplest route to thread safety",
+      "back": "Do not share mutable state: use immutable objects, local variables and stateless singleton services."
+    }
+  ],
+  "drills": [
+    {
+      "slug": "01-parallel-word-count",
+      "title": "Count words on several threads without losing updates",
+      "difficulty": 3,
+      "skills": [
+        "ExecutorService",
+        "ConcurrentHashMap.merge"
+      ],
+      "instructions": "**Interview prompt.** \"The log analyser counts words on a thread pool into a HashMap, and the totals change from run to run. Make it correct and make sure the pool never leaks.\"\n\n**Why it matters.** Concurrent writes to a HashMap lose updates (or corrupt it). `ConcurrentHashMap.merge` makes each per-word update atomic, and an executor shut down in `finally` cannot leak threads even when a task fails.\n\n**Your task.** Implement `static Map<String, Integer> countWords(List<String> lines, int threads)`:\n- split each line on runs of whitespace; words are lower-cased with `Locale.ROOT`; empty pieces are ignored\n- the lines are processed by an `ExecutorService` with `threads` threads, each task handling some of the lines\n- the result maps each word to its total count and must be exact\n- the executor is shut down before the method returns, also when a task fails (a task failure is rethrown as an unchecked exception)\n- `threads` below 1 throws `IllegalArgumentException`\n\n**Worked example.** `[\"a b\", \"B c\", \"a\"]` on 2 threads gives `{a=2, b=2, c=1}`.",
+      "starter": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · parallel word count★★★\n//  concepts: ExecutorService · ConcurrentHashMap · shutdown in finally\n// ─────────────────────────────────────────────────────────────────────────\n\nimport static bootcamp.Check.*;\n\nimport java.util.*;\nimport java.util.concurrent.*;\n\nclass Exercise {\n\n    /** Exact word counts computed on a pool of threads; the pool never leaks. */\n    static Map<String, Integer> countWords(List<String> lines, int threads) {\n        throw new UnsupportedOperationException(\"TODO: executor + ConcurrentHashMap.merge + shutdown in finally\");\n    }\n\n    // ─── tests ───────────────────────────────────────────────────────────\n    public static void main(String[] args) {\n        test(\"small input is counted exactly\", () -> eq(new TreeMap<>(countWords(List.of(\"a b\", \"B c\", \"a\"), 2)), new TreeMap<>(Map.of(\"a\", 2, \"b\", 2, \"c\", 1))));\n        test(\"many lines on many threads lose no updates\", () -> {\n            var lines = new ArrayList<String>();\n            for (int i = 0; i < 4000; i++) lines.add(\"alpha beta alpha\");\n            var m = countWords(lines, 8);\n            eq(m.get(\"alpha\"), 8000);\n            eq(m.get(\"beta\"), 4000);\n        });\n        test(\"one thread works too\", () -> eq(countWords(List.of(\"x  x\\tY\"), 1), Map.of(\"x\", 2, \"y\", 1)));\n        test(\"no lines gives an empty map (boundary)\", () -> ok(countWords(List.of(), 3).isEmpty(), \"expected empty\"));\n        test(\"fewer than one thread is rejected\", () -> raises(IllegalArgumentException.class, () -> countWords(List.of(\"a\"), 0)));\n        System.exit(report());\n    }\n    // ─── end tests ───────────────────────────────────────────────────────\n}\n",
+      "solution": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · parallel word count★★★\n//  concepts: ExecutorService · ConcurrentHashMap · shutdown in finally\n// ─────────────────────────────────────────────────────────────────────────\n\nimport static bootcamp.Check.*;\n\nimport java.util.*;\nimport java.util.concurrent.*;\n\nclass Exercise {\n\n    /** Exact word counts computed on a pool of threads; the pool never leaks. */\n    static Map<String, Integer> countWords(List<String> lines, int threads) {\n        if (threads < 1) throw new IllegalArgumentException(\"threads must be >= 1\");\n        var counts = new ConcurrentHashMap<String, Integer>();\n        ExecutorService pool = Executors.newFixedThreadPool(threads);\n        try {\n            var futures = new ArrayList<Future<?>>();\n            for (var line : lines) {\n                futures.add(pool.submit(() -> {\n                    for (var w : line.strip().split(\"\\\\s+\")) {\n                        if (!w.isEmpty()) counts.merge(w.toLowerCase(Locale.ROOT), 1, Integer::sum);\n                    }\n                }));\n            }\n            for (var f : futures) f.get();\n        } catch (ExecutionException e) {\n            throw new IllegalStateException(\"counting failed\", e.getCause());\n        } catch (InterruptedException e) {\n            Thread.currentThread().interrupt();\n            throw new IllegalStateException(\"interrupted\", e);\n        } finally {\n            pool.shutdown();\n        }\n        return counts;\n    }\n\n    // ─── tests ───────────────────────────────────────────────────────────\n    public static void main(String[] args) {\n        test(\"small input is counted exactly\", () -> eq(new TreeMap<>(countWords(List.of(\"a b\", \"B c\", \"a\"), 2)), new TreeMap<>(Map.of(\"a\", 2, \"b\", 2, \"c\", 1))));\n        test(\"many lines on many threads lose no updates\", () -> {\n            var lines = new ArrayList<String>();\n            for (int i = 0; i < 4000; i++) lines.add(\"alpha beta alpha\");\n            var m = countWords(lines, 8);\n            eq(m.get(\"alpha\"), 8000);\n            eq(m.get(\"beta\"), 4000);\n        });\n        test(\"one thread works too\", () -> eq(countWords(List.of(\"x  x\\tY\"), 1), Map.of(\"x\", 2, \"y\", 1)));\n        test(\"no lines gives an empty map (boundary)\", () -> ok(countWords(List.of(), 3).isEmpty(), \"expected empty\"));\n        test(\"fewer than one thread is rejected\", () -> raises(IllegalArgumentException.class, () -> countWords(List.of(\"a\"), 0)));\n        System.exit(report());\n    }\n    // ─── end tests ───────────────────────────────────────────────────────\n}\n",
+      "explanation": "Each task merges into one ConcurrentHashMap; the futures are awaited so failures surface; `finally` shuts the pool down:\n\n```java\nvar counts = new ConcurrentHashMap<String, Integer>();\nExecutorService pool = Executors.newFixedThreadPool(threads);\ntry {\n    var futures = new ArrayList<Future<?>>();\n    for (var line : lines) futures.add(pool.submit(() -> {\n        for (var w : line.strip().split(\"\\\\s+\")) if (!w.isEmpty()) counts.merge(w.toLowerCase(Locale.ROOT), 1, Integer::sum);\n    }));\n    for (var f : futures) f.get();\n} catch (ExecutionException e) {\n    throw new IllegalStateException(\"counting failed\", e.getCause());\n} finally {\n    pool.shutdown();\n}\n```\n\n`merge` is atomic per key, so no update is lost. Calling `get()` on every future both waits for completion and rethrows a task's exception instead of losing it.",
+      "hints": [
+        "All tasks may write to the same map, so the map and each update must be safe for concurrent use.",
+        "Use a ConcurrentHashMap with merge(word, 1, Integer::sum), submit one task per line to Executors.newFixedThreadPool, call get on every Future, and shut the pool down in finally.",
+        "Give every task the same thread-safe map and update counts with its atomic combine operation, wait for each task so failures are noticed, and always close the pool afterwards, whatever happened."
+      ]
+    }
+  ]
+}
