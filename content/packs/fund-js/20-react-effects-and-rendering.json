@@ -1,0 +1,99 @@
+{
+ "format": "bootquest-pack@1",
+ "source": "fund-js",
+ "course": {
+  "id": "20-react-effects-and-rendering",
+  "order": 20,
+  "title": "React: effects, rendering & data fetching",
+  "description": "When effects run, dependency arrays compared with Object.is, cleanup order, StrictMode double runs, stale closures, race conditions in fetch effects, and the effects you should not write at all.",
+  "prerequisites": []
+ },
+ "modules": [
+  {
+   "id": "20-react-effects-and-rendering",
+   "title": "React: effects, rendering & data fetching",
+   "lessons": [
+    {
+     "id": "drills",
+     "title": "React: effects, rendering & data fetching",
+     "explanation": "When effects run, dependency arrays compared with Object.is, cleanup order, StrictMode double runs, stale closures, race conditions in fetch effects, and the effects you should not write at all."
+    }
+   ]
+  }
+ ],
+ "units": [
+  {
+   "unit": {
+    "key": "fund-js/20-react-effects-and-rendering/01-effect-runner",
+    "track": "js",
+    "kind": "drill",
+    "title": "Simulate useEffect: dependencies and cleanup",
+    "phase": "20-react-effects-and-rendering",
+    "difficulty": 3,
+    "competencies": [
+     "language-fluency"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-js",
+       "language": "js",
+       "tests": [
+        {
+         "name": "runs on the first render and when deps change",
+         "code": "assert.equal(typeof mod.createEffectSlot, 'function', 'export createEffectSlot');\nconst slot = mod.createEffectSlot();\nlet runs = 0;\nconst fx = () => { runs++; };\nassert.equal(slot.render(fx, [1]), true);\nassert.equal(slot.render(fx, [1]), false);\nassert.equal(slot.render(fx, [2]), true);\nassert.equal(runs, 2);"
+        },
+        {
+         "name": "the previous cleanup runs before the next effect",
+         "code": "const slot = mod.createEffectSlot();\nconst log = [];\nconst fx = (n) => () => { log.push('run ' + n); return () => log.push('cleanup ' + n); };\nslot.render(fx(1), ['a']);\nslot.render(fx(2), ['b']);\nslot.unmount();\nassert.deepEqual(log, ['run 1', 'cleanup 1', 'run 2', 'cleanup 2']);"
+        },
+        {
+         "name": "an empty array runs once; no array runs every render",
+         "code": "const once = mod.createEffectSlot();\nlet a = 0;\nonce.render(() => { a++; }, []);\nonce.render(() => { a++; }, []);\nassert.equal(a, 1);\nconst every = mod.createEffectSlot();\nlet b = 0;\nevery.render(() => { b++; });\nevery.render(() => { b++; });\nassert.equal(b, 2);"
+        },
+        {
+         "name": "deps are compared with Object.is",
+         "code": "const slot = mod.createEffectSlot();\nlet runs = 0;\nconst fx = () => { runs++; };\nslot.render(fx, [NaN]);\nassert.equal(slot.render(fx, [NaN]), false, 'NaN is stable');\nassert.equal(slot.render(fx, [{}]), true);\nassert.equal(slot.render(fx, [{}]), true, 'a new object is a change');\nconst o = {};\nslot.render(fx, [o]);\nassert.equal(slot.render(fx, [o]), false);"
+        },
+        {
+         "name": "a changed deps length counts as a change",
+         "code": "const slot = mod.createEffectSlot();\nslot.render(() => {}, [1]);\nassert.equal(slot.render(() => {}, [1, 2]), true);"
+        },
+        {
+         "name": "unmount calls the cleanup exactly once (boundary)",
+         "code": "const slot = mod.createEffectSlot();\nlet cleaned = 0;\nslot.render(() => () => { cleaned++; }, []);\nslot.unmount();\nslot.unmount();\nassert.equal(cleaned, 1);\nconst none = mod.createEffectSlot();\nnone.unmount();"
+        }
+       ],
+       "timeoutMs": 8000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "20-react-effects-and-rendering/01-effect-runner",
+    "type": "code",
+    "module": "20-react-effects-and-rendering",
+    "lesson": "drills",
+    "position": 0,
+    "skills": [
+     "Object.is",
+     "cleanup ordering"
+    ]
+   }
+  }
+ ],
+ "content": {
+  "fund-js/20-react-effects-and-rendering/01-effect-runner": {
+   "instructions": "**Skills:** Object.is · cleanup ordering  \n**Level:** ★★★\n\n**Interview prompt.** \"Explain exactly when React re-runs an effect and when it calls the cleanup. Then implement that logic without React.\"\n\n**Why it matters.** Most effect bugs (infinite loops, double subscriptions, stale data) come from misunderstanding two rules: dependencies are compared with `Object.is`, and the previous cleanup always runs before the next effect.\n\n**Your task.** Export `createEffectSlot()`. It returns an object modelling ONE `useEffect` call across renders:\n- `render(effect, deps)`: call this once per render. The effect runs when this is the first render, when `deps` is `undefined` (no array: every render), or when the array's length changed or any element differs from the previous render's by `Object.is`. Before running the effect again, call the cleanup returned by its previous run (if it returned a function). `render` returns `true` if the effect ran, `false` otherwise. The previous deps are only replaced when the effect runs.\n- `unmount()`: calls the pending cleanup, if any, exactly once.\n\n**Worked example.** `render(fx, [1])` runs fx; `render(fx, [1])` does not; `render(fx, [2])` calls fx's cleanup, then runs fx again.\n",
+   "starter": "export function createEffectSlot() {\n  // TODO: remember the previous deps and the pending cleanup\n}\n",
+   "solution": "const changed = (prev, next) => prev.length !== next.length || next.some((d, i) => !Object.is(d, prev[i]));\n\nexport function createEffectSlot() {\n  let prevDeps;\n  let mounted = false;\n  let cleanup;\n  const runCleanup = () => {\n    const c = cleanup;\n    cleanup = undefined;\n    if (typeof c === 'function') c();\n  };\n  return {\n    render(effect, deps) {\n      const run = !mounted || deps === undefined || prevDeps === undefined || changed(prevDeps, deps);\n      mounted = true;\n      if (!run) return false;\n      runCleanup();\n      prevDeps = deps;\n      cleanup = effect();\n      return true;\n    },\n    unmount() {\n      runCleanup();\n    },\n  };\n}\n",
+   "explanation": "Decide whether to run, then clean up the previous run, then run and store the new cleanup:\n\n```js\nrender(effect, deps) {\n  const run = !mounted || deps === undefined || prevDeps === undefined || changed(prevDeps, deps);\n  mounted = true;\n  if (!run) return false;\n  runCleanup();\n  prevDeps = deps;\n  cleanup = effect();\n  return true;\n}\n```\n\n`changed` compares lengths and then every element with `Object.is`, which is why `NaN` is stable while a fresh `{}` always re-runs: exactly the behaviour behind the \"object in deps\" infinite loop.",
+   "hints": [
+    "You need to remember three things between renders: whether this is the first render, the last deps the effect ran with, and the cleanup it returned.",
+    "Run when it is the first render, deps is undefined, the lengths differ, or some element fails Object.is; call the stored cleanup first, then store the new deps and the effect's return value.",
+    "On each render decide whether the effect is due, and if it is, first undo the previous run by calling its stored cleanup, then run it and keep its new cleanup. On unmount, call the stored cleanup and forget it."
+   ]
+  }
+ }
+}

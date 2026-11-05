@@ -1,0 +1,79 @@
+{
+ "format": "bootquest-pack@1",
+ "source": "fund-csharp",
+ "course": {
+  "id": "20-ef-core-queries-n-plus-1-and-transactions",
+  "order": 20,
+  "title": "EF Core queries: N+1, projections & transactions",
+  "description": "IQueryable translation to SQL, the N+1 problem and how Include, projections and batching fix it, client evaluation errors, parameterised raw SQL, explicit transactions and optimistic concurrency.",
+  "prerequisites": []
+ },
+ "modules": [
+  {
+   "id": "20-ef-core-queries-n-plus-1-and-transactions",
+   "title": "EF Core queries: N+1, projections & transactions",
+   "lessons": [
+    {
+     "id": "drills",
+     "title": "EF Core queries: N+1, projections & transactions",
+     "explanation": "IQueryable translation to SQL, the N+1 problem and how Include, projections and batching fix it, client evaluation errors, parameterised raw SQL, explicit transactions and optimistic concurrency."
+    }
+   ]
+  }
+ ],
+ "units": [
+  {
+   "unit": {
+    "key": "fund-csharp/20-ef-core-queries-n-plus-1-and-transactions/01-batch-load-customers",
+    "track": "csharp",
+    "kind": "drill",
+    "title": "Fix an N+1 with one batched lookup",
+    "phase": "20-ef-core-queries-n-plus-1-and-transactions",
+    "difficulty": 3,
+    "competencies": [
+     "language-fluency"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-cs",
+       "shape": "console-check",
+       "files": {
+        "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"one call with the distinct customer ids\", async () =>\n{\n    var calls = new List<int[]>();\n    Task<Dictionary<int, Customer>> Load(IReadOnlyCollection<int> ids)\n    {\n        calls.Add(ids.OrderBy(i => i).ToArray());\n        return Task.FromResult(ids.ToDictionary(i => i, i => new Customer(i, \"c\" + i)));\n    }\n    await LoadRows(new[] { new Order(10, 1, 5m), new Order(11, 2, 7m), new Order(12, 1, 9m) }, Load);\n    Eq(calls.Count, 1);\n    Eq(calls[0], new[] { 1, 2 });\n});\n\nTest(\"rows keep the order sequence and carry the names\", async () =>\n{\n    Task<Dictionary<int, Customer>> Load(IReadOnlyCollection<int> ids) => Task.FromResult(new Dictionary<int, Customer> { [1] = new(1, \"Ana\"), [2] = new(2, \"Bo\") });\n    var rows = await LoadRows(new[] { new Order(12, 2, 9m), new Order(10, 1, 5m) }, Load);\n    Eq(rows, new[] { new OrderRow(12, \"Bo\", 9m), new OrderRow(10, \"Ana\", 5m) });\n});\n\nTest(\"a missing customer gets a placeholder name\", async () =>\n{\n    Task<Dictionary<int, Customer>> Load(IReadOnlyCollection<int> ids) => Task.FromResult(new Dictionary<int, Customer>());\n    var rows = await LoadRows(new[] { new Order(1, 99, 3m) }, Load);\n    Eq(rows[0].CustomerName, \"(unknown customer)\");\n});\n\nTest(\"no orders, no call (boundary)\", async () =>\n{\n    var calls = 0;\n    Task<Dictionary<int, Customer>> Load(IReadOnlyCollection<int> ids) { calls++; return Task.FromResult(new Dictionary<int, Customer>()); }\n    var rows = await LoadRows(Array.Empty<Order>(), Load);\n    Eq(rows.Count, 0);\n    Eq(calls, 0);\n});\n\n",
+        "tail": "// ──────────────────────────── types ──────────────────────────────────────\n\nrecord Order(int Id, int CustomerId, decimal Total);\nrecord Customer(int Id, string Name);\nrecord OrderRow(int OrderId, string CustomerName, decimal Total);\n",
+        "frozen": []
+       },
+       "harness": "jstrain",
+       "timeoutMs": 20000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "20-ef-core-queries-n-plus-1-and-transactions/01-batch-load-customers",
+    "type": "code",
+    "module": "20-ef-core-queries-n-plus-1-and-transactions",
+    "lesson": "drills",
+    "position": 0,
+    "skills": [
+     "N+1 queries",
+     "batching"
+    ]
+   }
+  }
+ ],
+ "content": {
+  "fund-csharp/20-ef-core-queries-n-plus-1-and-transactions/01-batch-load-customers": {
+   "instructions": "**Skills:** N+1 queries · batching  \n**Level:** ★★★\n\n**Interview prompt.** \"The order list calls the customer service once per order. With 200 orders that is 201 round-trips. Load every customer in one call.\"\n\n**Why it matters.** Batching (collect the ids, fetch them in one `WHERE Id IN (...)` query, join in memory) is the general fix for N+1 when Include or a projection is not available, for example when the related data lives in another service.\n\n**Your task.** Implement the stubbed local function\n`async Task<List<OrderRow>> LoadRows(IReadOnlyList<Order> orders, Func<IReadOnlyCollection<int>, Task<Dictionary<int, Customer>>> loadCustomers)`:\n- call `loadCustomers` exactly ONCE, with the DISTINCT customer ids of the orders\n- return one `OrderRow(OrderId, CustomerName, Total)` per order, in the orders' order\n- an order whose customer is missing from the returned dictionary gets the name `\"(unknown customer)\"`\n- with no orders, do not call `loadCustomers` at all and return an empty list\n\n**Worked example.** Orders for customers 1, 2 and 1 cause one call with ids {1, 2}.\n",
+   "starter": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · batch-load customers★★★ core\n//  concepts: N+1 · batching · in-memory join\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  One round-trip for all related rows, then join in memory.\n\nusing static Bootcamp.Check;\n\nasync Task<List<OrderRow>> LoadRows(IReadOnlyList<Order> orders, Func<IReadOnlyCollection<int>, Task<Dictionary<int, Customer>>> loadCustomers)\n{\n    // TODO: one call with the distinct customer ids, then map every order\n    await Task.CompletedTask;\n    throw new NotImplementedException();\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"one call with the distinct customer ids\", async () =>\n{\n    var calls = new List<int[]>();\n    Task<Dictionary<int, Customer>> Load(IReadOnlyCollection<int> ids)\n    {\n        calls.Add(ids.OrderBy(i => i).ToArray());\n        return Task.FromResult(ids.ToDictionary(i => i, i => new Customer(i, \"c\" + i)));\n    }\n    await LoadRows(new[] { new Order(10, 1, 5m), new Order(11, 2, 7m), new Order(12, 1, 9m) }, Load);\n    Eq(calls.Count, 1);\n    Eq(calls[0], new[] { 1, 2 });\n});\n\nTest(\"rows keep the order sequence and carry the names\", async () =>\n{\n    Task<Dictionary<int, Customer>> Load(IReadOnlyCollection<int> ids) => Task.FromResult(new Dictionary<int, Customer> { [1] = new(1, \"Ana\"), [2] = new(2, \"Bo\") });\n    var rows = await LoadRows(new[] { new Order(12, 2, 9m), new Order(10, 1, 5m) }, Load);\n    Eq(rows, new[] { new OrderRow(12, \"Bo\", 9m), new OrderRow(10, \"Ana\", 5m) });\n});\n\nTest(\"a missing customer gets a placeholder name\", async () =>\n{\n    Task<Dictionary<int, Customer>> Load(IReadOnlyCollection<int> ids) => Task.FromResult(new Dictionary<int, Customer>());\n    var rows = await LoadRows(new[] { new Order(1, 99, 3m) }, Load);\n    Eq(rows[0].CustomerName, \"(unknown customer)\");\n});\n\nTest(\"no orders, no call (boundary)\", async () =>\n{\n    var calls = 0;\n    Task<Dictionary<int, Customer>> Load(IReadOnlyCollection<int> ids) { calls++; return Task.FromResult(new Dictionary<int, Customer>()); }\n    var rows = await LoadRows(Array.Empty<Order>(), Load);\n    Eq(rows.Count, 0);\n    Eq(calls, 0);\n});\n\n// ──────────────────────────── types ──────────────────────────────────────\n\nrecord Order(int Id, int CustomerId, decimal Total);\nrecord Customer(int Id, string Name);\nrecord OrderRow(int OrderId, string CustomerName, decimal Total);\n",
+   "solution": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · batch-load customers★★★ core\n//  concepts: N+1 · batching · in-memory join\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  One round-trip for all related rows, then join in memory.\n\nusing static Bootcamp.Check;\n\nasync Task<List<OrderRow>> LoadRows(IReadOnlyList<Order> orders, Func<IReadOnlyCollection<int>, Task<Dictionary<int, Customer>>> loadCustomers)\n{\n    if (orders.Count == 0) return new List<OrderRow>();\n    var ids = orders.Select(o => o.CustomerId).Distinct().ToList();\n    var customers = await loadCustomers(ids);\n    return orders\n        .Select(o => new OrderRow(o.Id, customers.TryGetValue(o.CustomerId, out var c) ? c.Name : \"(unknown customer)\", o.Total))\n        .ToList();\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"one call with the distinct customer ids\", async () =>\n{\n    var calls = new List<int[]>();\n    Task<Dictionary<int, Customer>> Load(IReadOnlyCollection<int> ids)\n    {\n        calls.Add(ids.OrderBy(i => i).ToArray());\n        return Task.FromResult(ids.ToDictionary(i => i, i => new Customer(i, \"c\" + i)));\n    }\n    await LoadRows(new[] { new Order(10, 1, 5m), new Order(11, 2, 7m), new Order(12, 1, 9m) }, Load);\n    Eq(calls.Count, 1);\n    Eq(calls[0], new[] { 1, 2 });\n});\n\nTest(\"rows keep the order sequence and carry the names\", async () =>\n{\n    Task<Dictionary<int, Customer>> Load(IReadOnlyCollection<int> ids) => Task.FromResult(new Dictionary<int, Customer> { [1] = new(1, \"Ana\"), [2] = new(2, \"Bo\") });\n    var rows = await LoadRows(new[] { new Order(12, 2, 9m), new Order(10, 1, 5m) }, Load);\n    Eq(rows, new[] { new OrderRow(12, \"Bo\", 9m), new OrderRow(10, \"Ana\", 5m) });\n});\n\nTest(\"a missing customer gets a placeholder name\", async () =>\n{\n    Task<Dictionary<int, Customer>> Load(IReadOnlyCollection<int> ids) => Task.FromResult(new Dictionary<int, Customer>());\n    var rows = await LoadRows(new[] { new Order(1, 99, 3m) }, Load);\n    Eq(rows[0].CustomerName, \"(unknown customer)\");\n});\n\nTest(\"no orders, no call (boundary)\", async () =>\n{\n    var calls = 0;\n    Task<Dictionary<int, Customer>> Load(IReadOnlyCollection<int> ids) { calls++; return Task.FromResult(new Dictionary<int, Customer>()); }\n    var rows = await LoadRows(Array.Empty<Order>(), Load);\n    Eq(rows.Count, 0);\n    Eq(calls, 0);\n});\n\n// ──────────────────────────── types ──────────────────────────────────────\n\nrecord Order(int Id, int CustomerId, decimal Total);\nrecord Customer(int Id, string Name);\nrecord OrderRow(int OrderId, string CustomerName, decimal Total);\n",
+   "explanation": "Collect the distinct ids, make ONE call, then join in memory with dictionary lookups:\n\n```csharp\nif (orders.Count == 0) return new List<OrderRow>();\nvar ids = orders.Select(o => o.CustomerId).Distinct().ToList();\nvar customers = await loadCustomers(ids);\nreturn orders.Select(o => new OrderRow(o.Id,\n        customers.TryGetValue(o.CustomerId, out var c) ? c.Name : \"(unknown customer)\", o.Total)).ToList();\n```\n\nWith EF Core the same shape is `db.Customers.Where(c => ids.Contains(c.Id)).ToDictionaryAsync(c => c.Id)`, which becomes a single `WHERE Id IN (...)` query.",
+   "hints": [
+    "The N+1 comes from asking for related data per item; ask once for every id you will need.",
+    "Short-circuit an empty list, take Select(o => o.CustomerId).Distinct().ToList(), await one loadCustomers call, and build each row with TryGetValue on the returned dictionary.",
+    "Gather the set of customer ids the orders refer to, fetch them all in a single request, and then build the rows by looking each order's customer up in the result, falling back to the placeholder name when it is not there."
+   ]
+  }
+ }
+}

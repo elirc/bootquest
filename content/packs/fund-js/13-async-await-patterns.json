@@ -1,0 +1,95 @@
+{
+ "format": "bootquest-pack@1",
+ "source": "fund-js",
+ "course": {
+  "id": "13-async-await-patterns",
+  "order": 13,
+  "title": "async/await patterns",
+  "description": "Sequential versus parallel awaits, Promise.all, allSettled, race and any, the async forEach trap, bounded concurrency, retries with backoff and cancellation with AbortController.",
+  "prerequisites": []
+ },
+ "modules": [
+  {
+   "id": "13-async-await-patterns",
+   "title": "async/await patterns",
+   "lessons": [
+    {
+     "id": "drills",
+     "title": "async/await patterns",
+     "explanation": "Sequential versus parallel awaits, Promise.all, allSettled, race and any, the async forEach trap, bounded concurrency, retries with backoff and cancellation with AbortController."
+    }
+   ]
+  }
+ ],
+ "units": [
+  {
+   "unit": {
+    "key": "fund-js/13-async-await-patterns/01-map-with-concurrency-limit",
+    "track": "js",
+    "kind": "drill",
+    "title": "mapLimit: async map with bounded concurrency",
+    "phase": "13-async-await-patterns",
+    "difficulty": 3,
+    "competencies": [
+     "language-fluency"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-js",
+       "language": "js",
+       "tests": [
+        {
+         "name": "results keep input order",
+         "code": "assert.equal(typeof mod.mapLimit, 'function', 'export mapLimit');\nconst wait = (ms) => new Promise((r) => setTimeout(() => r(ms), ms));\nassert.deepEqual(await mod.mapLimit([30, 10, 20], 2, (ms) => wait(ms)), [30, 10, 20]);"
+        },
+        {
+         "name": "never more than limit calls in flight",
+         "code": "let active = 0;\nlet peak = 0;\nconst fn = async (x) => { active++; peak = Math.max(peak, active); await new Promise((r) => setTimeout(r, 5)); active--; return x * 2; };\nconst out = await mod.mapLimit([1, 2, 3, 4, 5, 6, 7, 8, 9], 3, fn);\nassert.deepEqual(out, [2, 4, 6, 8, 10, 12, 14, 16, 18]);\nassert.equal(peak, 3);"
+        },
+        {
+         "name": "fn receives the item and its index",
+         "code": "assert.deepEqual(await mod.mapLimit(['a', 'b'], 1, async (s, i) => s + i), ['a0', 'b1']);"
+        },
+        {
+         "name": "a failure rejects and starts no new calls",
+         "code": "const started = [];\nconst fn = async (x) => { started.push(x); await new Promise((r) => setTimeout(r, 5)); if (x === 2) throw new Error('bad item 2'); return x; };\nawait assert.rejects(mod.mapLimit([1, 2, 3, 4, 5, 6], 2, fn), /bad item 2/);\nawait new Promise((r) => setTimeout(r, 30));\nassert.ok(!started.includes(6), `started after the failure: ${started}`);"
+        },
+        {
+         "name": "an empty list resolves to [] without calling fn",
+         "code": "let calls = 0;\nassert.deepEqual(await mod.mapLimit([], 4, async () => { calls++; }), []);\nassert.equal(calls, 0);"
+        }
+       ],
+       "timeoutMs": 8000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "13-async-await-patterns/01-map-with-concurrency-limit",
+    "type": "code",
+    "module": "13-async-await-patterns",
+    "lesson": "drills",
+    "position": 0,
+    "skills": [
+     "concurrency",
+     "Promise.all"
+    ]
+   }
+  }
+ ],
+ "content": {
+  "fund-js/13-async-await-patterns/01-map-with-concurrency-limit": {
+   "instructions": "**Skills:** concurrency · Promise.all  \n**Level:** ★★★\n\n**Interview prompt.** \"We resize 5,000 images with an external API that allows 4 concurrent requests. Write the helper.\"\n\n**Why it matters.** `Promise.all(items.map(fn))` starts everything at once. A small pool of workers that pull the next item when they finish keeps exactly N calls in flight and still returns results in input order.\n\n**Your task.** Export `mapLimit(items, limit, fn)`. It returns a promise of an array where element i is the result of `await fn(items[i], i)`, and:\n- at most `limit` calls of `fn` are in flight at any moment\n- results are in INPUT order, whatever order the calls finish in\n- if any call rejects, the returned promise rejects with that reason (calls already started may finish, but no NEW call starts after the failure)\n- an empty `items` array resolves to `[]`\n\n`limit` is a whole number of 1 or more.\n\n**Worked example.** With items `[30, 10, 20]` (each `fn` waits that many ms and returns it) and limit 2, the result is `[30, 10, 20]`, and never more than 2 calls overlap.\n",
+   "starter": "export async function mapLimit(items, limit, fn) {\n  // TODO: keep at most `limit` calls in flight; results in input order\n}\n",
+   "solution": "export async function mapLimit(items, limit, fn) {\n  const results = new Array(items.length);\n  let next = 0;\n  let failed = false;\n  const worker = async () => {\n    while (!failed && next < items.length) {\n      const i = next++;\n      try {\n        results[i] = await fn(items[i], i);\n      } catch (err) {\n        failed = true;\n        throw err;\n      }\n    }\n  };\n  const workers = Array.from({ length: Math.min(limit, items.length) }, worker);\n  await Promise.all(workers);\n  return results;\n}\n",
+   "explanation": "Start `limit` workers that share one \"next index\" counter; each writes its result back by index:\n\n```js\nconst worker = async () => {\n  while (!failed && next < items.length) {\n    const i = next++;\n    try { results[i] = await fn(items[i], i); }\n    catch (err) { failed = true; throw err; }\n  }\n};\nawait Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));\n```\n\n`next++` is safe without locks: JavaScript runs one job at a time, so no two workers can read the same index. The `failed` flag stops workers from picking up new items once one call failed.",
+   "hints": [
+    "Instead of starting one promise per item, start a few worker loops that each keep taking the next item.",
+    "Share a next-index counter between limit async workers; each loops while items remain, stores results[i], and you await Promise.all of the workers; a shared failed flag stops new work.",
+    "Run a fixed number of loops in parallel that each claim the next unclaimed position, store their result at that position, and stop claiming as soon as any call has failed."
+   ]
+  }
+ }
+}

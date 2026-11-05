@@ -177,6 +177,3331 @@
     "fund-csharp/01-value-and-reference-types/01-reset-counters-in-a-list",
     "fund-csharp/01-value-and-reference-types/02-copy-a-cart"
    ]
+  },
+  {
+   "id": "02-nullable-reference-types",
+   "order": 2,
+   "title": "Nullable reference types & null handling",
+   "level": "beginner",
+   "summary": "string versus string?, what the compiler warnings mean, ?. ?? ??= and the ! operator, required and init members, and handling missing values at API boundaries.",
+   "lesson": "## Why nullable reference types exist\n\n`NullReferenceException` used to be the most common .NET crash. With **nullable reference types** enabled (the default in every new project: `<Nullable>enable</Nullable>`), the compiler tracks which references may be null:\n\n- `string` means \"never null\": assigning null, or leaving a non-nullable property unset, produces a **warning**.\n- `string?` means \"may be null\": dereferencing it without a check warns **CS8602** (\"Dereference of a possibly null reference\").\n\nThese are compile-time warnings only. The runtime type is the same `string`; nothing stops a null arriving from JSON, a database or old code. Treat the warnings as errors in CI (`<TreatWarningsAsErrors>` or `<WarningsAsErrors>nullable</WarningsAsErrors>`) and validate external input anyway.\n\n## The null operators\n\n```csharp\nstring? nickname = customer?.Nickname;   // ?. : null if customer is null (no exception)\nint? len = nickname?.Length;             // a member access through ?. becomes nullable\nstring shown = nickname ?? \"Guest\";      // ?? : the right side when the left is null\ncache ??= new Dictionary<string, int>(); // ??= : assign only when currently null\nif (nickname is not null) Use(nickname); // narrowing: no warning inside the if\n```\n\nThe **null-forgiving** operator `nickname!` tells the compiler \"trust me, it is not null\". It silences the warning and does nothing at runtime: if you were wrong, you still get a NullReferenceException. Use it only when you can prove the value is set (a test fixture, a value checked elsewhere the compiler cannot see).\n\n## Constructors, required and init\n\nA non-nullable property must be set by the time the constructor finishes, or the compiler warns **CS8618**. Options:\n\n```csharp\npublic class Customer\n{\n    public required string Name { get; init; }  // must be set in the object initializer (error CS9035 otherwise)\n    public string? Nickname { get; init; }      // genuinely optional\n    public List<Order> Orders { get; } = new(); // initialised: never null\n}\nvar c = new Customer { Name = \"Ana\" };\n```\n\n`init` accessors allow setting only during object initialisation, which makes immutable DTOs pleasant. `required` (C# 11) moves \"you forgot to set it\" from a runtime bug to a compile error.\n\n## Nullable value types are a different thing\n\n`int?` is `Nullable<int>`, a real struct with `HasValue` and `Value` (topic 01). `string?` is just an annotation on the same `string` type. Both use the same operators.\n\n## Patterns for real code\n\n- **Validate at the edge**: a DTO from JSON can contain nulls despite non-nullable annotations. Model optional input as nullable, check it, then map to a non-nullable domain object.\n- **Prefer empty collections over null**: return `Array.Empty<T>()` or an empty list, so callers never need a null check to loop.\n- **Blank is not missing**: `string.IsNullOrWhiteSpace(s)` treats null, empty and whitespace-only alike; `IsNullOrEmpty` does not catch `\"  \"`.\n- **Fail early**: `ArgumentNullException.ThrowIfNull(arg)` at the top of public methods.\n",
+   "quiz": [
+    {
+     "key": "fund:csharp/02-nullable-reference-types/q01",
+     "prompt": "With nullable reference types enabled, what does `string? name` mean?",
+     "choices": [
+      "A different runtime type from string",
+      "An annotation: name may be null, so the compiler warns on unchecked dereferences",
+      "A Nullable<string> struct",
+      "name defaults to an empty string"
+     ],
+     "answer": 1,
+     "explanation": "string? is the same runtime type as string; the annotation drives compile-time flow analysis."
+    },
+    {
+     "key": "fund:csharp/02-nullable-reference-types/q02",
+     "prompt": "`string? nickname = null;` What is `nickname?.Length`?",
+     "choices": [
+      "0",
+      "It throws NullReferenceException",
+      "null (an int? with no value)",
+      "-1"
+     ],
+     "answer": 2,
+     "explanation": "?. short-circuits to null, and the result type becomes int?."
+    },
+    {
+     "key": "fund:csharp/02-nullable-reference-types/q03",
+     "prompt": "What does `maybe!.Length` do at runtime when `maybe` is null?",
+     "choices": [
+      "Returns 0",
+      "Returns null",
+      "Nothing: ! makes it safe",
+      "Throws NullReferenceException"
+     ],
+     "answer": 3,
+     "explanation": "The null-forgiving operator only silences the compiler warning; it adds no runtime check."
+    },
+    {
+     "key": "fund:csharp/02-nullable-reference-types/q04",
+     "prompt": "Which compiler result do you get for `new Customer()` when `Name` is declared `required`?",
+     "choices": [
+      "Error CS9035: required member must be set",
+      "Warning CS8618",
+      "No diagnostic",
+      "A runtime exception"
+     ],
+     "answer": 0,
+     "explanation": "Missing required members is a compile error, unlike the nullable warnings."
+    },
+    {
+     "key": "fund:csharp/02-nullable-reference-types/q05",
+     "prompt": "What does `string.IsNullOrEmpty(\"  \")` return?",
+     "choices": [
+      "true",
+      "false",
+      "It throws",
+      "null"
+     ],
+     "answer": 1,
+     "explanation": "Only null and \"\" count as empty. IsNullOrWhiteSpace also treats whitespace-only strings as blank."
+    },
+    {
+     "key": "fund:csharp/02-nullable-reference-types/q06",
+     "prompt": "What does `cache ??= new Dictionary<string, int>();` do?",
+     "choices": [
+      "Always creates a new dictionary",
+      "Throws if cache is null",
+      "Compares cache with a new dictionary",
+      "Assigns a new dictionary only if cache is currently null"
+     ],
+     "answer": 3,
+     "explanation": "??= is \"assign if null\", handy for lazy initialisation."
+    },
+    {
+     "key": "fund:csharp/02-nullable-reference-types/q07",
+     "prompt": "A JSON body is deserialised into a DTO whose `Name` is a non-nullable `string`. The JSON has no name. What is `dto.Name`?",
+     "choices": [
+      "Guaranteed non-null by the compiler",
+      "An empty string",
+      "Possibly null: annotations do not enforce anything at runtime",
+      "A compile error"
+     ],
+     "answer": 2,
+     "explanation": "Deserialisers and old code can put null anywhere. Validate external input explicitly."
+    },
+    {
+     "key": "fund:csharp/02-nullable-reference-types/q08",
+     "prompt": "Which warning does `public string Name { get; set; }` with no initialiser produce in a class without a constructor?",
+     "choices": [
+      "CS8602",
+      "CS8618: non-nullable property must contain a non-null value when exiting the constructor",
+      "CS0168",
+      "None"
+     ],
+     "answer": 1,
+     "explanation": "Initialise it, make it nullable, add required, or set it in the constructor."
+    },
+    {
+     "key": "fund:csharp/02-nullable-reference-types/q09",
+     "prompt": "Inside `if (nickname is not null) { ... }`, the compiler treats `nickname` as...",
+     "choices": [
+      "non-null, so dereferencing it gives no warning",
+      "still possibly null",
+      "an int",
+      "a compile error"
+     ],
+     "answer": 0,
+     "explanation": "Flow analysis narrows the variable after a null check."
+    },
+    {
+     "key": "fund:csharp/02-nullable-reference-types/q10",
+     "prompt": "A method returns a list of orders. What is the best value when there are none?",
+     "choices": [
+      "null",
+      "An empty list",
+      "A list containing null",
+      "Throw an exception"
+     ],
+     "answer": 1,
+     "explanation": "Empty collections let callers loop without null checks and avoid a whole class of crashes."
+    }
+   ],
+   "flashcards": [
+    {
+     "key": "fund:csharp/02-nullable-reference-types/c01",
+     "front": "Are nullable reference type annotations enforced at runtime?",
+     "back": "No. They drive compiler warnings only; nulls can still arrive from JSON, databases and unannotated code."
+    },
+    {
+     "key": "fund:csharp/02-nullable-reference-types/c02",
+     "front": "What does the ! operator do?",
+     "back": "It suppresses the compiler's nullability warning for one expression and adds no runtime check at all."
+    },
+    {
+     "key": "fund:csharp/02-nullable-reference-types/c03",
+     "front": "?. ?? and ??= in one line each",
+     "back": "?. yields null instead of throwing when the target is null; ?? supplies a fallback for null; ??= assigns only if the variable is null."
+    },
+    {
+     "key": "fund:csharp/02-nullable-reference-types/c04",
+     "front": "Ways to satisfy CS8618 for a non-nullable property",
+     "back": "Initialise it, set it in every constructor, mark it required, or make it nullable if it is genuinely optional."
+    },
+    {
+     "key": "fund:csharp/02-nullable-reference-types/c05",
+     "front": "What does required add over init?",
+     "back": "init allows setting during initialisation only; required makes the compiler reject object creation that forgets to set the member."
+    },
+    {
+     "key": "fund:csharp/02-nullable-reference-types/c06",
+     "front": "IsNullOrEmpty versus IsNullOrWhiteSpace",
+     "back": "The first accepts null and the empty string; the second also rejects strings made only of spaces or tabs."
+    },
+    {
+     "key": "fund:csharp/02-nullable-reference-types/c07",
+     "front": "Why return empty collections instead of null?",
+     "back": "Callers can enumerate them safely without a null check, so a missing check can never crash the caller."
+    },
+    {
+     "key": "fund:csharp/02-nullable-reference-types/c08",
+     "front": "How should a public method reject a null argument?",
+     "back": "Call ArgumentNullException.ThrowIfNull at the top so the failure points at the caller, not deep inside."
+    }
+   ],
+   "drillKeys": [
+    "fund-csharp/02-nullable-reference-types/01-display-name-and-optional-age"
+   ]
+  },
+  {
+   "id": "03-strings-and-formatting",
+   "order": 3,
+   "title": "Strings, comparison & formatting",
+   "level": "beginner",
+   "summary": "Immutable strings and StringBuilder, ordinal versus culture comparison, culture-sensitive formatting and parsing, interpolation format specifiers, Split options and raw string literals.",
+   "lesson": "## Strings are immutable\n\nEvery \"change\" builds a new string: `s.Replace(\"a\", \"b\")` returns the result and leaves `s` alone. That is why ignoring the return value is a classic bug, and why building a string in a loop with `+=` copies the whole string every iteration (O(n^2)). Use **StringBuilder** for loops:\n\n```csharp\nvar sb = new StringBuilder();\nforeach (var line in lines) sb.Append(line).Append('\\n');\nstring report = sb.ToString();\n```\n\n(`string.Join(\",\", items)` is even simpler when you are just joining.)\n\n## Comparing strings: ordinal or culture?\n\n`==` on strings compares characters exactly (ordinal, case-sensitive). For anything else, **pass a StringComparison explicitly**:\n\n```csharp\nstring.Equals(a, b, StringComparison.OrdinalIgnoreCase)   // identifiers, emails, keys, headers\nstring.Compare(a, b, StringComparison.CurrentCulture)     // sorting text shown to people\n\"Hello\".Contains(\"hello\", StringComparison.OrdinalIgnoreCase)\n```\n\nRule of thumb: **Ordinal** (or OrdinalIgnoreCase) for anything a program compares (ids, file names, protocol values): fast and identical on every machine. **Culture** comparison only for sorting and displaying human text. Culture rules surprise you: in Turkish, `\"i\".ToUpper()` is `\"İ\"`, so case-insensitive comparisons of identifiers through the current culture break on Turkish servers. `ToUpperInvariant()` avoids that.\n\n## Formatting and parsing depend on culture\n\n```csharp\n1234.5m.ToString(\"N2\", new CultureInfo(\"de-DE\"))      // \"1.234,50\"\n1234.5m.ToString(\"N2\", CultureInfo.InvariantCulture)  // \"1,234.50\"\ndecimal.Parse(\"1,5\", new CultureInfo(\"de-DE\"))        // 1.5\ndecimal.Parse(\"1,5\", CultureInfo.InvariantCulture)    // 15  <- the comma is a thousands separator!\n```\n\nWithout a culture argument, `ToString` and `Parse` use the **current** culture of the thread, so the same code behaves differently on a German and a US server. For machine-readable data (CSV, JSON, logs, config) always use `CultureInfo.InvariantCulture`; for display, use the user's culture deliberately.\n\n## Interpolation and format specifiers\n\n```csharp\n$\"{price:F2}\"     // fixed 2 decimals\n$\"{count,5}\"      // right-aligned in 5 characters\n$\"{id:D3}\"        // 007\n$\"{when:yyyy-MM-dd}\"\n```\n\n## Everyday methods\n\n- `\"a,,b\".Split(',')` gives three parts (`\"a\"`, `\"\"`, `\"b\"`); pass `StringSplitOptions.RemoveEmptyEntries` (and `TrimEntries`) to drop the empty ones.\n- `s[1..3]` (ranges) and `s.Substring(start, length)`; an out-of-range Substring throws `ArgumentOutOfRangeException`.\n- `int.TryParse(text, out var n)` returns false instead of throwing `FormatException`: the right tool for user input.\n- Concatenating null is fine: `\"a\" + null + \"b\"` is `\"ab\"`.\n\n## Raw string literals\n\nC# 11 raw strings need no escaping, ideal for JSON and SQL in tests:\n\n```csharp\nvar json = \"\"\"{\"name\": \"Ana\", \"tags\": [\"a\", \"b\"]}\"\"\";\n```\n",
+   "quiz": [
+    {
+     "key": "fund:csharp/03-strings-and-formatting/q01",
+     "prompt": "`var s = \"aaa\"; s.Replace(\"a\", \"b\");` What is `s` afterwards?",
+     "choices": [
+      "\"bbb\"",
+      "\"baa\"",
+      "\"aaa\"",
+      "null"
+     ],
+     "answer": 2,
+     "explanation": "Strings are immutable; Replace returns a new string that this code throws away."
+    },
+    {
+     "key": "fund:csharp/03-strings-and-formatting/q02",
+     "prompt": "What does `decimal.Parse(\"1,5\", CultureInfo.InvariantCulture)` return?",
+     "choices": [
+      "1.5",
+      "15",
+      "It throws FormatException",
+      "0"
+     ],
+     "answer": 1,
+     "explanation": "The invariant culture treats the comma as a thousands separator, so \"1,5\" parses as 15. Choose the culture deliberately."
+    },
+    {
+     "key": "fund:csharp/03-strings-and-formatting/q03",
+     "prompt": "Which comparison suits checking two email addresses for equality?",
+     "choices": [
+      "StringComparison.CurrentCultureIgnoreCase",
+      "StringComparison.InvariantCulture",
+      "a == b after ToUpper()",
+      "StringComparison.OrdinalIgnoreCase"
+     ],
+     "answer": 3,
+     "explanation": "Programmatic identifiers should compare ordinally, which is fast and the same on every machine and culture."
+    },
+    {
+     "key": "fund:csharp/03-strings-and-formatting/q04",
+     "prompt": "What is `\"i\".ToUpper(new CultureInfo(\"tr-TR\"))`?",
+     "choices": [
+      "\"I\"",
+      "\"İ\" (dotted capital I)",
+      "An empty string",
+      "It throws"
+     ],
+     "answer": 1,
+     "explanation": "Turkish casing rules differ, which is why culture-sensitive case conversion breaks identifier comparisons."
+    },
+    {
+     "key": "fund:csharp/03-strings-and-formatting/q05",
+     "prompt": "Why is `report += line;` inside a 100,000-iteration loop slow?",
+     "choices": [
+      "Each += copies the whole growing string, which is quadratic",
+      "Strings are limited to 64 KB",
+      "+= is not allowed in loops",
+      "It is not slow"
+     ],
+     "answer": 0,
+     "explanation": "Immutable strings are rebuilt on every concatenation. Use StringBuilder or string.Join."
+    },
+    {
+     "key": "fund:csharp/03-strings-and-formatting/q06",
+     "prompt": "What is `1234.5m.ToString(\"N2\", new CultureInfo(\"de-DE\"))`?",
+     "choices": [
+      "\"1,234.50\"",
+      "\"1234.50\"",
+      "\"1.234,50\"",
+      "\"1 234,50\""
+     ],
+     "answer": 2,
+     "explanation": "German uses the dot for thousands and the comma for decimals."
+    },
+    {
+     "key": "fund:csharp/03-strings-and-formatting/q07",
+     "prompt": "How many elements does `\"a,,b\".Split(',')` return?",
+     "choices": [
+      "3",
+      "2",
+      "1",
+      "4"
+     ],
+     "answer": 0,
+     "explanation": "Consecutive separators produce an empty entry. Pass RemoveEmptyEntries to drop it."
+    },
+    {
+     "key": "fund:csharp/03-strings-and-formatting/q08",
+     "prompt": "Which call reads user input as an int without throwing on bad text?",
+     "choices": [
+      "int.Parse(text)",
+      "Convert.ToInt32(text)",
+      "(int)text",
+      "int.TryParse(text, out var n)"
+     ],
+     "answer": 3,
+     "explanation": "TryParse reports success with a bool; Parse and Convert throw FormatException."
+    },
+    {
+     "key": "fund:csharp/03-strings-and-formatting/q09",
+     "prompt": "What does `$\"{7:D3}\"` produce?",
+     "choices": [
+      "\"7.000\"",
+      "\"007\"",
+      "\"  7\"",
+      "\"7\""
+     ],
+     "answer": 1,
+     "explanation": "D3 formats an integer with at least three digits, padding with zeros."
+    },
+    {
+     "key": "fund:csharp/03-strings-and-formatting/q10",
+     "prompt": "Which culture should code use when writing numbers into a CSV file another system will read?",
+     "choices": [
+      "The current culture",
+      "The user's culture",
+      "CultureInfo.InvariantCulture",
+      "Any: numbers are culture-free"
+     ],
+     "answer": 2,
+     "explanation": "Machine-readable formats need one fixed culture, or the file changes with the server's locale."
+    }
+   ],
+   "flashcards": [
+    {
+     "key": "fund:csharp/03-strings-and-formatting/c01",
+     "front": "Why can ignoring a string method's return value be a bug?",
+     "back": "Strings never change in place: Replace, Trim and ToUpper hand back a new string, and the original stays as it was."
+    },
+    {
+     "key": "fund:csharp/03-strings-and-formatting/c02",
+     "front": "When should you use StringBuilder?",
+     "back": "When building a string piece by piece in a loop; repeated concatenation copies the growing string every time."
+    },
+    {
+     "key": "fund:csharp/03-strings-and-formatting/c03",
+     "front": "Ordinal versus culture comparison",
+     "back": "Ordinal compares character codes: use it for identifiers, keys and protocol values. Culture rules are for sorting and showing human text."
+    },
+    {
+     "key": "fund:csharp/03-strings-and-formatting/c04",
+     "front": "The Turkish i problem",
+     "back": "Culture-aware upper-casing of i in Turkish gives a dotted capital, so identifier comparisons through the current culture fail. Use ordinal or invariant casing."
+    },
+    {
+     "key": "fund:csharp/03-strings-and-formatting/c05",
+     "front": "Which culture for files, logs and APIs?",
+     "back": "The invariant culture, so numbers and dates have one fixed format regardless of the server locale."
+    },
+    {
+     "key": "fund:csharp/03-strings-and-formatting/c06",
+     "front": "How do you drop empty parts when splitting?",
+     "back": "Pass StringSplitOptions.RemoveEmptyEntries, optionally combined with TrimEntries."
+    },
+    {
+     "key": "fund:csharp/03-strings-and-formatting/c07",
+     "front": "TryParse versus Parse",
+     "back": "TryParse returns false for invalid text; Parse throws a FormatException, which is costly and noisy for user input."
+    },
+    {
+     "key": "fund:csharp/03-strings-and-formatting/c08",
+     "front": "What are raw string literals good for?",
+     "back": "Embedding JSON, SQL or regex text with quotes and backslashes and no escaping, between triple double quotes."
+    }
+   ],
+   "drillKeys": [
+    "fund-csharp/03-strings-and-formatting/01-csv-line"
+   ]
+  },
+  {
+   "id": "04-control-flow-and-pattern-matching",
+   "order": 4,
+   "title": "Control flow & pattern matching",
+   "level": "beginner",
+   "summary": "switch expressions, type, property, relational, logical, tuple and list patterns, is and when, exhaustiveness, and replacing if-else ladders in request and domain code.",
+   "lesson": "## switch expressions\n\n```csharp\nstring category = statusCode switch\n{\n    >= 200 and < 300 => \"success\",\n    404              => \"not found\",\n    >= 500           => \"server error\",\n    _                => \"other\",\n};\n```\n\nA switch **expression** produces a value, every arm is an expression, and arms are tried top to bottom. If no arm matches, it throws `SwitchExpressionException` at runtime, and the compiler warns (CS8509) that the switch is not exhaustive. Always end with a discard `_` unless the input type is fully covered.\n\n## The pattern kinds\n\n```csharp\no is int n && n > 40            // type pattern with a declaration\nx is not null                   // negation\ncode is >= 400 and < 500        // relational + logical patterns\norder is { Status: \"paid\", Total: > 100m }   // property pattern\npoint is (0, 0)                 // positional pattern (records, tuples, Deconstruct)\n(isAdmin, isOwner) switch { (true, _) => \"all\", (_, true) => \"own\", _ => \"none\" }  // tuple pattern\nitems is [var first, .., var last]           // list pattern (C# 11)\n```\n\nProperty patterns can nest: `{ Customer: { Country: \"DE\" } }`. A `when` clause adds an arbitrary condition: `case Order o when o.Lines.Count == 0:`.\n\n## Patterns versus if-else ladders\n\n```csharp\ndecimal Shipping(Order o) => o switch\n{\n    { Total: >= 100m }              => 0m,\n    { Express: true }               => 15m,\n    { Customer.Country: not \"DE\" }  => 9m,     // extended property pattern\n    _                               => 4.90m,\n};\n```\n\nThe rules read as a table, the order of the rules is visible, and adding a rule is one line. Ordering still matters: the first matching arm wins, so put specific cases before general ones (the compiler reports an arm that can never match because an earlier one subsumes it).\n\n## Mapping results to HTTP responses\n\nPattern matching shines when a service returns a closed set of outcomes:\n\n```csharp\nIResult ToHttp(Result r) => r switch\n{\n    Ok<Order> ok        => Results.Ok(ok.Value),\n    NotFound            => Results.NotFound(),\n    Invalid { Errors: var e } => Results.ValidationProblem(e),\n    _                   => Results.StatusCode(500),\n};\n```\n\n## Classic statements still matter\n\n- `switch` statements (with `case` and `break`) for multi-line branches; C# forbids falling through from one non-empty case to the next.\n- `foreach` over any `IEnumerable<T>`; `for` when you need the index; `while` for unknown iteration counts.\n- `break` leaves the loop; `continue` skips to the next iteration; `return` early (\"guard clauses\") keeps nesting shallow:\n\n```csharp\nif (order is null) return Results.NotFound();\nif (!order.IsEditable) return Results.Conflict();\n// main path, not nested\n```\n",
+   "quiz": [
+    {
+     "key": "fund:csharp/04-control-flow-and-pattern-matching/q01",
+     "prompt": "What does `404 switch { >= 200 and < 300 => \"ok\", 404 => \"missing\", >= 500 => \"server\", _ => \"other\" }` return?",
+     "choices": [
+      "\"ok\"",
+      "\"other\"",
+      "\"missing\"",
+      "\"server\""
+     ],
+     "answer": 2,
+     "explanation": "Arms are tried in order; 404 is not in 200..299 and matches the constant 404 arm."
+    },
+    {
+     "key": "fund:csharp/04-control-flow-and-pattern-matching/q02",
+     "prompt": "What happens when no arm of a switch expression matches at runtime?",
+     "choices": [
+      "It returns default",
+      "It throws SwitchExpressionException",
+      "It returns null",
+      "It skips the statement"
+     ],
+     "answer": 1,
+     "explanation": "Switch expressions must produce a value. The compiler also warns (CS8509) when the arms are not exhaustive."
+    },
+    {
+     "key": "fund:csharp/04-control-flow-and-pattern-matching/q03",
+     "prompt": "Which pattern checks that `order` has Status \"paid\" and a Total above 100?",
+     "choices": [
+      "order is { Status: \"paid\", Total: > 100m }",
+      "order == (\"paid\", > 100m)",
+      "order is Order(\"paid\" && 100)",
+      "order.Status is \"paid\" > 100m"
+     ],
+     "answer": 0,
+     "explanation": "A property pattern lists properties with nested patterns; relational patterns like > 100m compare values."
+    },
+    {
+     "key": "fund:csharp/04-control-flow-and-pattern-matching/q04",
+     "prompt": "`(true, false) switch { (true, true) => \"both\", (true, _) => \"first\", _ => \"none\" }` gives...",
+     "choices": [
+      "\"both\"",
+      "\"none\"",
+      "It throws",
+      "\"first\""
+     ],
+     "answer": 3,
+     "explanation": "Tuple patterns match position by position; _ matches anything in that position."
+    },
+    {
+     "key": "fund:csharp/04-control-flow-and-pattern-matching/q05",
+     "prompt": "What does `new[] { 1, 2, 3 } is [1, .., 3]` evaluate to?",
+     "choices": [
+      "true",
+      "false",
+      "It does not compile",
+      "It throws"
+     ],
+     "answer": 0,
+     "explanation": "A list pattern: first element 1, any number of elements (..), last element 3."
+    },
+    {
+     "key": "fund:csharp/04-control-flow-and-pattern-matching/q06",
+     "prompt": "Why should specific arms come before general ones?",
+     "choices": [
+      "The compiler sorts arms anyway",
+      "Only the last arm runs",
+      "The first matching arm wins, so a general arm first would hide later ones",
+      "For performance only"
+     ],
+     "answer": 2,
+     "explanation": "Arms are evaluated top to bottom; the compiler flags arms that an earlier arm already covers."
+    },
+    {
+     "key": "fund:csharp/04-control-flow-and-pattern-matching/q07",
+     "prompt": "What does `o is int n && n > 40` do when `o` is the boxed int 42?",
+     "choices": [
+      "Fails: o is object",
+      "Declares n = 42 and evaluates to true",
+      "Throws InvalidCastException",
+      "Compares references"
+     ],
+     "answer": 1,
+     "explanation": "A type pattern tests the runtime type and binds a typed variable on success."
+    },
+    {
+     "key": "fund:csharp/04-control-flow-and-pattern-matching/q08",
+     "prompt": "In a C# switch statement, can a non-empty case fall through into the next case?",
+     "choices": [
+      "Yes, like C",
+      "Only with continue",
+      "Only for strings",
+      "No: it is a compile error; each section must end with break, return, throw or goto"
+     ],
+     "answer": 3,
+     "explanation": "Implicit fall-through is forbidden to prevent a classic class of bugs."
+    },
+    {
+     "key": "fund:csharp/04-control-flow-and-pattern-matching/q09",
+     "prompt": "What is a guard clause?",
+     "choices": [
+      "An early return for an invalid or special case, so the main path is not nested",
+      "A when clause on a case",
+      "A try/catch around a method",
+      "A lock statement"
+     ],
+     "answer": 0,
+     "explanation": "Returning early for not-found, forbidden or invalid inputs keeps the happy path flat and readable."
+    },
+    {
+     "key": "fund:csharp/04-control-flow-and-pattern-matching/q10",
+     "prompt": "Which pattern matches every code from 400 to 499?",
+     "choices": [
+      "400..499",
+      "is 4xx",
+      "is >= 400 and < 500",
+      "is in (400, 500)"
+     ],
+     "answer": 2,
+     "explanation": "Relational patterns combine with and, or and not."
+    }
+   ],
+   "flashcards": [
+    {
+     "key": "fund:csharp/04-control-flow-and-pattern-matching/c01",
+     "front": "Switch expression versus switch statement",
+     "back": "The expression yields a value from single-expression arms and throws if nothing matches; the statement runs blocks of code for its cases."
+    },
+    {
+     "key": "fund:csharp/04-control-flow-and-pattern-matching/c02",
+     "front": "What does a discard arm (_) do?",
+     "back": "It matches anything left over, making the switch exhaustive so it never throws at runtime."
+    },
+    {
+     "key": "fund:csharp/04-control-flow-and-pattern-matching/c03",
+     "front": "Name five pattern kinds",
+     "back": "Type, constant, relational (with and/or/not), property, positional or tuple, and list patterns."
+    },
+    {
+     "key": "fund:csharp/04-control-flow-and-pattern-matching/c04",
+     "front": "How do arms in a switch expression get chosen?",
+     "back": "Top to bottom; the first arm whose pattern (and when clause) matches wins."
+    },
+    {
+     "key": "fund:csharp/04-control-flow-and-pattern-matching/c05",
+     "front": "What is an extended property pattern?",
+     "back": "A dotted path inside a property pattern, such as Customer.Country, matching a nested member directly."
+    },
+    {
+     "key": "fund:csharp/04-control-flow-and-pattern-matching/c06",
+     "front": "What does a when clause add?",
+     "back": "An arbitrary boolean condition that must also hold for the case or arm to match."
+    },
+    {
+     "key": "fund:csharp/04-control-flow-and-pattern-matching/c07",
+     "front": "Does C# allow switch fall-through?",
+     "back": "Not from one non-empty section into the next; every section must end in break, return, throw or goto."
+    },
+    {
+     "key": "fund:csharp/04-control-flow-and-pattern-matching/c08",
+     "front": "Why use guard clauses in handlers?",
+     "back": "Rejecting not-found, conflict and invalid cases first keeps the main logic unindented and easy to follow."
+    }
+   ],
+   "drillKeys": [
+    "fund-csharp/04-control-flow-and-pattern-matching/01-result-to-status-code"
+   ]
+  },
+  {
+   "id": "05-classes-properties-and-records",
+   "order": 5,
+   "title": "Classes, properties & records",
+   "level": "intermediate",
+   "summary": "Fields versus properties, auto-properties, init and required, constructors and primary constructors, static members, and records: value equality, with-expressions and when to choose class, record or struct.",
+   "lesson": "## Properties, not public fields\n\n```csharp\npublic class Product\n{\n    private decimal _price;                       // a field: storage\n    public decimal Price                          // a property: controlled access\n    {\n        get => _price;\n        set => _price = value >= 0 ? value : throw new ArgumentOutOfRangeException(nameof(value));\n    }\n    public string Name { get; set; } = \"\";        // auto-property with an initialiser\n    public string Sku { get; init; } = \"\";        // settable only during initialisation\n    public required string Category { get; init; } // must be set by the creator (C# 11)\n    public DateTime CreatedAt { get; } = DateTime.UtcNow; // get-only: set here or in the constructor\n}\n```\n\nProperties let you add validation or change the storage later without changing callers. Public fields are only appropriate for small structs and constants.\n\n## Constructors\n\n```csharp\npublic class OrderService\n{\n    private readonly IOrderRepository _repo;\n    public OrderService(IOrderRepository repo) => _repo = repo;\n}\n\n// C# 12 primary constructor: the parameter is in scope for the whole class\npublic class OrderService(IOrderRepository repo)\n{\n    public Task<Order?> Find(int id) => repo.FindAsync(id);\n}\n```\n\n`readonly` fields can be assigned only in the declaration or a constructor. Primary-constructor parameters are captured, mutable variables, not readonly fields; assign them to a `readonly` field if that matters.\n\n## static\n\nStatic members belong to the type, not to instances: `Counter.Count`. Static state is shared by every request in a web app, so mutable statics are a concurrency and test-isolation hazard; keep statics for pure helpers, constants and factory methods.\n\n## Records\n\n```csharp\npublic record Money(decimal Amount, string Currency);\n\nvar a = new Money(1m, \"EUR\");\nvar b = new Money(1m, \"EUR\");\na == b                     // true: value equality over all members\na.ToString()               // \"Money { Amount = 1, Currency = EUR }\"\nvar c = a with { Amount = 2m };   // non-destructive copy with one change\nvar (amount, currency) = a;       // positional records deconstruct\n```\n\nA positional record gets init-only properties, value-based `Equals` / `GetHashCode` / `==`, a readable `ToString`, `Deconstruct` and `with` support. You can add members and validation to a record body.\n\n## class, record or struct?\n\n| type | equality | typical use |\n|---|---|---|\n| `class` | reference | entities with identity and lifecycle (an Order you load and change), services |\n| `record` (class) | value | DTOs, commands, events, value objects (Money, Address), API results |\n| `struct` / `record struct` | value, copied | tiny immutable values (coordinates, ids) where allocation matters |\n\nTwo `Customer` class instances with the same fields are NOT `==`; two equal records are. Do not use records for EF Core entities that are tracked and mutated: their value equality and immutability fight the change tracker (topic 19).\n\n## Encapsulation for domain objects\n\nExpose behaviour, not setters: `order.AddLine(sku, qty)` can enforce \"no more than 50 lines\" and \"cannot change a shipped order\"; a public `List<Line> Lines { get; set; }` cannot. Expose collections as `IReadOnlyList<T>`.\n",
+   "quiz": [
+    {
+     "key": "fund:csharp/05-classes-properties-and-records/q01",
+     "prompt": "`record Order(string Status, decimal Total);` What is `new Order(\"a\", 1m) == new Order(\"a\", 1m)`?",
+     "choices": [
+      "false",
+      "true",
+      "It does not compile",
+      "It throws"
+     ],
+     "answer": 1,
+     "explanation": "Records generate value-based equality over their members."
+    },
+    {
+     "key": "fund:csharp/05-classes-properties-and-records/q02",
+     "prompt": "Two `class Customer` instances with the same Name: what does `==` return?",
+     "choices": [
+      "true",
+      "It compares Name",
+      "false: classes compare references unless == is overloaded",
+      "It throws"
+     ],
+     "answer": 2,
+     "explanation": "Reference types use reference equality by default; records and strings are the exceptions."
+    },
+    {
+     "key": "fund:csharp/05-classes-properties-and-records/q03",
+     "prompt": "What does `order with { Total = 2m }` do for a record?",
+     "choices": [
+      "Changes order in place",
+      "Throws because records are immutable",
+      "Creates a new record copying every member except Total",
+      "Creates a subclass"
+     ],
+     "answer": 2,
+     "explanation": "with-expressions are non-destructive mutation: a copy with the listed changes."
+    },
+    {
+     "key": "fund:csharp/05-classes-properties-and-records/q04",
+     "prompt": "Where can a property declared `{ get; init; }` be set?",
+     "choices": [
+      "Anywhere",
+      "Only in object initialisers, constructors and with-expressions",
+      "Only in the declaring class",
+      "Nowhere after declaration"
+     ],
+     "answer": 1,
+     "explanation": "init allows assignment during construction and initialisation, then the property is read-only."
+    },
+    {
+     "key": "fund:csharp/05-classes-properties-and-records/q05",
+     "prompt": "What is the main risk of a mutable `static` field in an ASP.NET Core app?",
+     "choices": [
+      "It is shared by every request and thread, causing races and cross-request leaks",
+      "It is reset on each request",
+      "It cannot be read",
+      "It uses too much memory"
+     ],
+     "answer": 0,
+     "explanation": "Static state lives for the whole process; concurrent requests read and write it at once."
+    },
+    {
+     "key": "fund:csharp/05-classes-properties-and-records/q06",
+     "prompt": "In `class OrderService(IOrderRepository repo)`, what is `repo`?",
+     "choices": [
+      "A readonly field",
+      "A public property",
+      "Only usable in a constructor",
+      "A primary-constructor parameter in scope for the whole class (captured, not readonly)"
+     ],
+     "answer": 3,
+     "explanation": "Primary constructor parameters are captured variables; assign them to readonly fields if you need that guarantee."
+    },
+    {
+     "key": "fund:csharp/05-classes-properties-and-records/q07",
+     "prompt": "Which is the best fit for a record?",
+     "choices": [
+      "A DTO or a value object like Money",
+      "A tracked EF Core entity that is mutated over time",
+      "A DbContext",
+      "A background service"
+     ],
+     "answer": 0,
+     "explanation": "Records suit immutable data with value semantics; entities with identity and changing state suit classes."
+    },
+    {
+     "key": "fund:csharp/05-classes-properties-and-records/q08",
+     "prompt": "Why prefer properties over public fields on a class?",
+     "choices": [
+      "Fields are slower",
+      "Properties can add validation or change storage later without changing callers",
+      "Fields cannot be serialised",
+      "The compiler forbids public fields"
+     ],
+     "answer": 1,
+     "explanation": "A property is an API: its accessors can evolve; a field exposes the storage directly."
+    },
+    {
+     "key": "fund:csharp/05-classes-properties-and-records/q09",
+     "prompt": "What does a positional record's generated ToString look like for `new Money(1.5m, \"EUR\")`?",
+     "choices": [
+      "\"Money\"",
+      "\"1.5 EUR\"",
+      "\"Money { Amount = 1.5, Currency = EUR }\"",
+      "\"Money(1.5, EUR)\""
+     ],
+     "answer": 2,
+     "explanation": "Records print their type name and members, which makes logs and test failures readable."
+    },
+    {
+     "key": "fund:csharp/05-classes-properties-and-records/q10",
+     "prompt": "An Order should never hold more than 50 lines. Which design enforces it?",
+     "choices": [
+      "A public List<Line> Lines { get; set; }",
+      "A comment",
+      "A record with a Lines property",
+      "An AddLine method that checks the rule, with Lines exposed as IReadOnlyList<Line>"
+     ],
+     "answer": 3,
+     "explanation": "Encapsulating mutation behind methods lets the object protect its own invariants."
+    }
+   ],
+   "flashcards": [
+    {
+     "key": "fund:csharp/05-classes-properties-and-records/c01",
+     "front": "Field versus property",
+     "back": "A field is raw storage; a property is accessor methods over it that can validate, compute or change storage without breaking callers."
+    },
+    {
+     "key": "fund:csharp/05-classes-properties-and-records/c02",
+     "front": "init versus required",
+     "back": "init limits setting to object creation; required forces the creator to set the member, checked by the compiler."
+    },
+    {
+     "key": "fund:csharp/05-classes-properties-and-records/c03",
+     "front": "What does a positional record generate?",
+     "back": "Init-only properties, value-based Equals, GetHashCode and ==, a member-listing ToString, Deconstruct, and with-expression support."
+    },
+    {
+     "key": "fund:csharp/05-classes-properties-and-records/c04",
+     "front": "When choose class, record or struct?",
+     "back": "Class for entities and services with identity, record for DTOs and value objects, struct for tiny immutable values where allocation matters."
+    },
+    {
+     "key": "fund:csharp/05-classes-properties-and-records/c05",
+     "front": "What does a with-expression do?",
+     "back": "It copies a record and changes only the named members, leaving the original untouched."
+    },
+    {
+     "key": "fund:csharp/05-classes-properties-and-records/c06",
+     "front": "Why are mutable static fields dangerous in web apps?",
+     "back": "One instance is shared across all requests and threads, so concurrent writes race and data leaks between users."
+    },
+    {
+     "key": "fund:csharp/05-classes-properties-and-records/c07",
+     "front": "Primary constructor parameters versus readonly fields",
+     "back": "Primary constructor parameters are captured and can be reassigned; copy them into readonly fields to guarantee immutability."
+    },
+    {
+     "key": "fund:csharp/05-classes-properties-and-records/c08",
+     "front": "How should a domain object expose its collection?",
+     "back": "As an IReadOnlyList, with methods that change it and enforce the business rules."
+    }
+   ],
+   "drillKeys": [
+    "fund-csharp/05-classes-properties-and-records/01-money-value-object"
+   ]
+  },
+  {
+   "id": "06-interfaces-inheritance-and-polymorphism",
+   "order": 6,
+   "title": "Interfaces, inheritance & polymorphism",
+   "level": "intermediate",
+   "summary": "virtual and override versus new, abstract and sealed, interfaces with default and explicit members, base calls, and programming against interfaces so implementations can be swapped and tested.",
+   "lesson": "## Interfaces: contracts\n\n```csharp\npublic interface IEmailSender\n{\n    Task SendAsync(string to, string subject, string body);\n}\npublic class SmtpEmailSender : IEmailSender { ... }\npublic class FakeEmailSender : IEmailSender { public List<string> Sent { get; } = new(); ... }\n```\n\nCode that depends on `IEmailSender` works with any implementation: SMTP in production, a fake in tests, a queue later. That is the core of dependency injection (topic 15). A class can implement many interfaces but inherit from one base class.\n\nInterfaces can carry **default implementations** (C# 8): a member with a body that implementers may skip. They are visible only through the interface type. **Explicit implementation** (`string ILabel.Label() => ...`) hides a member from the class's own surface; it is callable only through the interface.\n\n## Inheritance and virtual dispatch\n\n```csharp\nclass Animal { public virtual string Speak() => \"...\"; }\nclass Dog : Animal { public override string Speak() => \"woof\"; }\n\nAnimal a = new Dog();\na.Speak();   // \"woof\": the RUNTIME type decides (virtual dispatch)\n```\n\n- `virtual` allows overriding; `override` replaces it in a subclass; `base.Speak()` calls the parent's version.\n- `abstract` members have no body and must be overridden; an `abstract class` cannot be instantiated.\n- `sealed` stops further inheritance (`sealed class`) or further overriding (`sealed override`).\n- Members are **non-virtual by default** in C#, unlike Java.\n\n## new is hiding, not overriding\n\n```csharp\nclass Animal { public string Name() => \"animal\"; }\nclass Dog : Animal { public new string Name() => \"dog\"; }\n\nAnimal a = new Dog();\na.Name();          // \"animal\"  <- chosen by the STATIC (declared) type\n((Dog)a).Name();   // \"dog\"\n```\n\n`new` creates an unrelated method that happens to share the name; which one runs depends on the variable's declared type. It is almost always a mistake (forgotten `virtual`); the compiler warns when you hide without saying `new`.\n\n## Type checks\n\n`if (shape is Circle c)` (pattern) and `shape as Circle` (null on failure) test runtime types. If you find yourself switching on types everywhere, a virtual method on the base type is often the cleaner design; when the set of types is closed and the logic lives outside them (mapping results to HTTP codes), pattern matching is fine (topic 04).\n\n## Composition over inheritance\n\nInheritance couples a subclass to the internals of its parent (\"fragile base class\"). Prefer small interfaces and composition: a `PriceCalculator` that takes a list of `IDiscountRule` objects is easier to extend and test than a hierarchy of `DiscountedOrder : Order` subclasses. Use inheritance for genuine is-a relationships with a stable base: framework base classes (`ControllerBase`, `BackgroundService`, `DbContext`), exceptions, and abstract templates.\n\n## Liskov in one sentence\n\nA subclass must work wherever its base class is expected: no stronger preconditions, no surprising exceptions. A `ReadOnlyList : List` that throws on `Add` breaks every caller written against `List`.\n",
+   "quiz": [
+    {
+     "key": "fund:csharp/06-interfaces-inheritance-and-polymorphism/q01",
+     "prompt": "`Animal a = new Dog();` where Dog overrides the virtual `Speak()`. What does `a.Speak()` run?",
+     "choices": [
+      "Animal's Speak",
+      "Dog's Speak",
+      "Both",
+      "It does not compile"
+     ],
+     "answer": 1,
+     "explanation": "Virtual dispatch uses the runtime type of the object, not the declared type of the variable."
+    },
+    {
+     "key": "fund:csharp/06-interfaces-inheritance-and-polymorphism/q02",
+     "prompt": "`Dog` declares `public new string Name()` hiding Animal's non-virtual `Name()`. What does `((Animal)new Dog()).Name()` return?",
+     "choices": [
+      "\"dog\"",
+      "\"animal\"",
+      "It throws",
+      "A compile error"
+     ],
+     "answer": 1,
+     "explanation": "Hiding with new binds by the static type: through an Animal reference, Animal's method runs."
+    },
+    {
+     "key": "fund:csharp/06-interfaces-inheritance-and-polymorphism/q03",
+     "prompt": "In C#, are methods virtual by default?",
+     "choices": [
+      "Yes, like Java",
+      "Only public ones",
+      "No: you must mark them virtual (or abstract) to allow overriding",
+      "Only in interfaces"
+     ],
+     "answer": 2,
+     "explanation": "C# methods are non-virtual unless declared virtual, abstract or override."
+    },
+    {
+     "key": "fund:csharp/06-interfaces-inheritance-and-polymorphism/q04",
+     "prompt": "How do you call the parent's implementation from an override?",
+     "choices": [
+      "super.Speak()",
+      "this.Speak()",
+      "Animal.Speak()",
+      "base.Speak()"
+     ],
+     "answer": 3,
+     "explanation": "base refers to the immediate parent's members."
+    },
+    {
+     "key": "fund:csharp/06-interfaces-inheritance-and-polymorphism/q05",
+     "prompt": "Where is a default interface method callable?",
+     "choices": [
+      "Only through a reference of the interface type",
+      "Directly on every implementing class",
+      "Only in static contexts",
+      "Nowhere"
+     ],
+     "answer": 0,
+     "explanation": "Default members are not inherited into the class's own surface; cast to the interface to call them."
+    },
+    {
+     "key": "fund:csharp/06-interfaces-inheritance-and-polymorphism/q06",
+     "prompt": "What does `sealed` on a class do?",
+     "choices": [
+      "Makes it immutable",
+      "Makes all members static",
+      "Prevents other classes from inheriting from it",
+      "Prevents instantiation"
+     ],
+     "answer": 2,
+     "explanation": "sealed stops inheritance; abstract is the one that prevents instantiation."
+    },
+    {
+     "key": "fund:csharp/06-interfaces-inheritance-and-polymorphism/q07",
+     "prompt": "Why do services depend on `IEmailSender` rather than `SmtpEmailSender`?",
+     "choices": [
+      "Interfaces are faster",
+      "So implementations can be swapped (a fake in tests, another provider later) without changing the service",
+      "Classes cannot be injected",
+      "It is required by C#"
+     ],
+     "answer": 1,
+     "explanation": "Programming against an interface decouples the caller from one concrete implementation."
+    },
+    {
+     "key": "fund:csharp/06-interfaces-inheritance-and-polymorphism/q08",
+     "prompt": "Which situation suits inheritance best?",
+     "choices": [
+      "Sharing a logging helper between two unrelated classes",
+      "Adding retry behaviour to every service",
+      "A genuine is-a relationship with a stable base, such as a custom BackgroundService",
+      "Reusing two methods"
+     ],
+     "answer": 2,
+     "explanation": "Use composition for sharing behaviour; extend stable framework bases for true specialisation."
+    },
+    {
+     "key": "fund:csharp/06-interfaces-inheritance-and-polymorphism/q09",
+     "prompt": "A `ReadOnlyList` subclass of `List<T>` throws on `Add`. Which principle does it break?",
+     "choices": [
+      "Liskov substitution: it cannot be used everywhere a List is expected",
+      "Single responsibility",
+      "DRY",
+      "Encapsulation"
+     ],
+     "answer": 0,
+     "explanation": "Callers written against the base type would fail; expose IReadOnlyList<T> instead."
+    },
+    {
+     "key": "fund:csharp/06-interfaces-inheritance-and-polymorphism/q10",
+     "prompt": "What does `shape as Circle` return when shape is a Square?",
+     "choices": [
+      "A Circle with default values",
+      "It throws InvalidCastException",
+      "The Square",
+      "null"
+     ],
+     "answer": 3,
+     "explanation": "as returns null on failure; an explicit cast (Circle)shape would throw."
+    }
+   ],
+   "flashcards": [
+    {
+     "key": "fund:csharp/06-interfaces-inheritance-and-polymorphism/c01",
+     "front": "virtual and override versus new",
+     "back": "override replaces a virtual member and is chosen by the runtime type; new hides a member and is chosen by the declared type of the variable."
+    },
+    {
+     "key": "fund:csharp/06-interfaces-inheritance-and-polymorphism/c02",
+     "front": "Are C# methods virtual by default?",
+     "back": "No. Without virtual, abstract or override, a method is resolved at compile time and cannot be overridden."
+    },
+    {
+     "key": "fund:csharp/06-interfaces-inheritance-and-polymorphism/c03",
+     "front": "abstract versus sealed",
+     "back": "abstract members must be overridden and abstract classes cannot be created; sealed stops further inheritance or overriding."
+    },
+    {
+     "key": "fund:csharp/06-interfaces-inheritance-and-polymorphism/c04",
+     "front": "What is a default interface member?",
+     "back": "An interface method with a body that implementers may skip; it is reachable only through the interface type."
+    },
+    {
+     "key": "fund:csharp/06-interfaces-inheritance-and-polymorphism/c05",
+     "front": "What is explicit interface implementation?",
+     "back": "Implementing a member as InterfaceName.Member so it is callable only through the interface, not on the class."
+    },
+    {
+     "key": "fund:csharp/06-interfaces-inheritance-and-polymorphism/c06",
+     "front": "Why depend on interfaces in services?",
+     "back": "The implementation can change, be decorated or be faked in tests without touching the code that uses it."
+    },
+    {
+     "key": "fund:csharp/06-interfaces-inheritance-and-polymorphism/c07",
+     "front": "The Liskov substitution principle",
+     "back": "A subtype must be usable anywhere its base type is, without callers noticing a difference in contract."
+    },
+    {
+     "key": "fund:csharp/06-interfaces-inheritance-and-polymorphism/c08",
+     "front": "When is type switching a smell?",
+     "back": "When behaviour that belongs to the types is scattered in switches; a virtual method usually fits better unless the set of types is closed."
+    }
+   ],
+   "drillKeys": [
+    "fund-csharp/06-interfaces-inheritance-and-polymorphism/01-polymorphic-notifiers"
+   ]
+  },
+  {
+   "id": "07-generics-and-constraints",
+   "order": 7,
+   "title": "Generics & constraints",
+   "level": "intermediate",
+   "summary": "Generic types and methods, constraints (class, struct, new(), interfaces, notnull), default(T), variance on interfaces, and writing reusable typed helpers such as paging and Result<T>.",
+   "lesson": "## Why generics\n\n`List<int>` stores ints without boxing and refuses strings at compile time; the old `ArrayList` stored `object` and needed casts. Generics give you one implementation, full type safety and no boxing for value types.\n\n```csharp\nT Max<T>(IEnumerable<T> items) where T : IComparable<T>\n{\n    var best = items.First();\n    foreach (var x in items) if (x.CompareTo(best) > 0) best = x;\n    return best;\n}\nMax(new[] { 3, 9, 2 })   // 9: T inferred as int\n```\n\n## Constraints\n\n| constraint | meaning |\n|---|---|\n| `where T : class` | reference type |\n| `where T : struct` | non-nullable value type |\n| `where T : notnull` | any non-nullable type |\n| `where T : new()` | has a public parameterless constructor (`new T()` allowed) |\n| `where T : IEntity` | implements an interface (its members become usable) |\n| `where T : BaseClass` | derives from a class |\n\nConstraints are what let the method body use members of `T`. Without `IComparable<T>`, `x.CompareTo` would not compile.\n\n## default(T)\n\n`default(T)` is `null` for reference types and the zero value for value types (`0`, `false`, a zeroed struct). A generic \"find\" that returns `default` for \"not found\" is ambiguous for value types (was it missing, or was it 0?): return `T?` with a `class` constraint, a `bool TryFind(out T value)`, or a result type.\n\n## Variance\n\n```csharp\nIEnumerable<object> objs = new List<string>();   // OK: IEnumerable<out T> is covariant\nList<object> list = new List<string>();          // compile error: List<T> is invariant\n```\n\nCovariance (`out T`) is safe when T only comes OUT (enumerating strings as objects). A `List<object>` would let you `Add(42)` into a list of strings, so List cannot be covariant. Contravariance (`in T`) is the mirror: `Action<object>` can be used as `Action<string>`.\n\n## Generic types you will write\n\n```csharp\npublic record Page<T>(IReadOnlyList<T> Items, int PageNumber, int TotalPages, bool HasNext);\n\npublic interface IRepository<T> where T : class, IEntity\n{\n    Task<T?> FindAsync(int id);\n    Task AddAsync(T entity);\n}\n\npublic abstract record Result<T>;\npublic record Success<T>(T Value) : Result<T>;\npublic record Failure<T>(string Error) : Result<T>;\n```\n\nStatic members of a generic class exist once **per closed type**: `Cache<int>.Count` and `Cache<string>.Count` are different fields.\n\n## Do not over-generalise\n\nA generic repository over every entity sounds reusable but often hides the queries each aggregate actually needs. Write the concrete code first; extract a generic when the second and third copies appear.\n",
+   "quiz": [
+    {
+     "key": "fund:csharp/07-generics-and-constraints/q01",
+     "prompt": "Why does `List<int>` beat the old `ArrayList` for ints?",
+     "choices": [
+      "It is thread-safe",
+      "It sorts automatically",
+      "It is type-safe and stores ints without boxing",
+      "It has no capacity limit"
+     ],
+     "answer": 2,
+     "explanation": "Generic collections are compiled per type argument, so value types are stored directly."
+    },
+    {
+     "key": "fund:csharp/07-generics-and-constraints/q02",
+     "prompt": "What does `where T : new()` allow inside the method?",
+     "choices": [
+      "Writing new T()",
+      "Comparing with ==",
+      "Assigning null",
+      "Calling ToString"
+     ],
+     "answer": 0,
+     "explanation": "The constraint guarantees a public parameterless constructor."
+    },
+    {
+     "key": "fund:csharp/07-generics-and-constraints/q03",
+     "prompt": "What is `default(T)` when T is `int`?",
+     "choices": [
+      "null",
+      "0",
+      "It throws",
+      "int.MinValue"
+     ],
+     "answer": 1,
+     "explanation": "default gives null for reference types and the zero value for value types."
+    },
+    {
+     "key": "fund:csharp/07-generics-and-constraints/q04",
+     "prompt": "Which assignment compiles?",
+     "choices": [
+      "List<object> x = new List<string>();",
+      "IList<object> x = new List<string>();",
+      "IEnumerable<object> x = new List<string>();",
+      "None of them"
+     ],
+     "answer": 2,
+     "explanation": "IEnumerable<out T> is covariant; List<T> and IList<T> allow writes and so must be invariant."
+    },
+    {
+     "key": "fund:csharp/07-generics-and-constraints/q05",
+     "prompt": "Why can `List<T>` not be covariant?",
+     "choices": [
+      "Lists are classes",
+      "Covariance is only for arrays",
+      "It would be slower",
+      "It accepts T as input (Add), so a List<object> view could insert a non-string into a List<string>"
+     ],
+     "answer": 3,
+     "explanation": "Covariance is only safe when T appears in output positions."
+    },
+    {
+     "key": "fund:csharp/07-generics-and-constraints/q06",
+     "prompt": "Without a constraint, can a generic method call `x.CompareTo(y)` on `T x`?",
+     "choices": [
+      "Yes, every type has CompareTo",
+      "No: add a constraint such as where T : IComparable<T>",
+      "Only for value types",
+      "Only at runtime via reflection"
+     ],
+     "answer": 1,
+     "explanation": "The body may only use members the constraints guarantee."
+    },
+    {
+     "key": "fund:csharp/07-generics-and-constraints/q07",
+     "prompt": "A generic `Find<T>` returns `default(T)` for \"not found\". What is the problem when T is int?",
+     "choices": [
+      "A found value of 0 and \"not found\" look the same",
+      "It does not compile",
+      "It boxes",
+      "Nothing"
+     ],
+     "answer": 0,
+     "explanation": "Use TryFind with an out parameter, a nullable return with a class constraint, or a result type."
+    },
+    {
+     "key": "fund:csharp/07-generics-and-constraints/q08",
+     "prompt": "`class Cache<T> { public static int Count; }` How many Count fields exist after using Cache<int> and Cache<string>?",
+     "choices": [
+      "One, shared",
+      "None",
+      "Two: one per closed generic type",
+      "Depends on the runtime"
+     ],
+     "answer": 2,
+     "explanation": "Each constructed generic type has its own static fields."
+    },
+    {
+     "key": "fund:csharp/07-generics-and-constraints/q09",
+     "prompt": "Which constraint means \"any non-nullable type, reference or value\"?",
+     "choices": [
+      "where T : class",
+      "where T : struct",
+      "where T : object",
+      "where T : notnull"
+     ],
+     "answer": 3,
+     "explanation": "notnull excludes nullable types without restricting to classes or structs."
+    },
+    {
+     "key": "fund:csharp/07-generics-and-constraints/q10",
+     "prompt": "What is the main risk of an all-purpose generic repository?",
+     "choices": [
+      "It cannot be injected",
+      "It hides the specific queries each aggregate needs and encourages leaky, generic access",
+      "It is slower than raw SQL",
+      "Generics cannot be async"
+     ],
+     "answer": 1,
+     "explanation": "Generalise after you see repetition, not before."
+    }
+   ],
+   "flashcards": [
+    {
+     "key": "fund:csharp/07-generics-and-constraints/c01",
+     "front": "What do constraints buy you inside a generic method?",
+     "back": "The right to use the members they guarantee, such as CompareTo, a parameterless constructor or an interface's methods."
+    },
+    {
+     "key": "fund:csharp/07-generics-and-constraints/c02",
+     "front": "default(T) for reference and value types",
+     "back": "null for reference types; the zero value (0, false, a zeroed struct) for value types."
+    },
+    {
+     "key": "fund:csharp/07-generics-and-constraints/c03",
+     "front": "Covariance in one sentence",
+     "back": "An interface whose type parameter only flows out, like IEnumerable<out T>, can be viewed as one of a more general element type."
+    },
+    {
+     "key": "fund:csharp/07-generics-and-constraints/c04",
+     "front": "Why are List<T> and IList<T> invariant?",
+     "back": "They accept T as input, so treating a list of strings as a list of objects would allow inserting a non-string."
+    },
+    {
+     "key": "fund:csharp/07-generics-and-constraints/c05",
+     "front": "Static fields in generic classes",
+     "back": "Every closed generic type, such as Cache<int> and Cache<string>, has its own separate copy."
+    },
+    {
+     "key": "fund:csharp/07-generics-and-constraints/c06",
+     "front": "Better than returning default(T) for not found",
+     "back": "A TryGet pattern with an out parameter, a nullable return, or a result type that distinguishes found from missing."
+    },
+    {
+     "key": "fund:csharp/07-generics-and-constraints/c07",
+     "front": "The notnull constraint",
+     "back": "Allows any type argument that is not nullable, whether reference or value type."
+    },
+    {
+     "key": "fund:csharp/07-generics-and-constraints/c08",
+     "front": "When should you extract a generic abstraction?",
+     "back": "After the concrete code has repeated two or three times, so the abstraction fits real cases."
+    }
+   ],
+   "drillKeys": [
+    "fund-csharp/07-generics-and-constraints/01-generic-paging"
+   ]
+  },
+  {
+   "id": "08-collections",
+   "order": 8,
+   "title": "Collections",
+   "level": "intermediate",
+   "summary": "List, Dictionary, HashSet, Queue and Stack: their costs, TryGetValue versus the indexer, key comparers, modifying a list while iterating, read-only views, and choosing the right collection.",
+   "lesson": "## The everyday collections\n\n| type | strength | lookup cost |\n|---|---|---|\n| `List<T>` | ordered, indexable, growable array | by index O(1), by value O(n) |\n| `Dictionary<TKey, TValue>` | lookup by key | O(1) average |\n| `HashSet<T>` | unique values, membership | O(1) average |\n| `Queue<T>` / `Stack<T>` | FIFO / LIFO work lists | O(1) enqueue / push |\n| `SortedDictionary` / `SortedSet` | keys kept in sorted order | O(log n) |\n\nChoosing the right one is most of the performance work in CRUD code: a `List.Contains` inside a loop over 10,000 items is 100 million comparisons; a `HashSet.Contains` is 10,000.\n\n## Dictionary: indexer, Add and TryGetValue\n\n```csharp\nvar stock = new Dictionary<string, int> { [\"pen\"] = 4 };\nstock[\"ink\"]                       // KeyNotFoundException\nstock.TryGetValue(\"ink\", out var n)  // false, n = 0: the no-exception lookup\nstock[\"pen\"] = 9;                  // indexer SET: adds or overwrites\nstock.Add(\"pen\", 1);               // ArgumentException: key already exists\nstock.GetValueOrDefault(\"ink\")     // 0\n```\n\nUse `TryGetValue` for \"may be missing\" lookups (one hash lookup instead of `ContainsKey` plus the indexer). Do not rely on Dictionary enumeration order; it is not guaranteed.\n\n## Key equality and comparers\n\nDictionary and HashSet compare keys with the key type's `Equals` and `GetHashCode` (topic 13). For strings you usually want a comparer:\n\n```csharp\nvar byEmail = new Dictionary<string, User>(StringComparer.OrdinalIgnoreCase);\nbyEmail[\"Ana@Example.com\"] = ana;\nbyEmail.ContainsKey(\"ana@example.com\")   // true\n```\n\nNever mutate an object that is used as a key: its hash changes and the dictionary can no longer find it.\n\n## Modifying while iterating\n\n```csharp\nforeach (var x in list) if (x == 2) list.Remove(x);   // InvalidOperationException: collection was modified\nlist.RemoveAll(x => x == 2);                           // correct\n```\n\nAlternatives: iterate a copy (`foreach (var x in list.ToList())`), loop backwards by index, or build a new list.\n\n## Exposing collections\n\nReturn `IReadOnlyList<T>` / `IReadOnlyCollection<T>` / `IReadOnlyDictionary` from APIs so callers cannot add or remove. Note this is a read-only **view**: if the owner changes the underlying list, the view reflects it. For a true snapshot, copy (`ToList()`, or the immutable collections in `System.Collections.Immutable`).\n\n## Other details worth knowing\n\n- `list[i]` outside the range throws `ArgumentOutOfRangeException`.\n- `HashSet.Add` returns `false` when the value was already present: a cheap \"seen before?\" check.\n- `List<T>` grows by doubling its capacity; pre-size with `new List<T>(count)` when you know the size.\n- None of these collections are thread-safe for writes. Use `ConcurrentDictionary` (or a lock) when several threads write.\n",
+   "quiz": [
+    {
+     "key": "fund:csharp/08-collections/q01",
+     "prompt": "What does `dict[\"missing\"]` do on a Dictionary without that key?",
+     "choices": [
+      "Returns default",
+      "Returns null",
+      "Throws KeyNotFoundException",
+      "Adds the key"
+     ],
+     "answer": 2,
+     "explanation": "The indexer GET throws for missing keys; TryGetValue and GetValueOrDefault do not."
+    },
+    {
+     "key": "fund:csharp/08-collections/q02",
+     "prompt": "What does `dict.Add(\"pen\", 1)` do when \"pen\" already exists?",
+     "choices": [
+      "Throws ArgumentException",
+      "Overwrites the value",
+      "Ignores the call",
+      "Returns false"
+     ],
+     "answer": 0,
+     "explanation": "Add requires a new key. The indexer setter dict[\"pen\"] = 1 overwrites."
+    },
+    {
+     "key": "fund:csharp/08-collections/q03",
+     "prompt": "Removing items from a List inside a foreach over that same list...",
+     "choices": [
+      "works",
+      "skips every other item silently",
+      "throws InvalidOperationException: collection was modified",
+      "only works for value types"
+     ],
+     "answer": 2,
+     "explanation": "Enumerators detect modification. Use RemoveAll, iterate a copy, or loop backwards."
+    },
+    {
+     "key": "fund:csharp/08-collections/q04",
+     "prompt": "What does `new HashSet<int> { 1 }.Add(1)` return?",
+     "choices": [
+      "true",
+      "false",
+      "It throws",
+      "1"
+     ],
+     "answer": 1,
+     "explanation": "Add reports whether the value was newly added, which makes HashSet a cheap duplicate detector."
+    },
+    {
+     "key": "fund:csharp/08-collections/q05",
+     "prompt": "Which makes a string-keyed Dictionary match keys case-insensitively?",
+     "choices": [
+      "Lower-casing keys on read only",
+      "Using SortedDictionary",
+      "It is the default",
+      "Constructing it with StringComparer.OrdinalIgnoreCase"
+     ],
+     "answer": 3,
+     "explanation": "Pass a comparer to the constructor; it is used for both hashing and equality."
+    },
+    {
+     "key": "fund:csharp/08-collections/q06",
+     "prompt": "You check 10,000 ids against a list of 10,000 allowed ids. What is the better data structure for the allowed ids?",
+     "choices": [
+      "A HashSet<int>",
+      "A List<int>",
+      "A Queue<int>",
+      "An array"
+     ],
+     "answer": 0,
+     "explanation": "HashSet membership is O(1) average; List.Contains scans the list each time."
+    },
+    {
+     "key": "fund:csharp/08-collections/q07",
+     "prompt": "A method returns its private list as `IReadOnlyList<T>`. The class then adds an item. What does a caller holding the view see?",
+     "choices": [
+      "The old count",
+      "An exception",
+      "The new item: it is a view of the same list, not a copy",
+      "Nothing until it refreshes"
+     ],
+     "answer": 2,
+     "explanation": "IReadOnlyList prevents callers from writing, but it is not a snapshot."
+    },
+    {
+     "key": "fund:csharp/08-collections/q08",
+     "prompt": "Is the enumeration order of a Dictionary<TKey, TValue> guaranteed?",
+     "choices": [
+      "Yes, insertion order",
+      "Yes, sorted by key",
+      "Only for string keys",
+      "No: do not rely on it; use SortedDictionary or sort explicitly"
+     ],
+     "answer": 3,
+     "explanation": "The order is an implementation detail; sort or use an ordered collection when order matters."
+    },
+    {
+     "key": "fund:csharp/08-collections/q09",
+     "prompt": "Why is `TryGetValue` preferred over `ContainsKey` followed by the indexer?",
+     "choices": [
+      "It performs one lookup instead of two and cannot throw",
+      "ContainsKey is obsolete",
+      "It is thread-safe",
+      "It sorts the keys"
+     ],
+     "answer": 0,
+     "explanation": "TryGetValue does the hash lookup once and reports success."
+    },
+    {
+     "key": "fund:csharp/08-collections/q10",
+     "prompt": "Several request threads add to the same Dictionary. What should you use?",
+     "choices": [
+      "A plain Dictionary",
+      "A List instead",
+      "ConcurrentDictionary or a lock",
+      "A static field"
+     ],
+     "answer": 2,
+     "explanation": "Standard collections are not safe for concurrent writes and can corrupt their internal state."
+    }
+   ],
+   "flashcards": [
+    {
+     "key": "fund:csharp/08-collections/c01",
+     "front": "Dictionary indexer get versus TryGetValue",
+     "back": "The indexer throws KeyNotFoundException for a missing key; TryGetValue returns false and sets the out value to default."
+    },
+    {
+     "key": "fund:csharp/08-collections/c02",
+     "front": "Dictionary Add versus indexer set",
+     "back": "Add throws when the key exists; assigning through the indexer adds or overwrites."
+    },
+    {
+     "key": "fund:csharp/08-collections/c03",
+     "front": "How do you remove items while iterating a List?",
+     "back": "Use RemoveAll with a predicate, iterate a copy, or walk the indexes backwards."
+    },
+    {
+     "key": "fund:csharp/08-collections/c04",
+     "front": "What does HashSet.Add's return value tell you?",
+     "back": "Whether the value was new; false means it was already in the set."
+    },
+    {
+     "key": "fund:csharp/08-collections/c05",
+     "front": "How do you make string keys case-insensitive?",
+     "back": "Construct the Dictionary or HashSet with StringComparer.OrdinalIgnoreCase."
+    },
+    {
+     "key": "fund:csharp/08-collections/c06",
+     "front": "Is an IReadOnlyList a snapshot?",
+     "back": "No, it is a read-only view; changes by the owner show through. Copy it for a snapshot."
+    },
+    {
+     "key": "fund:csharp/08-collections/c07",
+     "front": "Why never mutate a dictionary key object?",
+     "back": "Its hash code changes, so the entry sits in the wrong bucket and can no longer be found."
+    },
+    {
+     "key": "fund:csharp/08-collections/c08",
+     "front": "Which collections are safe for concurrent writes?",
+     "back": "The System.Collections.Concurrent types such as ConcurrentDictionary; the ordinary collections need a lock."
+    }
+   ],
+   "drillKeys": [
+    "fund-csharp/08-collections/01-index-posts-by-tag"
+   ]
+  },
+  {
+   "id": "09-linq-and-deferred-execution",
+   "order": 9,
+   "title": "LINQ & deferred execution",
+   "level": "intermediate",
+   "summary": "Where, Select, OrderBy, GroupBy and friends; deferred versus immediate execution, multiple enumeration, First versus Single versus FirstOrDefault, empty-sequence aggregates, and IEnumerable versus IQueryable.",
+   "lesson": "## A pipeline over sequences\n\n```csharp\nvar topCustomers = orders\n    .Where(o => o.Status == \"paid\")\n    .GroupBy(o => o.CustomerId)\n    .Select(g => new { CustomerId = g.Key, Total = g.Sum(o => o.Total) })\n    .OrderByDescending(x => x.Total)\n    .ThenBy(x => x.CustomerId)\n    .Take(10)\n    .ToList();\n```\n\n## Deferred execution\n\nMost LINQ operators do **not** run when you call them. They build a query that runs when you **enumerate** it (`foreach`, `ToList`, `Count`, `First`, ...):\n\n```csharp\nvar nums = new List<int> { 1, 2, 3 };\nvar big = nums.Where(n => n > 1);   // nothing has run yet\nnums.Add(4);\nbig.Count()                          // 3: the query sees the item added later\n```\n\nConsequences:\n- **Multiple enumeration** runs the whole pipeline again each time: calling `Count()` and then `foreach` on the same query evaluates every lambda twice. Against a database query, it runs the SQL twice.\n- Exceptions inside a lambda appear at enumeration time, possibly far from where the query was written.\n- Captured variables are read at enumeration time.\n\n`ToList()` / `ToArray()` / `ToDictionary()` execute immediately and give a **snapshot**. Materialise once when you will use a result several times or return it from a method.\n\n## Picking one element\n\n| call | 0 elements | 1 | 2+ |\n|---|---|---|---|\n| `First()` | throws | first | first |\n| `FirstOrDefault()` | default | first | first |\n| `Single()` | throws | the one | throws |\n| `SingleOrDefault()` | default | the one | throws |\n\nAll the throws are `InvalidOperationException`. Use `Single` when duplicates mean corrupted data (lookup by a unique key); `FirstOrDefault` when \"none\" is a normal outcome.\n\n## Aggregates on empty sequences\n\n`Sum()` of an empty sequence is `0`, but `Average()`, `Min()` and `Max()` of an empty sequence of non-nullable numbers throw `InvalidOperationException`. Over nullable numbers they return `null`. Guard with `Any()` or use `DefaultIfEmpty()`.\n\n## Other operators worth knowing\n\n- `Any()` stops at the first element: prefer it to `Count() > 0`.\n- `OrderBy` is a **stable** sort; chain `ThenBy` for tie-breakers (a second `OrderBy` would discard the first ordering).\n- `SelectMany` flattens; `Distinct`, `DistinctBy`, `MaxBy`, `Chunk`, `Zip`, `Skip` / `Take`.\n- `ToDictionary` throws `ArgumentException` on a duplicate key; use `GroupBy` or `ToLookup` when keys repeat.\n\n## IEnumerable versus IQueryable\n\n`IEnumerable<T>` LINQ runs your lambdas in memory. `IQueryable<T>` (EF Core's `DbSet`) translates the expression tree into SQL. Calling `.AsEnumerable()` or `.ToList()` too early pulls every row into memory and filters there (topic 20). Keep filters, ordering and paging on the `IQueryable` until the final `ToListAsync()`.\n",
+   "quiz": [
+    {
+     "key": "fund:csharp/09-linq-and-deferred-execution/q01",
+     "prompt": "`var big = nums.Where(n => n > 1);` then `nums.Add(4);` with nums initially [1, 2, 3]. What is `big.Count()`?",
+     "choices": [
+      "2",
+      "3",
+      "4",
+      "1"
+     ],
+     "answer": 1,
+     "explanation": "Where is deferred: it runs at Count(), after 4 was added, so it sees 2, 3 and 4."
+    },
+    {
+     "key": "fund:csharp/09-linq-and-deferred-execution/q02",
+     "prompt": "What does `new List<int>().First()` do?",
+     "choices": [
+      "Returns 0",
+      "Returns null",
+      "Throws InvalidOperationException",
+      "Returns -1"
+     ],
+     "answer": 2,
+     "explanation": "First requires at least one element; FirstOrDefault returns default instead."
+    },
+    {
+     "key": "fund:csharp/09-linq-and-deferred-execution/q03",
+     "prompt": "What does `new List<int> { 1, 2 }.SingleOrDefault()` do?",
+     "choices": [
+      "Returns 1",
+      "Returns 0",
+      "Returns 2",
+      "Throws InvalidOperationException"
+     ],
+     "answer": 3,
+     "explanation": "SingleOrDefault tolerates zero elements but not more than one."
+    },
+    {
+     "key": "fund:csharp/09-linq-and-deferred-execution/q04",
+     "prompt": "What is `new List<int>().Sum()` and `new List<int>().Average()`?",
+     "choices": [
+      "0 and an InvalidOperationException",
+      "0 and 0",
+      "Both throw",
+      "null and null"
+     ],
+     "answer": 0,
+     "explanation": "Sum of nothing is 0; the average of nothing is undefined, so it throws for non-nullable numbers."
+    },
+    {
+     "key": "fund:csharp/09-linq-and-deferred-execution/q05",
+     "prompt": "A query is enumerated with `Count()` and then with `foreach`. How many times do its lambdas run?",
+     "choices": [
+      "Once",
+      "Twice: each enumeration runs the whole pipeline",
+      "Never",
+      "Once, then cached"
+     ],
+     "answer": 1,
+     "explanation": "Deferred queries are re-evaluated on every enumeration; materialise with ToList() to reuse results."
+    },
+    {
+     "key": "fund:csharp/09-linq-and-deferred-execution/q06",
+     "prompt": "Which call takes a snapshot of the results right away?",
+     "choices": [
+      "Where",
+      "Select",
+      "ToList",
+      "OrderBy"
+     ],
+     "answer": 2,
+     "explanation": "ToList, ToArray and ToDictionary execute immediately; the others build deferred queries."
+    },
+    {
+     "key": "fund:csharp/09-linq-and-deferred-execution/q07",
+     "prompt": "How do you sort by Total descending, then by Name for ties?",
+     "choices": [
+      ".OrderByDescending(x => x.Total).OrderBy(x => x.Name)",
+      ".OrderBy(x => x.Name).OrderByDescending(x => x.Total)",
+      ".Sort(Total, Name)",
+      ".OrderByDescending(x => x.Total).ThenBy(x => x.Name)"
+     ],
+     "answer": 3,
+     "explanation": "ThenBy adds a tie-breaker; a second OrderBy re-sorts the whole sequence."
+    },
+    {
+     "key": "fund:csharp/09-linq-and-deferred-execution/q08",
+     "prompt": "Why prefer `Any()` over `Count() > 0`?",
+     "choices": [
+      "Any stops at the first element; Count may enumerate everything",
+      "Count is obsolete",
+      "Any is thread-safe",
+      "They differ in result"
+     ],
+     "answer": 0,
+     "explanation": "For non-collection sequences and database queries, Any() is much cheaper."
+    },
+    {
+     "key": "fund:csharp/09-linq-and-deferred-execution/q09",
+     "prompt": "`orders.ToDictionary(o => o.CustomerId)` when a customer has two orders...",
+     "choices": [
+      "keeps the first",
+      "keeps the last",
+      "throws ArgumentException for the duplicate key",
+      "creates a list"
+     ],
+     "answer": 2,
+     "explanation": "Use GroupBy or ToLookup when keys can repeat."
+    },
+    {
+     "key": "fund:csharp/09-linq-and-deferred-execution/q10",
+     "prompt": "Calling `.ToList()` on an EF Core `DbSet` before `.Where(...)`...",
+     "choices": [
+      "has no effect",
+      "loads every row into memory and filters in C#",
+      "is required for Where",
+      "makes the query faster"
+     ],
+     "answer": 1,
+     "explanation": "Keep the IQueryable until the end so the filter is translated to SQL."
+    }
+   ],
+   "flashcards": [
+    {
+     "key": "fund:csharp/09-linq-and-deferred-execution/c01",
+     "front": "What is deferred execution?",
+     "back": "A LINQ query does no work when built; it runs each time it is enumerated, reading its source and captured variables at that moment."
+    },
+    {
+     "key": "fund:csharp/09-linq-and-deferred-execution/c02",
+     "front": "Why materialise with ToList?",
+     "back": "To run the query once and keep a snapshot, so later reuse neither repeats the work nor sees later changes to the source."
+    },
+    {
+     "key": "fund:csharp/09-linq-and-deferred-execution/c03",
+     "front": "First, FirstOrDefault, Single and SingleOrDefault on an empty sequence",
+     "back": "First and Single throw; the OrDefault variants return the default value."
+    },
+    {
+     "key": "fund:csharp/09-linq-and-deferred-execution/c04",
+     "front": "When choose Single over First?",
+     "back": "When more than one match would mean bad data, such as a lookup by a unique key."
+    },
+    {
+     "key": "fund:csharp/09-linq-and-deferred-execution/c05",
+     "front": "Aggregates on an empty sequence",
+     "back": "Sum gives 0; Average, Min and Max throw for non-nullable numbers and return null for nullable ones."
+    },
+    {
+     "key": "fund:csharp/09-linq-and-deferred-execution/c06",
+     "front": "Any versus Count greater than zero",
+     "back": "Any stops as soon as it finds one element; Count may walk the whole sequence or run a counting query."
+    },
+    {
+     "key": "fund:csharp/09-linq-and-deferred-execution/c07",
+     "front": "Why ThenBy and not a second OrderBy?",
+     "back": "ThenBy breaks ties within the first ordering; a second OrderBy discards it and re-sorts everything."
+    },
+    {
+     "key": "fund:csharp/09-linq-and-deferred-execution/c08",
+     "front": "IEnumerable versus IQueryable LINQ",
+     "back": "IEnumerable runs lambdas in memory; IQueryable translates the query, for example into SQL, so filters belong on it before materialising."
+    }
+   ],
+   "drillKeys": [
+    "fund-csharp/09-linq-and-deferred-execution/01-top-customers"
+   ]
+  },
+  {
+   "id": "10-delegates-lambdas-and-events",
+   "order": 10,
+   "title": "Delegates, lambdas & events",
+   "level": "intermediate",
+   "summary": "Func and Action, lambdas and what they capture, the for-loop capture trap, multicast delegates, events with += and -=, unsubscribing to avoid leaks, and returning an IDisposable subscription.",
+   "lesson": "## Delegates are typed function values\n\n```csharp\nFunc<int, int> square = x => x * x;        // takes an int, returns an int\nAction<string> log = msg => Console.WriteLine(msg);  // returns nothing\nPredicate<Order> isPaid = o => o.Status == \"paid\";   // same as Func<Order, bool>\nsquare(4)   // 16\n```\n\nLINQ, `List.RemoveAll`, `Task.Run`, minimal API handlers and middleware are all delegates. `Func<..., TResult>` returns a value; `Action<...>` does not.\n\n## Closures and the capture trap\n\nA lambda captures **variables**, not values. In a `for` loop there is ONE loop variable:\n\n```csharp\nvar fs = new List<Func<int>>();\nfor (int i = 0; i < 3; i++) fs.Add(() => i);\nfs.Select(f => f())          // 3, 3, 3\n\nforeach (var x in new[] { 0, 1, 2 }) fs2.Add(() => x);   // 0, 1, 2: foreach gets a fresh variable per iteration (since C# 5)\n```\n\nFix the `for` case by copying into a local inside the loop: `var copy = i; fs.Add(() => copy);`. Captured variables also keep objects alive as long as the delegate lives.\n\n## Multicast delegates\n\n`+=` combines delegates; invoking runs them all, in order:\n\n```csharp\nAction<string> a = s => log.Add(\"A\" + s);\na += s => log.Add(\"B\" + s);\na(\"x\");                       // A then B\nFunc<int> f = () => 1; f += () => 2;\nf()                           // 2: only the LAST return value comes back\n```\n\n## Events\n\n```csharp\npublic class Publisher\n{\n    public event EventHandler<int>? Changed;\n    public void Raise(int n) => Changed?.Invoke(this, n);   // ?. : safe with no subscribers\n}\npub.Changed += OnChanged;\npub.Changed -= OnChanged;\n```\n\nAn `event` is a delegate field that outsiders can only `+=` and `-=`: they cannot invoke it or overwrite the list. Handlers run **synchronously** on the raising thread, in subscription order; an exception in one stops the rest.\n\n## Unsubscribe, or leak\n\nThe publisher's delegate list holds a reference to every subscriber. A long-lived publisher (a static cache, a singleton service) keeps short-lived subscribers (pages, view models, per-request objects) alive forever unless they unsubscribe.\n\n`-=` only removes a handler that is **the same delegate**: `p.Changed -= (_, x) => n += x;` creates a NEW lambda and removes nothing. Keep a reference to the handler, or return a subscription object:\n\n```csharp\npublic IDisposable Subscribe(Action<decimal> handler)\n{\n    EventHandler<decimal> h = (_, p) => handler(p);\n    PriceChanged += h;\n    return new Subscription(() => PriceChanged -= h);\n}\nusing var sub = feed.Subscribe(p => Console.WriteLine(p));   // disposed: unsubscribed\n```\n\nThis is the pattern behind `IObservable`, `IOptionsMonitor.OnChange` and many client libraries.\n",
+   "quiz": [
+    {
+     "key": "fund:csharp/10-delegates-lambdas-and-events/q01",
+     "prompt": "What is the difference between `Func<int, string>` and `Action<int>`?",
+     "choices": [
+      "Func runs asynchronously",
+      "Func returns a string; Action returns nothing",
+      "Action takes no parameters",
+      "There is none"
+     ],
+     "answer": 1,
+     "explanation": "The last type argument of Func is the return type; Action delegates return void."
+    },
+    {
+     "key": "fund:csharp/10-delegates-lambdas-and-events/q02",
+     "prompt": "`for (int i = 0; i < 3; i++) fs.Add(() => i);` What do the three functions return?",
+     "choices": [
+      "0, 1, 2",
+      "2, 2, 2",
+      "3, 3, 3",
+      "They throw"
+     ],
+     "answer": 2,
+     "explanation": "All three capture the single loop variable, which is 3 when the loop ends."
+    },
+    {
+     "key": "fund:csharp/10-delegates-lambdas-and-events/q03",
+     "prompt": "The same with `foreach (var x in new[] { 0, 1, 2 }) fs.Add(() => x);` returns...",
+     "choices": [
+      "0, 1, 2",
+      "2, 2, 2",
+      "3, 3, 3",
+      "null"
+     ],
+     "answer": 0,
+     "explanation": "Since C# 5, each foreach iteration declares a fresh variable."
+    },
+    {
+     "key": "fund:csharp/10-delegates-lambdas-and-events/q04",
+     "prompt": "A multicast `Func<int>` combines `() => 1` and `() => 2`. What does invoking it return?",
+     "choices": [
+      "1",
+      "3",
+      "An array [1, 2]",
+      "2"
+     ],
+     "answer": 3,
+     "explanation": "Every target runs, but only the last return value is returned."
+    },
+    {
+     "key": "fund:csharp/10-delegates-lambdas-and-events/q05",
+     "prompt": "What can code OUTSIDE the declaring class do with an `event`?",
+     "choices": [
+      "Only += and -=",
+      "Invoke it",
+      "Assign a new delegate with =",
+      "All of these"
+     ],
+     "answer": 0,
+     "explanation": "The event keyword restricts outsiders to subscribing and unsubscribing."
+    },
+    {
+     "key": "fund:csharp/10-delegates-lambdas-and-events/q06",
+     "prompt": "`p.Changed += (_, x) => n += x; p.Changed -= (_, x) => n += x;` Is the handler removed?",
+     "choices": [
+      "Yes",
+      "No: the second lambda is a different delegate instance, so nothing is removed",
+      "Only in Release builds",
+      "It does not compile"
+     ],
+     "answer": 1,
+     "explanation": "Keep a reference to the handler you subscribed and unsubscribe that same delegate."
+    },
+    {
+     "key": "fund:csharp/10-delegates-lambdas-and-events/q07",
+     "prompt": "Why can a page that subscribes to a singleton's event leak memory?",
+     "choices": [
+      "Events copy the page",
+      "Events run on another thread",
+      "The singleton's delegate list keeps a reference to the page, so it is never collected",
+      "It cannot leak"
+     ],
+     "answer": 2,
+     "explanation": "Publishers reference their subscribers; unsubscribe when the subscriber's lifetime ends."
+    },
+    {
+     "key": "fund:csharp/10-delegates-lambdas-and-events/q08",
+     "prompt": "How do event handlers run when an event is raised?",
+     "choices": [
+      "In parallel on the thread pool",
+      "Synchronously on the raising thread, in subscription order",
+      "In reverse order",
+      "Only the first one runs"
+     ],
+     "answer": 1,
+     "explanation": "Raising an event is a synchronous multicast delegate call."
+    },
+    {
+     "key": "fund:csharp/10-delegates-lambdas-and-events/q09",
+     "prompt": "Why write `Changed?.Invoke(this, n)`?",
+     "choices": [
+      "To make it async",
+      "To catch exceptions",
+      "Because Invoke is required",
+      "So raising with no subscribers does not throw NullReferenceException"
+     ],
+     "answer": 3,
+     "explanation": "An event with no handlers is null; the ?. makes raising it a no-op."
+    },
+    {
+     "key": "fund:csharp/10-delegates-lambdas-and-events/q10",
+     "prompt": "What is a clean way for a Subscribe method to support unsubscribing?",
+     "choices": [
+      "Return an IDisposable whose Dispose removes the stored handler",
+      "Return the delegate count",
+      "Use a static flag",
+      "Clear all handlers"
+     ],
+     "answer": 0,
+     "explanation": "Callers dispose the subscription (often with using), and the publisher removes exactly that handler."
+    }
+   ],
+   "flashcards": [
+    {
+     "key": "fund:csharp/10-delegates-lambdas-and-events/c01",
+     "front": "Func versus Action versus Predicate",
+     "back": "Func returns its last type argument, Action returns nothing, Predicate<T> is a function from T to bool."
+    },
+    {
+     "key": "fund:csharp/10-delegates-lambdas-and-events/c02",
+     "front": "The for-loop capture trap",
+     "back": "Lambdas created in a for loop share one loop variable and see its final value; copy it into a local inside the loop."
+    },
+    {
+     "key": "fund:csharp/10-delegates-lambdas-and-events/c03",
+     "front": "What do lambdas capture?",
+     "back": "Variables themselves, not their values at creation, and they keep the referenced objects alive."
+    },
+    {
+     "key": "fund:csharp/10-delegates-lambdas-and-events/c04",
+     "front": "What does invoking a multicast Func return?",
+     "back": "Every target runs, and the value returned by the last one is the result."
+    },
+    {
+     "key": "fund:csharp/10-delegates-lambdas-and-events/c05",
+     "front": "What does the event keyword restrict?",
+     "back": "Outside code can only add and remove handlers; it cannot invoke the event or replace its handler list."
+    },
+    {
+     "key": "fund:csharp/10-delegates-lambdas-and-events/c06",
+     "front": "Why does unsubscribing a lambda written inline do nothing?",
+     "back": "Each lambda expression creates a new delegate; removal needs the same delegate that was added."
+    },
+    {
+     "key": "fund:csharp/10-delegates-lambdas-and-events/c07",
+     "front": "How do events cause memory leaks?",
+     "back": "A long-lived publisher holds references to short-lived subscribers until they unsubscribe."
+    },
+    {
+     "key": "fund:csharp/10-delegates-lambdas-and-events/c08",
+     "front": "The disposable-subscription pattern",
+     "back": "Subscribe returns an IDisposable that removes its handler when disposed, so callers can unsubscribe with using."
+    }
+   ],
+   "drillKeys": [
+    "fund-csharp/10-delegates-lambdas-and-events/01-price-feed-subscriptions"
+   ]
+  },
+  {
+   "id": "11-exceptions-and-idisposable",
+   "order": 11,
+   "title": "Exceptions & IDisposable",
+   "level": "intermediate",
+   "summary": "try, catch and finally; throw versus throw ex; exception filters, inner exceptions and custom exception types; using declarations, Dispose order, and translating low-level failures without losing them.",
+   "lesson": "## Throwing and catching\n\n```csharp\ntry\n{\n    var order = repo.Load(id);\n}\ncatch (TimeoutException ex)                     // most specific first\n{\n    throw new RepositoryUnavailableException(\"orders store unavailable\", ex);   // wrap, keep the cause\n}\ncatch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.NotFound)  // exception filter\n{\n    return null;\n}\nfinally\n{\n    metrics.Stop();                              // runs on success, on exception and on return\n}\n```\n\n- Catch clauses are tried top to bottom; putting a base type (`Exception`) before a derived one is a compile error (CS0160).\n- An **exception filter** (`when (...)`) decides whether to catch at all; if it is false, the exception keeps propagating with its stack untouched.\n- `finally` always runs (except for process-killing failures): use it, or `using`, for cleanup.\n\n## throw versus throw ex\n\n```csharp\ncatch (Exception ex) { log.Error(ex); throw; }      // rethrows, keeping the ORIGINAL stack trace\ncatch (Exception ex) { log.Error(ex); throw ex; }   // resets the stack trace to this line: the origin is lost\n```\n\nAlways `throw;` to rethrow. To add context, wrap: `throw new XException(\"context\", ex)`; the original is kept as `InnerException` and logged with it.\n\n## Custom exceptions\n\n```csharp\npublic class NotFoundException(string entity, object id)\n    : Exception($\"{entity} {id} was not found\");\n```\n\nCreate them for failures callers want to handle differently (not found, conflict, domain rule violated). Do not use exceptions for normal control flow (a missing optional value, a failed validation in a loop): they are expensive and hide the happy path. `TryParse`-style methods and result types are cheaper for expected outcomes.\n\n## IDisposable and using\n\nObjects holding non-memory resources (files, sockets, database connections, timers) implement `IDisposable`. `using` guarantees `Dispose` even when an exception is thrown:\n\n```csharp\nusing var conn = new SqlConnection(cs);      // using DECLARATION: disposed at the end of the enclosing scope\nusing var cmd = conn.CreateCommand();\n// ...\n// at scope exit: cmd is disposed first, then conn (reverse order of declaration)\n```\n\nThe block form `using (var r = ...) { }` disposes at the closing brace. Async resources implement `IAsyncDisposable`: `await using`.\n\nWhat the garbage collector does NOT do: close files or return connections to the pool at a predictable time. Forgetting `Dispose` on HttpClient-like or connection-like objects exhausts sockets or the connection pool under load. (Classes owned by the DI container, topic 15, are disposed by the container: do not dispose injected services yourself.)\n\n## Where to catch\n\nCatch where you can **do something**: retry, translate to a domain error, return a fallback, or add context. Everywhere else, let exceptions propagate to one global handler (ASP.NET Core's exception handler middleware, topic 17) that logs them and returns a 500 problem response. Never write `catch (Exception) { }`: a swallowed exception turns a crash into silent data corruption.\n",
+   "quiz": [
+    {
+     "key": "fund:csharp/11-exceptions-and-idisposable/q01",
+     "prompt": "What is the difference between `throw;` and `throw ex;` inside a catch block?",
+     "choices": [
+      "None",
+      "`throw;` keeps the original stack trace; `throw ex;` resets it to the current line",
+      "`throw ex;` keeps the stack; `throw;` resets it",
+      "`throw;` swallows the exception"
+     ],
+     "answer": 1,
+     "explanation": "Always rethrow with throw; so logs still show where the failure really happened."
+    },
+    {
+     "key": "fund:csharp/11-exceptions-and-idisposable/q02",
+     "prompt": "What does an exception filter `catch (X e) when (cond)` do when cond is false?",
+     "choices": [
+      "Catches it anyway",
+      "Throws a new exception",
+      "Does not catch: the exception keeps propagating with its stack intact",
+      "Returns default"
+     ],
+     "answer": 2,
+     "explanation": "Filters run before the catch is chosen, so a false filter leaves the exception untouched."
+    },
+    {
+     "key": "fund:csharp/11-exceptions-and-idisposable/q03",
+     "prompt": "With `using var a = ...; using var b = ...;` in a method, in which order are they disposed at the end?",
+     "choices": [
+      "a then b",
+      "In parallel",
+      "Only b",
+      "b then a (reverse declaration order)"
+     ],
+     "answer": 3,
+     "explanation": "Resources are released in the opposite order they were acquired, like nested using blocks."
+    },
+    {
+     "key": "fund:csharp/11-exceptions-and-idisposable/q04",
+     "prompt": "Is Dispose called when an exception is thrown inside a using block?",
+     "choices": [
+      "Yes: using compiles to try/finally",
+      "No",
+      "Only in Debug builds",
+      "Only for async disposables"
+     ],
+     "answer": 0,
+     "explanation": "That guarantee is the whole point of using."
+    },
+    {
+     "key": "fund:csharp/11-exceptions-and-idisposable/q05",
+     "prompt": "How do you add context to a low-level failure without losing it?",
+     "choices": [
+      "Log it and return null",
+      "throw new RepositoryException(\"context\", ex) so the original becomes InnerException",
+      "throw ex;",
+      "Catch Exception and ignore it"
+     ],
+     "answer": 1,
+     "explanation": "Wrapping preserves the original as InnerException for logging and debugging."
+    },
+    {
+     "key": "fund:csharp/11-exceptions-and-idisposable/q06",
+     "prompt": "What does the compiler say about `catch (Exception) {}` placed before `catch (IOException) {}`?",
+     "choices": [
+      "Nothing",
+      "A warning",
+      "Error CS0160: a previous catch clause already catches all exceptions of this type",
+      "It reorders them"
+     ],
+     "answer": 2,
+     "explanation": "The derived catch would be unreachable, so the compiler rejects it."
+    },
+    {
+     "key": "fund:csharp/11-exceptions-and-idisposable/q07",
+     "prompt": "Why is `catch (Exception) { }` dangerous?",
+     "choices": [
+      "It is slow",
+      "It swallows every failure, so bugs turn into silent wrong behaviour",
+      "It does not compile",
+      "It rethrows"
+     ],
+     "answer": 1,
+     "explanation": "Catch only what you can handle; let the rest reach a global handler that logs and responds."
+    },
+    {
+     "key": "fund:csharp/11-exceptions-and-idisposable/q08",
+     "prompt": "When should you NOT use exceptions?",
+     "choices": [
+      "For a missing database row in a GetById endpoint",
+      "For an unexpected network failure",
+      "For expected, frequent outcomes like a failed TryParse in a loop",
+      "For a violated business rule"
+     ],
+     "answer": 2,
+     "explanation": "Exceptions are expensive and obscure control flow; use Try-patterns or result types for expected outcomes."
+    },
+    {
+     "key": "fund:csharp/11-exceptions-and-idisposable/q09",
+     "prompt": "Does the garbage collector dispose of a FileStream you forgot to close at a predictable time?",
+     "choices": [
+      "Yes, immediately",
+      "Yes, at the end of the method",
+      "Only on Windows",
+      "No: finalisation timing is not deterministic, so the file can stay open"
+     ],
+     "answer": 3,
+     "explanation": "Deterministic cleanup is the job of Dispose and using."
+    },
+    {
+     "key": "fund:csharp/11-exceptions-and-idisposable/q10",
+     "prompt": "Who should dispose a service injected into your class by the DI container?",
+     "choices": [
+      "The container that created it",
+      "Your class, in its Dispose method",
+      "Nobody",
+      "The caller of your class"
+     ],
+     "answer": 0,
+     "explanation": "The container owns the lifetime of what it creates and disposes it at the end of the scope or app."
+    }
+   ],
+   "flashcards": [
+    {
+     "key": "fund:csharp/11-exceptions-and-idisposable/c01",
+     "front": "throw; versus throw ex;",
+     "back": "The bare form rethrows with the original stack trace; throwing the variable again restarts the trace at that line."
+    },
+    {
+     "key": "fund:csharp/11-exceptions-and-idisposable/c02",
+     "front": "What is an exception filter for?",
+     "back": "Catching only when a condition holds, such as a specific status code, without unwinding the stack when it does not."
+    },
+    {
+     "key": "fund:csharp/11-exceptions-and-idisposable/c03",
+     "front": "How do you add context to an exception?",
+     "back": "Throw a new, more meaningful exception and pass the caught one as its inner exception."
+    },
+    {
+     "key": "fund:csharp/11-exceptions-and-idisposable/c04",
+     "front": "What does using guarantee?",
+     "back": "Dispose runs when the scope ends, even if an exception is thrown, because it compiles to try and finally."
+    },
+    {
+     "key": "fund:csharp/11-exceptions-and-idisposable/c05",
+     "front": "Dispose order of using declarations",
+     "back": "Reverse order of declaration at the end of the enclosing scope."
+    },
+    {
+     "key": "fund:csharp/11-exceptions-and-idisposable/c06",
+     "front": "When are exceptions the wrong tool?",
+     "back": "For expected, frequent outcomes such as invalid user input in a loop; use Try methods or result types."
+    },
+    {
+     "key": "fund:csharp/11-exceptions-and-idisposable/c07",
+     "front": "Where should most exceptions be caught?",
+     "back": "Where something useful can be done, and otherwise in one global handler that logs and returns a generic error."
+    },
+    {
+     "key": "fund:csharp/11-exceptions-and-idisposable/c08",
+     "front": "Should you dispose services injected by DI?",
+     "back": "No. The container that created them disposes them at the end of their scope or of the application."
+    }
+   ],
+   "drillKeys": [
+    "fund-csharp/11-exceptions-and-idisposable/01-translate-and-dispose"
+   ]
+  },
+  {
+   "id": "12-async-await-and-tasks",
+   "order": 12,
+   "title": "async/await & Task",
+   "level": "advanced",
+   "summary": "What await really does, sequential versus concurrent awaits with Task.WhenAll, async void, blocking with .Result, CancellationToken flow, exceptions from WhenAll, and async all the way down.",
+   "lesson": "## What await does\n\n```csharp\npublic async Task<Order> GetOrderAsync(int id, CancellationToken ct)\n{\n    var row = await _db.Orders.FindAsync(new object[] { id }, ct);   // the thread is RELEASED while the database works\n    return Map(row);\n}\n```\n\nAn `async` method runs **synchronously until its first await** of an incomplete task, then returns a `Task` to its caller. When the awaited operation finishes, the rest of the method continues (on a thread-pool thread in ASP.NET Core). No thread is blocked while waiting for I/O: that is why async lets a server handle thousands of concurrent requests with a few threads.\n\n## Sequential versus concurrent\n\n```csharp\nvar user  = await GetUserAsync(id);       // ~100 ms\nvar prefs = await GetPrefsAsync(id);      // + ~100 ms = 200 ms\n\nvar userTask  = GetUserAsync(id);         // both start now\nvar prefsTask = GetPrefsAsync(id);\nawait Task.WhenAll(userTask, prefsTask);  // ~100 ms\nvar (user2, prefs2) = (userTask.Result, prefsTask.Result);   // safe: both completed\n```\n\nIndependent calls should start before you await them. Note: one `DbContext` does not support concurrent operations (topic 19); run independent database queries sequentially or use separate contexts.\n\n## Exceptions and WhenAll\n\n`await Task.WhenAll(a, b)` throws the **first** exception. The others are still recorded on the returned task's `Exception.InnerExceptions` (an AggregateError-like list). If you need every failure, keep the WhenAll task and inspect it after the await fails.\n\n## Never block on async code\n\n`task.Result` and `task.Wait()` block a thread until the task finishes. In ASP.NET Core this wastes threads and can starve the pool under load; in UI apps and old ASP.NET it deadlocks. Go **async all the way**: if a method awaits, its callers should be async too, up to the controller or handler.\n\n## async void\n\n`async void` methods cannot be awaited and their exceptions crash the process (there is no Task to put them in). Use `async Task`; the only legitimate `async void` is an event handler.\n\n## Cancellation\n\nAccept a `CancellationToken` in async methods and pass it to everything you await. ASP.NET Core gives you `HttpContext.RequestAborted` (bind a `CancellationToken` parameter in a minimal API or action), which is cancelled when the client disconnects, so a slow query stops instead of finishing for nobody. A cancelled operation throws `OperationCanceledException` (or its subclass `TaskCanceledException`); let it propagate.\n\n```csharp\nusing var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);\ncts.CancelAfter(TimeSpan.FromSeconds(2));       // a timeout on top of the caller's token\nawait client.GetAsync(url, cts.Token);\n```\n\n## Other tools\n\n- `Task.Run(() => Cpu())` moves CPU-bound work to the thread pool; do not wrap I/O in it.\n- `Task.WhenAny` returns the first task to complete (racing, timeouts).\n- `ValueTask` avoids an allocation for methods that usually complete synchronously; await it once only.\n- `SemaphoreSlim(4)` with `WaitAsync` / `Release` limits concurrency (at most four calls in flight).\n",
+   "quiz": [
+    {
+     "key": "fund:csharp/12-async-await-and-tasks/q01",
+     "prompt": "Where does an async method run until its first `await` of an incomplete task?",
+     "choices": [
+      "On a new thread",
+      "Synchronously on the caller's thread",
+      "Nowhere until awaited",
+      "On the UI thread only"
+     ],
+     "answer": 1,
+     "explanation": "Async methods start synchronously; they return a Task to the caller at the first real await."
+    },
+    {
+     "key": "fund:csharp/12-async-await-and-tasks/q02",
+     "prompt": "Two independent 100 ms calls awaited one after another take about...",
+     "choices": [
+      "100 ms",
+      "50 ms",
+      "It depends on the thread count",
+      "200 ms"
+     ],
+     "answer": 3,
+     "explanation": "The second call starts only after the first finished. Start both, then await Task.WhenAll."
+    },
+    {
+     "key": "fund:csharp/12-async-await-and-tasks/q03",
+     "prompt": "`await Task.WhenAll(FailA(), FailB())` where both fail. What does the await throw?",
+     "choices": [
+      "The first exception; all of them stay on the WhenAll task's Exception.InnerExceptions",
+      "An AggregateException with both",
+      "Nothing",
+      "The last exception only"
+     ],
+     "answer": 0,
+     "explanation": "await unwraps to the first exception; inspect the task to see every failure."
+    },
+    {
+     "key": "fund:csharp/12-async-await-and-tasks/q04",
+     "prompt": "Why is `async void` dangerous outside event handlers?",
+     "choices": [
+      "It is slower",
+      "It runs synchronously",
+      "It cannot be awaited and its exceptions crash the process",
+      "It leaks threads"
+     ],
+     "answer": 2,
+     "explanation": "Without a Task there is nothing to observe the exception or completion."
+    },
+    {
+     "key": "fund:csharp/12-async-await-and-tasks/q05",
+     "prompt": "What is the problem with calling `GetOrderAsync(id).Result` in an ASP.NET Core controller?",
+     "choices": [
+      "It returns null",
+      "It blocks a thread while waiting, wasting pool threads and risking starvation under load",
+      "It does not compile",
+      "It runs the query twice"
+     ],
+     "answer": 1,
+     "explanation": "Go async all the way: make the action async and await."
+    },
+    {
+     "key": "fund:csharp/12-async-await-and-tasks/q06",
+     "prompt": "Which token tells your code that the HTTP client disconnected?",
+     "choices": [
+      "HttpContext.RequestAborted (or a bound CancellationToken parameter)",
+      "CancellationToken.None",
+      "A new CancellationTokenSource",
+      "Environment.ExitCode"
+     ],
+     "answer": 0,
+     "explanation": "Pass it down to database and HTTP calls so abandoned requests stop working."
+    },
+    {
+     "key": "fund:csharp/12-async-await-and-tasks/q07",
+     "prompt": "What does awaiting a cancelled `Task.Delay(1000, token)` throw?",
+     "choices": [
+      "TimeoutException",
+      "Nothing: it returns early",
+      "InvalidOperationException",
+      "OperationCanceledException (TaskCanceledException)"
+     ],
+     "answer": 3,
+     "explanation": "Cancellation surfaces as OperationCanceledException; let it propagate."
+    },
+    {
+     "key": "fund:csharp/12-async-await-and-tasks/q08",
+     "prompt": "When is `Task.Run` appropriate in a web app?",
+     "choices": [
+      "Around every database call",
+      "To make sync code async for free",
+      "For CPU-bound work you want off the request thread",
+      "Never"
+     ],
+     "answer": 2,
+     "explanation": "Wrapping I/O in Task.Run only adds a thread hop; use the real async API instead."
+    },
+    {
+     "key": "fund:csharp/12-async-await-and-tasks/q09",
+     "prompt": "Can one EF Core DbContext run two queries concurrently with Task.WhenAll?",
+     "choices": [
+      "No: a DbContext does not support concurrent operations",
+      "Yes",
+      "Only with AsNoTracking",
+      "Only in SQL Server"
+     ],
+     "answer": 0,
+     "explanation": "Await queries on one context sequentially, or use separate contexts."
+    },
+    {
+     "key": "fund:csharp/12-async-await-and-tasks/q10",
+     "prompt": "How do you limit concurrent calls to an external API to four at a time?",
+     "choices": [
+      "Task.WhenAll on all of them",
+      "A SemaphoreSlim(4) with WaitAsync and Release around each call",
+      "Thread.Sleep between calls",
+      "ConfigureAwait(false)"
+     ],
+     "answer": 1,
+     "explanation": "The semaphore lets four callers in and makes the rest wait asynchronously."
+    }
+   ],
+   "flashcards": [
+    {
+     "key": "fund:csharp/12-async-await-and-tasks/c01",
+     "front": "What does await free up while waiting for I/O?",
+     "back": "The thread: it returns to the pool and the method resumes when the operation completes."
+    },
+    {
+     "key": "fund:csharp/12-async-await-and-tasks/c02",
+     "front": "How do you run independent async calls concurrently?",
+     "back": "Start every task first, then await Task.WhenAll on them."
+    },
+    {
+     "key": "fund:csharp/12-async-await-and-tasks/c03",
+     "front": "Which exception does await Task.WhenAll throw?",
+     "back": "The first one; the full list stays on the returned task's Exception property."
+    },
+    {
+     "key": "fund:csharp/12-async-await-and-tasks/c04",
+     "front": "Why avoid .Result and .Wait()?",
+     "back": "They block a thread on async work, which starves the pool in servers and can deadlock in UI or legacy contexts."
+    },
+    {
+     "key": "fund:csharp/12-async-await-and-tasks/c05",
+     "front": "Rule for async void",
+     "back": "Use it only for event handlers; everywhere else return Task so callers can await and observe failures."
+    },
+    {
+     "key": "fund:csharp/12-async-await-and-tasks/c06",
+     "front": "Where does a request's cancellation token come from in ASP.NET Core?",
+     "back": "HttpContext.RequestAborted, or a CancellationToken parameter on the action or minimal API handler."
+    },
+    {
+     "key": "fund:csharp/12-async-await-and-tasks/c07",
+     "front": "Task.Run in a web app",
+     "back": "Only for CPU-bound work; wrapping I/O in it adds overhead without freeing anything."
+    },
+    {
+     "key": "fund:csharp/12-async-await-and-tasks/c08",
+     "front": "How do you cap concurrency in async code?",
+     "back": "A SemaphoreSlim with the allowed count, awaited before and released after each call."
+    }
+   ],
+   "drillKeys": [
+    "fund-csharp/12-async-await-and-tasks/01-concurrent-quotes"
+   ]
+  },
+  {
+   "id": "13-equality-and-hashing",
+   "order": 13,
+   "title": "Equality & hashing",
+   "level": "advanced",
+   "summary": "== versus Equals for classes, structs, strings and boxed values; the Equals/GetHashCode contract; IEquatable<T>; why mutable keys vanish from dictionaries; double, decimal and NaN.",
+   "lesson": "## Two questions: same object, or same value?\n\n| type | `==` by default | `Equals` by default |\n|---|---|---|\n| class | reference (same object) | reference |\n| struct | not defined unless you add it | field-by-field (via reflection: slow) |\n| string | value (overloaded) | value |\n| record | value (generated) | value (generated) |\n\n```csharp\nobject a = 1, b = 1;\na == b        // False: == on object compares references, and these are two boxes\na.Equals(b)   // True:  Int32.Equals compares values\n```\n\nThe `==` operator is chosen at **compile time** from the static types; `Equals` is virtual and dispatched at runtime. Code that compares `object` or generic `T` values must use `Equals` (or `EqualityComparer<T>.Default`).\n\n## The contract\n\nIf you override `Equals`, you MUST override `GetHashCode` consistently:\n\n1. Equal objects must return equal hash codes.\n2. The hash code must not change while the object is in a hash-based collection.\n3. Equals must be reflexive, symmetric and transitive, and `x.Equals(null)` is false.\n\nDictionary and HashSet first compare hash codes to pick a bucket, then call Equals. Break rule 1 and equal keys are not found; break rule 2 and an existing key disappears:\n\n```csharp\nvar key = new Key { Id = 1 };\nvar set = new HashSet<Key> { key };\nkey.Id = 2;              // its hash changes\nset.Contains(key)        // False: it sits in the bucket for the OLD hash\n```\n\nMake key types **immutable** (records are ideal).\n\n## Implementing value equality by hand\n\n```csharp\npublic sealed class Email : IEquatable<Email>\n{\n    private readonly string _value;\n    public Email(string raw) => _value = raw.Trim().ToLowerInvariant();\n    public bool Equals(Email? other) => other is not null && _value == other._value;\n    public override bool Equals(object? obj) => Equals(obj as Email);\n    public override int GetHashCode() => _value.GetHashCode();\n    public static bool operator ==(Email? a, Email? b) => Equals(a, b);\n    public static bool operator !=(Email? a, Email? b) => !Equals(a, b);\n}\n```\n\n`IEquatable<T>` gives collections a typed, non-boxing `Equals`. `HashCode.Combine(a, b, c)` builds a good hash from several fields. For most value objects a **record** generates all of this correctly; hand-write it only when equality is not \"all fields equal\" (normalised email, case-insensitive codes).\n\n## Comparers instead of changing the type\n\n`new HashSet<string>(StringComparer.OrdinalIgnoreCase)` or a custom `IEqualityComparer<T>` changes equality for ONE collection without changing the type everywhere.\n\n## Floating point\n\n`0.1 + 0.2 == 0.3` is false for `double` but true for `decimal` (base-10). Use `decimal` for money. `double.NaN == double.NaN` is false, yet `double.NaN.Equals(double.NaN)` is true, so NaN keys still work in dictionaries.\n\n## Entities versus value objects\n\nAn **entity** (an Order with an Id) is equal to itself across changes: compare by Id, never by all fields. A **value object** (Money, Email) has no identity: compare by value. Mixing the two causes duplicate rows and \"the same order twice\" in sets.\n",
+   "quiz": [
+    {
+     "key": "fund:csharp/13-equality-and-hashing/q01",
+     "prompt": "`object a = 1, b = 1;` What are `a == b` and `a.Equals(b)`?",
+     "choices": [
+      "True and True",
+      "False and True",
+      "True and False",
+      "False and False"
+     ],
+     "answer": 1,
+     "explanation": "== on object compares references of two separate boxes; Int32.Equals compares the values."
+    },
+    {
+     "key": "fund:csharp/13-equality-and-hashing/q02",
+     "prompt": "When you override Equals, what else must you override?",
+     "choices": [
+      "ToString",
+      "CompareTo",
+      "GetHashCode, consistently with Equals",
+      "Nothing"
+     ],
+     "answer": 2,
+     "explanation": "Hash-based collections rely on equal objects having equal hash codes."
+    },
+    {
+     "key": "fund:csharp/13-equality-and-hashing/q03",
+     "prompt": "A key object's Id (used by its hash code) changes after it was added to a HashSet. What does `set.Contains(key)` return?",
+     "choices": [
+      "True",
+      "It throws",
+      "It depends on Equals only",
+      "False: the object sits in the bucket of its old hash"
+     ],
+     "answer": 3,
+     "explanation": "Mutating a key changes its hash. Keep keys immutable."
+    },
+    {
+     "key": "fund:csharp/13-equality-and-hashing/q04",
+     "prompt": "For two `class Customer` instances with identical fields and no overrides, what does `Equals` return?",
+     "choices": [
+      "True",
+      "False: classes use reference equality by default",
+      "Depends on the fields",
+      "It does not compile"
+     ],
+     "answer": 1,
+     "explanation": "Only records, strings and types that override Equals compare by value."
+    },
+    {
+     "key": "fund:csharp/13-equality-and-hashing/q05",
+     "prompt": "Is `==` dispatched at runtime like a virtual method?",
+     "choices": [
+      "Yes",
+      "Only for records",
+      "No: the operator is chosen at compile time from the static types",
+      "Only for structs"
+     ],
+     "answer": 2,
+     "explanation": "That is why comparing object or generic T values must use Equals."
+    },
+    {
+     "key": "fund:csharp/13-equality-and-hashing/q06",
+     "prompt": "What is `0.1m + 0.2m == 0.3m`?",
+     "choices": [
+      "True",
+      "False",
+      "It throws",
+      "It does not compile"
+     ],
+     "answer": 0,
+     "explanation": "decimal is base-10 and represents these values exactly; double would give false."
+    },
+    {
+     "key": "fund:csharp/13-equality-and-hashing/q07",
+     "prompt": "What are `double.NaN == double.NaN` and `double.NaN.Equals(double.NaN)`?",
+     "choices": [
+      "True and True",
+      "False and False",
+      "False and True",
+      "True and False"
+     ],
+     "answer": 2,
+     "explanation": "The operator follows IEEE (NaN is never equal); Equals is defined so NaN can be found in collections."
+    },
+    {
+     "key": "fund:csharp/13-equality-and-hashing/q08",
+     "prompt": "Why implement `IEquatable<T>` on a value type or sealed class?",
+     "choices": [
+      "It is required for ==",
+      "It gives collections a typed Equals without boxing or casting",
+      "It enables sorting",
+      "It makes the type immutable"
+     ],
+     "answer": 1,
+     "explanation": "Generic collections call IEquatable<T>.Equals when available."
+    },
+    {
+     "key": "fund:csharp/13-equality-and-hashing/q09",
+     "prompt": "How should two Order ENTITIES with the same Id but different totals compare?",
+     "choices": [
+      "Equal: they are the same entity at different moments",
+      "Not equal",
+      "By total",
+      "By reference only"
+     ],
+     "answer": 0,
+     "explanation": "Entities have identity; value objects compare by all their values."
+    },
+    {
+     "key": "fund:csharp/13-equality-and-hashing/q10",
+     "prompt": "You need case-insensitive email uniqueness in ONE HashSet without changing the string type. What do you do?",
+     "choices": [
+      "Override string.Equals",
+      "Lower-case before every Add",
+      "Construct the set with StringComparer.OrdinalIgnoreCase",
+      "Use a List"
+     ],
+     "answer": 2,
+     "explanation": "Equality comparers customise equality per collection."
+    }
+   ],
+   "flashcards": [
+    {
+     "key": "fund:csharp/13-equality-and-hashing/c01",
+     "front": "Default == and Equals for classes, structs, strings, records",
+     "back": "Classes: reference. Structs: field-wise Equals, no ==. Strings and records: value equality for both."
+    },
+    {
+     "key": "fund:csharp/13-equality-and-hashing/c02",
+     "front": "The Equals and GetHashCode contract",
+     "back": "Equal objects must have equal hash codes, and the hash must stay stable while the object is in a hash collection."
+    },
+    {
+     "key": "fund:csharp/13-equality-and-hashing/c03",
+     "front": "Why should dictionary keys be immutable?",
+     "back": "Changing a field used by the hash moves the key's hash away from its bucket, so lookups stop finding it."
+    },
+    {
+     "key": "fund:csharp/13-equality-and-hashing/c04",
+     "front": "Why compare object or T values with Equals rather than ==?",
+     "back": "Operators are picked at compile time from static types; Equals is virtual and uses the runtime type's definition."
+    },
+    {
+     "key": "fund:csharp/13-equality-and-hashing/c05",
+     "front": "What does IEquatable<T> add?",
+     "back": "A strongly typed Equals that collections use without boxing value types or casting."
+    },
+    {
+     "key": "fund:csharp/13-equality-and-hashing/c06",
+     "front": "How do you build a hash from several fields?",
+     "back": "HashCode.Combine over the same fields that Equals compares."
+    },
+    {
+     "key": "fund:csharp/13-equality-and-hashing/c07",
+     "front": "Entities versus value objects",
+     "back": "Entities are equal when they share identity (their id); value objects are equal when all their values match."
+    },
+    {
+     "key": "fund:csharp/13-equality-and-hashing/c08",
+     "front": "double versus decimal for money",
+     "back": "double is binary and cannot represent most decimal fractions exactly; decimal is base-10 and exact for money amounts."
+    }
+   ],
+   "drillKeys": [
+    "fund-csharp/13-equality-and-hashing/01-email-value-object"
+   ]
+  },
+  {
+   "id": "14-memory-gc-and-span",
+   "order": 14,
+   "title": "Memory, GC & Span<T>",
+   "level": "advanced",
+   "summary": "Stack versus heap in practice, the generational GC and the large object heap, what allocates (strings, boxing, closures, LINQ), Span<T> and ReadOnlySpan<T> for allocation-free slicing, and ArrayPool.",
+   "lesson": "## Where values live (the useful approximation)\n\n- **Locals of value types** (an `int`, a small struct) live in the method's stack frame or inside whatever contains them.\n- **Objects** (class instances, arrays, strings, boxed values, closures) are allocated on the **managed heap** and cleaned up by the garbage collector.\n\nThe real rule is \"value types live where their container lives\": an `int` field of a class is on the heap, inside that object.\n\n## The generational GC\n\nNew objects start in **generation 0**. A gen-0 collection is fast and frequent; objects that survive move to gen 1, then gen 2. `GC.MaxGeneration` is 2. Objects of 85,000 bytes or more go straight to the **large object heap** (collected with gen 2), so allocating big temporary arrays repeatedly is expensive.\n\nMost objects die young, which is why short-lived allocations are cheap but not free: every allocation brings the next collection closer, and in a busy API, allocations per request translate directly into GC pauses and CPU.\n\n## What allocates, often unnoticed\n\n- **Strings**: every `Substring`, `Split`, `+`, `ToLower`, `string.Format` creates new strings.\n- **Boxing**: putting a value type into `object` or a non-generic interface (`ArrayList`, `string.Format(\"{0}\", 42)` in old APIs, `IComparable` on a struct).\n- **Closures**: a lambda that captures locals allocates a closure object (and a delegate).\n- **LINQ**: iterators and delegates per call; fine in normal code, avoidable in hot loops.\n- **params arrays**, `ToList()` copies, async state machines for methods that actually await.\n\nMeasure before optimising: `GC.GetAllocatedBytesForCurrentThread()`, BenchmarkDotNet with `[MemoryDiagnoser]`, or `dotnet-counters`.\n\n## Span<T>: a view, not a copy\n\n`Span<T>` and `ReadOnlySpan<T>` represent a contiguous slice of memory (an array, a string, stack memory) without copying it:\n\n```csharp\nReadOnlySpan<char> s = \"2026-11-04\".AsSpan();\nint year  = int.Parse(s[..4]);        // no Substring, no new string\nint month = int.Parse(s.Slice(5, 2));\n\nvar arr = new[] { 1, 2, 3 };\nSpan<int> tail = arr.AsSpan(1);\ntail[0] = 9;                          // writes through: arr is now [1, 9, 3]\n\nSpan<byte> buffer = stackalloc byte[256];   // stack memory, no heap allocation\n```\n\nSpans are **ref structs**: they can live only on the stack, so they cannot be fields of classes, be captured by lambdas, or live across `await`. For those cases use `Memory<T>` / `ReadOnlyMemory<T>`, which can be stored and sliced the same way.\n\nMost parsing APIs (`int.Parse`, `DateOnly.TryParse`, `Utf8JsonReader`, `string.Split` successors) accept spans.\n\n## Reusing buffers\n\n`ArrayPool<T>.Shared.Rent(size)` hands out an array of AT LEAST that size from a pool; `Return` it when done (and never use it afterwards). It avoids allocating a new large buffer per request for things like stream copies and compression.\n\n## When to care\n\nFor typical CRUD endpoints, database round-trips dominate and allocation tuning is irrelevant. It matters in hot paths: parsing large files, serialisation, middleware that runs on every request, and high-throughput services. Clarity first; Span where a profiler says so.\n",
+   "quiz": [
+    {
+     "key": "fund:csharp/14-memory-gc-and-span/q01",
+     "prompt": "In which generation does a newly allocated small object start?",
+     "choices": [
+      "Gen 2",
+      "The large object heap",
+      "Gen 0",
+      "Gen 1"
+     ],
+     "answer": 2,
+     "explanation": "New objects start in gen 0; survivors are promoted to gen 1 and gen 2."
+    },
+    {
+     "key": "fund:csharp/14-memory-gc-and-span/q02",
+     "prompt": "Where is a `new byte[100_000]` allocated?",
+     "choices": [
+      "Gen 0",
+      "The stack",
+      "The large object heap (collected with gen 2)",
+      "Unmanaged memory"
+     ],
+     "answer": 2,
+     "explanation": "Objects of 85,000 bytes or more go to the LOH."
+    },
+    {
+     "key": "fund:csharp/14-memory-gc-and-span/q03",
+     "prompt": "Which of these allocates on the heap?",
+     "choices": [
+      "int x = 5;",
+      "object o = 5;",
+      "Span<int> s = stackalloc int[3];",
+      "var t = (1, 2);"
+     ],
+     "answer": 1,
+     "explanation": "Assigning a value type to object boxes it into a new heap object."
+    },
+    {
+     "key": "fund:csharp/14-memory-gc-and-span/q04",
+     "prompt": "`int.Parse(\"2026-11-04\".AsSpan()[..4])` versus `int.Parse(s.Substring(0, 4))`: what is the difference?",
+     "choices": [
+      "The span version parses without allocating a new string",
+      "They are identical",
+      "The span version is slower",
+      "Substring does not allocate"
+     ],
+     "answer": 0,
+     "explanation": "Slicing a span is a view over the original string; Substring copies characters into a new string."
+    },
+    {
+     "key": "fund:csharp/14-memory-gc-and-span/q05",
+     "prompt": "`var arr = new[] { 1, 2, 3 }; var t = arr.AsSpan(1); t[0] = 9;` What is arr now?",
+     "choices": [
+      "[1, 2, 3]",
+      "[9, 2, 3]",
+      "[1, 9, 3]",
+      "It throws"
+     ],
+     "answer": 2,
+     "explanation": "A span is a window onto the same memory; writes go through to the array."
+    },
+    {
+     "key": "fund:csharp/14-memory-gc-and-span/q06",
+     "prompt": "Why can a `Span<T>` not be a field of a class or survive an `await`?",
+     "choices": [
+      "It is too large",
+      "It is a ref struct that must live on the stack",
+      "It is not thread-safe",
+      "It is immutable"
+     ],
+     "answer": 1,
+     "explanation": "Use Memory<T> when the slice must be stored or cross an await."
+    },
+    {
+     "key": "fund:csharp/14-memory-gc-and-span/q07",
+     "prompt": "Which statement about ArrayPool<T>.Shared.Rent(10) is true?",
+     "choices": [
+      "It returns an array of exactly 10",
+      "It returns an array of at least 10 that you must Return and not use afterwards",
+      "It allocates on the stack",
+      "It never reuses arrays"
+     ],
+     "answer": 1,
+     "explanation": "Pooled arrays may be larger than requested; track the length you actually use."
+    },
+    {
+     "key": "fund:csharp/14-memory-gc-and-span/q08",
+     "prompt": "A lambda captures a local variable. What extra allocations can that cause?",
+     "choices": [
+      "None",
+      "A closure object holding the captured variables, plus the delegate",
+      "A new thread",
+      "A boxed copy of every local in the method"
+     ],
+     "answer": 1,
+     "explanation": "Captured locals move into a compiler-generated class instance."
+    },
+    {
+     "key": "fund:csharp/14-memory-gc-and-span/q09",
+     "prompt": "Your CRUD endpoint is slow. Where should you look first?",
+     "choices": [
+      "Replacing strings with spans",
+      "Database round-trips, missing indexes and N+1 queries",
+      "Tuning the GC",
+      "Using stackalloc"
+     ],
+     "answer": 1,
+     "explanation": "In typical APIs, I/O dominates; allocation tuning matters in measured hot paths."
+    },
+    {
+     "key": "fund:csharp/14-memory-gc-and-span/q10",
+     "prompt": "Which tool reports allocated bytes per benchmark?",
+     "choices": [
+      "BenchmarkDotNet with [MemoryDiagnoser]",
+      "Console.WriteLine",
+      "The debugger's locals window",
+      "dotnet format"
+     ],
+     "answer": 0,
+     "explanation": "Measure allocations before and after an optimisation instead of guessing."
+    }
+   ],
+   "flashcards": [
+    {
+     "key": "fund:csharp/14-memory-gc-and-span/c01",
+     "front": "Value types on the stack: the precise version",
+     "back": "Value types live wherever their container lives: a local in the stack frame, a field inside its object on the heap."
+    },
+    {
+     "key": "fund:csharp/14-memory-gc-and-span/c02",
+     "front": "How does the generational GC work?",
+     "back": "New objects start in gen 0, which is collected often and cheaply; survivors move up to gen 1 and gen 2, collected less often."
+    },
+    {
+     "key": "fund:csharp/14-memory-gc-and-span/c03",
+     "front": "What is the large object heap?",
+     "back": "Where objects of 85,000 bytes or more are allocated; it is collected with gen 2, so churning big arrays is costly."
+    },
+    {
+     "key": "fund:csharp/14-memory-gc-and-span/c04",
+     "front": "Five common hidden allocations",
+     "back": "New strings from string operations, boxing, closures from capturing lambdas, LINQ iterators and delegates, and params arrays."
+    },
+    {
+     "key": "fund:csharp/14-memory-gc-and-span/c05",
+     "front": "What is a Span<T>?",
+     "back": "A view over contiguous memory (array, string or stack) that slices without copying."
+    },
+    {
+     "key": "fund:csharp/14-memory-gc-and-span/c06",
+     "front": "Span<T> versus Memory<T>",
+     "back": "Span is a stack-only ref struct for synchronous code; Memory can be stored in fields and used across await."
+    },
+    {
+     "key": "fund:csharp/14-memory-gc-and-span/c07",
+     "front": "Rules for pooled arrays",
+     "back": "They may be larger than requested, must be returned to the pool, and must not be touched after being returned."
+    },
+    {
+     "key": "fund:csharp/14-memory-gc-and-span/c08",
+     "front": "When do allocations matter?",
+     "back": "In measured hot paths such as parsing, serialisation and per-request middleware; elsewhere clarity wins."
+    }
+   ],
+   "drillKeys": [
+    "fund-csharp/14-memory-gc-and-span/01-allocation-free-date-parse"
+   ]
+  },
+  {
+   "id": "15-dependency-injection-and-configuration",
+   "order": 15,
+   "title": "Dependency injection & configuration",
+   "level": "advanced",
+   "summary": "The .NET service container: singleton, scoped and transient lifetimes, captive dependencies and scope validation, multiple registrations, configuration sources and their precedence, and the options pattern.",
+   "lesson": "## Register, then inject through constructors\n\n```csharp\nbuilder.Services.AddSingleton<IClock, SystemClock>();\nbuilder.Services.AddScoped<IOrderRepository, EfOrderRepository>();\nbuilder.Services.AddTransient<IPriceCalculator, PriceCalculator>();\n\npublic class OrderService(IOrderRepository repo, IClock clock) { ... }   // the container supplies both\n```\n\nClasses declare what they need; the container builds the graph. Tests construct the same classes with fakes. Avoid the **service locator** (`provider.GetService<T>()` scattered in business code): it hides dependencies.\n\n## Lifetimes\n\n| lifetime | one instance per | typical services |\n|---|---|---|\n| Singleton | application | caches, clocks, HttpClient factories, configuration |\n| Scoped | scope (one per HTTP request in ASP.NET Core) | DbContext, unit of work, the current user |\n| Transient | resolution (every time it is requested) | lightweight stateless helpers |\n\nThe container disposes the `IDisposable` services it created at the end of their scope (or of the app for singletons).\n\n## Captive dependencies\n\nA singleton that takes a scoped service in its constructor captures ONE instance of it forever: a DbContext shared by every request and thread, leaking data between users and failing under concurrency. The container detects this when **scope validation** is on (`ValidateScopes`, enabled automatically in the Development environment by `WebApplication`): resolving throws \"Cannot consume scoped service from singleton\". Resolving a scoped service from the root provider is also refused. Rule: a service may only depend on services with the same or LONGER lifetime. A singleton that needs scoped work creates a scope: `using var scope = scopeFactory.CreateScope();`.\n\n## Several registrations\n\n`GetRequiredService<INotifier>()` returns the **last** registration; `GetServices<INotifier>()` (or injecting `IEnumerable<INotifier>`) returns all of them, in registration order: perfect for pipelines of rules or notifiers. `TryAddSingleton` registers only if nothing is registered yet (library defaults the app can override). `GetService<T>()` returns null for an unregistered type; `GetRequiredService<T>()` throws InvalidOperationException.\n\n## Configuration: layered sources\n\n`WebApplication.CreateBuilder` reads, in this order (later sources override earlier ones):\n\n1. `appsettings.json`\n2. `appsettings.{Environment}.json` (the environment defaults to **Production**)\n3. user secrets (Development only)\n4. environment variables\n5. command-line arguments\n\nKeys are hierarchical with `:` (`Smtp:Port`); in environment variables use a double underscore: `Smtp__Port=2525`. Every value is a **string** until bound. Never commit secrets to appsettings.json; use user secrets locally and environment variables or a vault in production.\n\n## The options pattern\n\n```csharp\nbuilder.Services.Configure<SmtpOptions>(builder.Configuration.GetSection(\"Smtp\"));\npublic class Mailer(IOptions<SmtpOptions> options) { private readonly SmtpOptions _o = options.Value; }\n```\n\n`IOptions<T>` is read once (singleton); `IOptionsSnapshot<T>` re-reads per request (scoped); `IOptionsMonitor<T>` gives the current value and change notifications. Add `.ValidateDataAnnotations().ValidateOnStart()` so a missing setting fails at startup instead of on the first email.\n",
+   "quiz": [
+    {
+     "key": "fund:csharp/15-dependency-injection-and-configuration/q01",
+     "prompt": "Which lifetime gives one instance per HTTP request in ASP.NET Core?",
+     "choices": [
+      "Singleton",
+      "Transient",
+      "Scoped",
+      "Static"
+     ],
+     "answer": 2,
+     "explanation": "Each request runs in its own DI scope; scoped services live for that scope."
+    },
+    {
+     "key": "fund:csharp/15-dependency-injection-and-configuration/q02",
+     "prompt": "A singleton takes a scoped DbContext in its constructor. What is the problem?",
+     "choices": [
+      "None",
+      "The singleton captures one DbContext forever, shared across requests and threads",
+      "The DbContext is disposed immediately",
+      "It is slower"
+     ],
+     "answer": 1,
+     "explanation": "This captive dependency leaks state between users and breaks under concurrency; scope validation reports it."
+    },
+    {
+     "key": "fund:csharp/15-dependency-injection-and-configuration/q03",
+     "prompt": "With ValidateScopes on, what happens when resolving a singleton that depends on a scoped service?",
+     "choices": [
+      "It works",
+      "It returns null",
+      "It creates a new scope automatically",
+      "It throws: cannot consume scoped service from singleton"
+     ],
+     "answer": 3,
+     "explanation": "WebApplication enables scope validation in Development, so the bug fails fast."
+    },
+    {
+     "key": "fund:csharp/15-dependency-injection-and-configuration/q04",
+     "prompt": "Two classes are registered for `INotifier`. What does `GetRequiredService<INotifier>()` return?",
+     "choices": [
+      "The first registration",
+      "The last registration",
+      "Both",
+      "It throws"
+     ],
+     "answer": 1,
+     "explanation": "Single resolution uses the last registration; inject IEnumerable<INotifier> to get all."
+    },
+    {
+     "key": "fund:csharp/15-dependency-injection-and-configuration/q05",
+     "prompt": "What does `TryAddSingleton<INotifier, B>()` do when `A` is already registered?",
+     "choices": [
+      "Replaces A with B",
+      "Adds B alongside A",
+      "Nothing: A stays the registration",
+      "Throws"
+     ],
+     "answer": 2,
+     "explanation": "TryAdd only registers when no registration for the service type exists."
+    },
+    {
+     "key": "fund:csharp/15-dependency-injection-and-configuration/q06",
+     "prompt": "How do you set `Smtp:Port` with an environment variable?",
+     "choices": [
+      "SMTP_PORT",
+      "Smtp:Port",
+      "Smtp.Port",
+      "Smtp__Port"
+     ],
+     "answer": 3,
+     "explanation": "A double underscore stands for the : separator in environment variable names."
+    },
+    {
+     "key": "fund:csharp/15-dependency-injection-and-configuration/q07",
+     "prompt": "appsettings.json says Port 25, an environment variable says 2525, the command line says 587. What does the app read?",
+     "choices": [
+      "587",
+      "2525",
+      "25",
+      "The first one found"
+     ],
+     "answer": 0,
+     "explanation": "Later sources override earlier ones, and the command line is added last by default."
+    },
+    {
+     "key": "fund:csharp/15-dependency-injection-and-configuration/q08",
+     "prompt": "What is the default environment name when ASPNETCORE_ENVIRONMENT is not set?",
+     "choices": [
+      "Development",
+      "Production",
+      "Staging",
+      "Local"
+     ],
+     "answer": 1,
+     "explanation": "Unset means Production, so Development-only settings are off by default."
+    },
+    {
+     "key": "fund:csharp/15-dependency-injection-and-configuration/q09",
+     "prompt": "Which options interface re-reads configuration on every request?",
+     "choices": [
+      "IOptions<T>",
+      "IOptionsSnapshot<T>",
+      "IConfiguration",
+      "IOptionsFactory<T>"
+     ],
+     "answer": 1,
+     "explanation": "IOptions is computed once; IOptionsSnapshot is scoped; IOptionsMonitor notifies on change."
+    },
+    {
+     "key": "fund:csharp/15-dependency-injection-and-configuration/q10",
+     "prompt": "What does `GetService<IMissing>()` return for an unregistered type?",
+     "choices": [
+      "null",
+      "A default instance",
+      "It throws InvalidOperationException",
+      "It registers it"
+     ],
+     "answer": 0,
+     "explanation": "GetRequiredService is the variant that throws for missing registrations."
+    }
+   ],
+   "flashcards": [
+    {
+     "key": "fund:csharp/15-dependency-injection-and-configuration/c01",
+     "front": "Singleton, scoped and transient in one line each",
+     "back": "One for the whole app; one per scope (an HTTP request); a new one every time it is resolved."
+    },
+    {
+     "key": "fund:csharp/15-dependency-injection-and-configuration/c02",
+     "front": "What is a captive dependency?",
+     "back": "A longer-lived service holding a shorter-lived one, such as a singleton keeping one scoped DbContext forever."
+    },
+    {
+     "key": "fund:csharp/15-dependency-injection-and-configuration/c03",
+     "front": "Lifetime rule for dependencies",
+     "back": "A service may depend only on services with the same or a longer lifetime."
+    },
+    {
+     "key": "fund:csharp/15-dependency-injection-and-configuration/c04",
+     "front": "How does a singleton use scoped services safely?",
+     "back": "It injects IServiceScopeFactory and creates a scope for each unit of work, resolving the scoped services inside it."
+    },
+    {
+     "key": "fund:csharp/15-dependency-injection-and-configuration/c05",
+     "front": "Resolving one versus all registrations",
+     "back": "GetRequiredService gives whichever registration was added most recently; IEnumerable<T> or GetServices gives every one in registration order."
+    },
+    {
+     "key": "fund:csharp/15-dependency-injection-and-configuration/c06",
+     "front": "Configuration precedence in a default web app",
+     "back": "appsettings.json, then the environment-specific file, then user secrets in Development, then environment variables, then the command line, each overriding the previous."
+    },
+    {
+     "key": "fund:csharp/15-dependency-injection-and-configuration/c07",
+     "front": "Hierarchical keys in environment variables",
+     "back": "Use a double underscore where the configuration key has a colon, such as Smtp__Port."
+    },
+    {
+     "key": "fund:csharp/15-dependency-injection-and-configuration/c08",
+     "front": "IOptions versus IOptionsSnapshot versus IOptionsMonitor",
+     "back": "Computed once; recomputed per request; current value plus change notifications."
+    }
+   ],
+   "drillKeys": [
+    "fund-csharp/15-dependency-injection-and-configuration/01-mini-container"
+   ]
+  },
+  {
+   "id": "16-aspnet-core-routing-and-minimal-apis",
+   "order": 16,
+   "title": "ASP.NET Core: routing & minimal APIs",
+   "level": "advanced",
+   "summary": "Mapping endpoints with MapGet and friends, route templates and constraints, where parameters bind from, Results and TypedResults, route groups, and the status codes the framework produces for you.",
+   "lesson": "## Endpoints\n\n```csharp\nvar app = builder.Build();\n\napp.MapGet(\"/orders/{id:int}\", async (int id, AppDb db, CancellationToken ct) =>\n    await db.Orders.FindAsync(new object[] { id }, ct) is { } order\n        ? Results.Ok(order)\n        : Results.NotFound());\n\napp.MapPost(\"/orders\", async (CreateOrder body, AppDb db) =>\n{\n    var order = new Order(body.Sku, body.Qty);\n    db.Orders.Add(order);\n    await db.SaveChangesAsync();\n    return Results.Created($\"/orders/{order.Id}\", order);   // 201 + Location header\n});\n```\n\n`MapGet`, `MapPost`, `MapPut`, `MapPatch`, `MapDelete` register a handler for a method and a **route template**. Controllers (`[ApiController]` classes with `[HttpGet]` actions) do the same with attributes; both run on the same routing and binding system.\n\n## Route templates and constraints\n\n- `{id}` captures a segment; `{id:int}`, `{id:guid}`, `{slug:alpha}`, `{n:min(1)}` add **constraints**.\n- A constraint that does not match means the route does not match: `/orders/abc` against `{id:int}` gives **404**, not 400. Constraints are for routing (disambiguation), not input validation.\n- `{**path}` is a catch-all. Literal segments match case-insensitively.\n- A path that matches a route for another HTTP method gives **405 Method Not Allowed**; a path that matches nothing gives 404.\n\n## Where parameters come from\n\nMinimal API parameters bind by convention:\n- simple types named like a route parameter: from the **route**\n- other simple types (`int page = 1`, `string? q`): from the **query string**; an optional parameter needs a default or a nullable type\n- complex types (records, classes): from the JSON **body** (for POST/PUT/PATCH)\n- registered services (`AppDb`, `ILogger<T>`), `HttpContext`, `CancellationToken`: injected\n\nUse `[FromRoute]`, `[FromQuery]`, `[FromHeader]`, `[FromBody]` to be explicit. The framework answers some bad requests itself: a query value that cannot be converted (`?page=abc` for an int) is **400**, malformed JSON is **400**, a body with the wrong `Content-Type` is **415 Unsupported Media Type**. JSON property names bind case-insensitively by default.\n\n## Results and TypedResults\n\n`Results.Ok(x)`, `Results.NotFound()`, `Results.Created(uri, x)`, `Results.NoContent()`, `Results.BadRequest()`, `Results.Conflict()`, `Results.ValidationProblem(errors)`, `Results.Problem(...)`. `TypedResults` returns concrete types, so a handler can declare `Results<Ok<Order>, NotFound>`: the compiler checks every branch and OpenAPI documents both responses.\n\n## Route groups\n\n```csharp\nvar orders = app.MapGroup(\"/api/v1/orders\").RequireAuthorization().WithTags(\"Orders\");\norders.MapGet(\"/\", ListOrders);\norders.MapGet(\"/{id:int}\", GetOrder);\n```\n\nA group applies a prefix and shared conventions (auth, filters, OpenAPI tags) to every endpoint in it. Keep handlers thin: bind and validate, call a service, map the outcome to a result (topic 04's switch over results fits perfectly here).\n",
+   "quiz": [
+    {
+     "key": "fund:csharp/16-aspnet-core-routing-and-minimal-apis/q01",
+     "prompt": "A request for `/orders/abc` reaches an app with only `MapGet(\"/orders/{id:int}\", ...)`. What is the response?",
+     "choices": [
+      "400 Bad Request",
+      "404 Not Found: the constraint makes the route not match",
+      "500",
+      "405"
+     ],
+     "answer": 1,
+     "explanation": "Route constraints decide whether a route matches. Validate input in the handler when you want a 400."
+    },
+    {
+     "key": "fund:csharp/16-aspnet-core-routing-and-minimal-apis/q02",
+     "prompt": "In `app.MapGet(\"/search\", (string? q, int page = 1) => ...)`, where does `page` come from?",
+     "choices": [
+      "The route",
+      "The JSON body",
+      "A header",
+      "The query string"
+     ],
+     "answer": 3,
+     "explanation": "Simple-type parameters that are not route parameters bind from the query string."
+    },
+    {
+     "key": "fund:csharp/16-aspnet-core-routing-and-minimal-apis/q03",
+     "prompt": "`GET /search?page=abc` for an `int page` parameter gives...",
+     "choices": [
+      "A 400: the value cannot be converted",
+      "page = 0",
+      "page = 1 (the default)",
+      "A 500"
+     ],
+     "answer": 0,
+     "explanation": "Binding failures for simple types are answered with 400 by the framework."
+    },
+    {
+     "key": "fund:csharp/16-aspnet-core-routing-and-minimal-apis/q04",
+     "prompt": "What does `Results.Created($\"/orders/{id}\", order)` send?",
+     "choices": [
+      "200 with the order",
+      "204",
+      "201 with a Location header and the order",
+      "202"
+     ],
+     "answer": 2,
+     "explanation": "Created sets the 201 status and the Location header pointing at the new resource."
+    },
+    {
+     "key": "fund:csharp/16-aspnet-core-routing-and-minimal-apis/q05",
+     "prompt": "A POST to a JSON endpoint arrives with `Content-Type: text/plain`. What does ASP.NET Core return?",
+     "choices": [
+      "400",
+      "415 Unsupported Media Type",
+      "200 with an empty body",
+      "406"
+     ],
+     "answer": 1,
+     "explanation": "The JSON body binder only accepts JSON content types."
+    },
+    {
+     "key": "fund:csharp/16-aspnet-core-routing-and-minimal-apis/q06",
+     "prompt": "A DELETE request hits a path that only has a MapGet. What is the status?",
+     "choices": [
+      "405 Method Not Allowed",
+      "404",
+      "400",
+      "501"
+     ],
+     "answer": 0,
+     "explanation": "The path matches an endpoint, but not for this HTTP method."
+    },
+    {
+     "key": "fund:csharp/16-aspnet-core-routing-and-minimal-apis/q07",
+     "prompt": "Which parameter is bound from the request body in a MapPost handler?",
+     "choices": [
+      "int id (also in the route)",
+      "CancellationToken ct",
+      "AppDb db (registered service)",
+      "CreateOrder body (a record)"
+     ],
+     "answer": 3,
+     "explanation": "Complex types bind from the JSON body; services and the cancellation token are injected."
+    },
+    {
+     "key": "fund:csharp/16-aspnet-core-routing-and-minimal-apis/q08",
+     "prompt": "What does declaring a handler's return type as `Results<Ok<Order>, NotFound>` give you?",
+     "choices": [
+      "Faster responses",
+      "Automatic caching",
+      "Compile-time checking of the possible results and accurate OpenAPI metadata",
+      "Nothing"
+     ],
+     "answer": 2,
+     "explanation": "TypedResults make every response type explicit to the compiler and the API description."
+    },
+    {
+     "key": "fund:csharp/16-aspnet-core-routing-and-minimal-apis/q09",
+     "prompt": "What is `MapGroup(\"/api/v1/orders\")` for?",
+     "choices": [
+      "A shared route prefix plus shared conventions such as auth and tags",
+      "Load balancing",
+      "Grouping database queries",
+      "Versioning the DLL"
+     ],
+     "answer": 0,
+     "explanation": "Groups remove repetition and keep policies consistent across related endpoints."
+    },
+    {
+     "key": "fund:csharp/16-aspnet-core-routing-and-minimal-apis/q10",
+     "prompt": "Is a JSON property `\"NAME\"` bound to a record parameter `Name` by default?",
+     "choices": [
+      "No, names are case-sensitive",
+      "Yes: web defaults bind property names case-insensitively",
+      "Only for GET",
+      "Only with [FromBody]"
+     ],
+     "answer": 1,
+     "explanation": "ASP.NET Core's JSON options use case-insensitive property matching by default."
+    }
+   ],
+   "flashcards": [
+    {
+     "key": "fund:csharp/16-aspnet-core-routing-and-minimal-apis/c01",
+     "front": "What happens when a route constraint does not match?",
+     "back": "The route simply does not match, so the request ends as a 404 (or another route handles it); constraints are not validation."
+    },
+    {
+     "key": "fund:csharp/16-aspnet-core-routing-and-minimal-apis/c02",
+     "front": "Minimal API binding rules in brief",
+     "back": "Route names bind from the route, other simple types from the part of the URL after the question mark, complex types from the JSON body, and services, HttpContext and CancellationToken are injected."
+    },
+    {
+     "key": "fund:csharp/16-aspnet-core-routing-and-minimal-apis/c03",
+     "front": "Bad requests the framework rejects for you",
+     "back": "Unconvertible route or query values and malformed JSON get 400; a non-JSON content type on a JSON body gets 415."
+    },
+    {
+     "key": "fund:csharp/16-aspnet-core-routing-and-minimal-apis/c04",
+     "front": "404 versus 405 in routing",
+     "back": "404: no endpoint matches the path. 405: an endpoint matches the path but not the HTTP method."
+    },
+    {
+     "key": "fund:csharp/16-aspnet-core-routing-and-minimal-apis/c05",
+     "front": "Results versus TypedResults",
+     "back": "Results returns IResult; TypedResults returns concrete types that let you declare every possible response in the signature."
+    },
+    {
+     "key": "fund:csharp/16-aspnet-core-routing-and-minimal-apis/c06",
+     "front": "What should a Created response include?",
+     "back": "Status 201, a Location header with the new resource's URL, and usually the created representation."
+    },
+    {
+     "key": "fund:csharp/16-aspnet-core-routing-and-minimal-apis/c07",
+     "front": "What does MapGroup add?",
+     "back": "A common prefix and shared conventions (authorisation, filters, OpenAPI tags) for all endpoints inside it."
+    },
+    {
+     "key": "fund:csharp/16-aspnet-core-routing-and-minimal-apis/c08",
+     "front": "Keeping minimal API handlers thin",
+     "back": "Bind and validate, call a service, and map its outcome to a result; business rules live in the service."
+    }
+   ],
+   "drillKeys": [
+    "fund-csharp/16-aspnet-core-routing-and-minimal-apis/01-route-template-matcher"
+   ]
+  },
+  {
+   "id": "17-middleware-pipeline",
+   "order": 17,
+   "title": "The middleware pipeline",
+   "level": "advanced",
+   "summary": "How app.Use builds a nested pipeline, why registration order matters, short-circuiting, terminal middleware, the order of exception handling, routing, authentication and authorization, and writing after the response started.",
+   "lesson": "## A pipeline of nested delegates\n\nEach middleware receives the `HttpContext` and a `next` delegate. Code before `await next(context)` runs on the way IN, code after it runs on the way OUT:\n\n```csharp\napp.Use(async (ctx, next) =>\n{\n    var sw = Stopwatch.StartNew();          // in\n    await next(ctx);\n    log.LogInformation(\"{Path} took {Ms} ms\", ctx.Request.Path, sw.ElapsedMilliseconds);  // out\n});\n```\n\nWith middleware A registered before B, a request flows **A in → B in → endpoint → B out → A out**. The pipeline is built once at startup, in registration order: the first registered is the OUTERMOST.\n\n## Short-circuiting and terminal middleware\n\nA middleware that does not call `next` ends the request there: a health check, a rate limiter answering 429, an auth check answering 401, static files that served a file. `app.Run(...)` registers a terminal middleware that never calls next.\n\n## Order matters\n\nThe template order is not arbitrary:\n\n```csharp\napp.UseExceptionHandler();      // 1. outermost: catches exceptions from everything after it\napp.UseHsts(); app.UseHttpsRedirection();\napp.UseStaticFiles();           // serve files early, skipping auth for them\napp.UseRouting();               // pick the endpoint\napp.UseCors();\napp.UseAuthentication();        // who are you? (sets HttpContext.User)\napp.UseAuthorization();         // may you call THIS endpoint? (needs both routing and the user)\napp.MapControllers(); app.MapGet(...);   // endpoints\n```\n\n- The exception handler must come first, or exceptions thrown by middleware registered before it are not caught.\n- Authorization needs the endpoint (from routing) and the user (from authentication), so it comes after both.\n- Middleware that should see only matched endpoints goes after routing.\n\n## Exception handling\n\n`app.UseExceptionHandler()` together with `builder.Services.AddProblemDetails()` turns any unhandled exception into a **500 problem-details** response without the exception message, and logs the exception. In .NET 8+ you can register `IExceptionHandler` implementations to map specific exceptions (a `NotFoundException` to 404) in one place. The developer exception page (with stack traces) is for Development only.\n\n## Writing a middleware class\n\n```csharp\npublic class CorrelationIdMiddleware(RequestDelegate next)\n{\n    public async Task InvokeAsync(HttpContext ctx)\n    {\n        var id = ctx.Request.Headers[\"X-Correlation-Id\"].FirstOrDefault() ?? Guid.NewGuid().ToString();\n        ctx.Response.Headers[\"X-Correlation-Id\"] = id;\n        await next(ctx);\n    }\n}\napp.UseMiddleware<CorrelationIdMiddleware>();\n```\n\nConventional middleware is created ONCE (a singleton): inject scoped services into `InvokeAsync` parameters, not into the constructor.\n\n## The response has started\n\nHeaders and the status code are sent when the body starts. After that, changing `StatusCode` or headers throws (`Response.HasStarted` tells you). Set headers before calling next, or register `ctx.Response.OnStarting(...)` callbacks.\n",
+   "quiz": [
+    {
+     "key": "fund:csharp/17-middleware-pipeline/q01",
+     "prompt": "Middleware A is registered before B. In what order do their \"after next\" parts run?",
+     "choices": [
+      "A then B",
+      "B then A: the pipeline unwinds in reverse",
+      "In parallel",
+      "Only A runs"
+     ],
+     "answer": 1,
+     "explanation": "The first registered middleware is outermost: A in, B in, endpoint, B out, A out."
+    },
+    {
+     "key": "fund:csharp/17-middleware-pipeline/q02",
+     "prompt": "What does a middleware that never calls `next` do?",
+     "choices": [
+      "Throws",
+      "Runs next automatically",
+      "Delays the request",
+      "Short-circuits: later middleware and the endpoint never run"
+     ],
+     "answer": 3,
+     "explanation": "Health checks, rate limiters and static files end requests early this way."
+    },
+    {
+     "key": "fund:csharp/17-middleware-pipeline/q03",
+     "prompt": "Why must `UseExceptionHandler` be registered first?",
+     "choices": [
+      "It only catches exceptions thrown by middleware registered after it (inside it)",
+      "It is faster",
+      "It sets the culture",
+      "It is required for routing"
+     ],
+     "answer": 0,
+     "explanation": "Middleware only wraps what comes after it in the pipeline."
+    },
+    {
+     "key": "fund:csharp/17-middleware-pipeline/q04",
+     "prompt": "Why does `UseAuthorization` come after `UseRouting` and `UseAuthentication`?",
+     "choices": [
+      "Convention only",
+      "It must be last",
+      "It needs the selected endpoint (its policies) and the authenticated user",
+      "Authentication depends on authorization"
+     ],
+     "answer": 2,
+     "explanation": "Authorization evaluates the endpoint's requirements against HttpContext.User."
+    },
+    {
+     "key": "fund:csharp/17-middleware-pipeline/q05",
+     "prompt": "With `UseExceptionHandler()` and `AddProblemDetails()`, what does a client get when a handler throws \"secret detail\"?",
+     "choices": [
+      "The exception message",
+      "A 500 problem-details body without the exception message",
+      "A stack trace",
+      "An empty 200"
+     ],
+     "answer": 1,
+     "explanation": "The details are logged server-side; the client gets a generic problem response."
+    },
+    {
+     "key": "fund:csharp/17-middleware-pipeline/q06",
+     "prompt": "What does `app.Run(handler)` register?",
+     "choices": [
+      "A terminal middleware that ends the pipeline",
+      "A middleware that must call next",
+      "A background job",
+      "A route group"
+     ],
+     "answer": 0,
+     "explanation": "Run delegates never receive a next delegate."
+    },
+    {
+     "key": "fund:csharp/17-middleware-pipeline/q07",
+     "prompt": "A conventional middleware class needs a scoped DbContext. Where should it receive it?",
+     "choices": [
+      "Its constructor",
+      "A static field",
+      "It cannot use one",
+      "As a parameter of InvokeAsync"
+     ],
+     "answer": 3,
+     "explanation": "Middleware instances are created once; constructor injection of scoped services would capture one instance forever."
+    },
+    {
+     "key": "fund:csharp/17-middleware-pipeline/q08",
+     "prompt": "What happens if a middleware sets `ctx.Response.StatusCode` after the body has started streaming?",
+     "choices": [
+      "The status changes",
+      "It is ignored silently in all cases",
+      "It throws: headers and status are already sent",
+      "The body restarts"
+     ],
+     "answer": 2,
+     "explanation": "Check Response.HasStarted, or set headers before writing or with OnStarting."
+    },
+    {
+     "key": "fund:csharp/17-middleware-pipeline/q09",
+     "prompt": "Where should static file middleware usually go?",
+     "choices": [
+      "Early, before routing and auth, so files are served cheaply",
+      "After authorization",
+      "Last",
+      "It cannot be combined with endpoints"
+     ],
+     "answer": 0,
+     "explanation": "Serving a file short-circuits the rest of the pipeline."
+    },
+    {
+     "key": "fund:csharp/17-middleware-pipeline/q10",
+     "prompt": "How is the pipeline order determined?",
+     "choices": [
+      "Alphabetically",
+      "By the order of app.Use / UseXxx calls at startup",
+      "By attribute priority",
+      "Randomly"
+     ],
+     "answer": 1,
+     "explanation": "Registration order is the execution order; that is why the template order matters."
+    }
+   ],
+   "flashcards": [
+    {
+     "key": "fund:csharp/17-middleware-pipeline/c01",
+     "front": "Execution order for middleware A registered before B",
+     "back": "A before next, B before next, the endpoint, B after next, A after next."
+    },
+    {
+     "key": "fund:csharp/17-middleware-pipeline/c02",
+     "front": "What is short-circuiting?",
+     "back": "A middleware answers the request itself without calling next, so nothing later in the pipeline runs."
+    },
+    {
+     "key": "fund:csharp/17-middleware-pipeline/c03",
+     "front": "Why register the exception handler first?",
+     "back": "It can only catch exceptions thrown by components that run inside it, so it must wrap everything."
+    },
+    {
+     "key": "fund:csharp/17-middleware-pipeline/c04",
+     "front": "Order of routing, authentication and authorization",
+     "back": "Routing selects the endpoint, authentication establishes the user, then authorization checks that user against the endpoint."
+    },
+    {
+     "key": "fund:csharp/17-middleware-pipeline/c05",
+     "front": "What does UseExceptionHandler with ProblemDetails produce?",
+     "back": "A logged exception and a generic 500 problem-details response with no internal message for the client."
+    },
+    {
+     "key": "fund:csharp/17-middleware-pipeline/c06",
+     "front": "app.Use versus app.Run",
+     "back": "Use adds middleware that may call next; Run adds terminal middleware that never does."
+    },
+    {
+     "key": "fund:csharp/17-middleware-pipeline/c07",
+     "front": "Injecting scoped services into middleware classes",
+     "back": "Take them as InvokeAsync parameters, because the middleware instance itself lives for the whole application."
+    },
+    {
+     "key": "fund:csharp/17-middleware-pipeline/c08",
+     "front": "What does Response.HasStarted mean?",
+     "back": "Headers and status have been sent with the first bytes of the body, so they can no longer be changed."
+    }
+   ],
+   "drillKeys": [
+    "fund-csharp/17-middleware-pipeline/01-build-a-pipeline"
+   ]
+  },
+  {
+   "id": "18-validation-and-problem-details",
+   "order": 18,
+   "title": "Model binding, validation & ProblemDetails",
+   "level": "advanced",
+   "summary": "DataAnnotations and automatic 400s with [ApiController] and .NET 10 minimal API validation, ValidationProblemDetails and RFC 9457 problem details, DTOs against over-posting, and where business validation belongs.",
+   "lesson": "## Validate at the edge\n\nEvery request body is untrusted. Validate shape and simple rules where the request enters, before any business logic runs, and answer **400** with field-level errors.\n\n```csharp\npublic class SignupDto\n{\n    [Required, EmailAddress] public string? Email { get; set; }\n    [Required, StringLength(50, MinimumLength = 1)] public string? Name { get; set; }\n    [Range(13, 120)] public int Age { get; set; }\n}\n```\n\n## Automatic validation\n\n- **Controllers** with `[ApiController]`: an invalid model never reaches the action; the framework returns 400 with a **ValidationProblemDetails** body.\n- **Minimal APIs** in .NET 10: call `builder.Services.AddValidation()` and parameters with DataAnnotations are validated the same way. (Earlier versions needed endpoint filters or a library such as FluentValidation.)\n\nThe response body looks like this:\n\n```json\n{\n  \"type\": \"https://tools.ietf.org/html/rfc9110#section-15.5.1\",\n  \"title\": \"One or more validation errors occurred.\",\n  \"status\": 400,\n  \"errors\": { \"Email\": [\"The Email field is required.\"], \"Age\": [\"The field Age must be between 13 and 120.\"] },\n  \"traceId\": \"00-...\"\n}\n```\n\nClients can map `errors` straight onto form fields.\n\n## Problem details (RFC 9457)\n\n`{ type, title, status, detail, instance }` plus extensions is the standard error shape for HTTP APIs. `builder.Services.AddProblemDetails()` makes the framework use it for errors (exceptions, status-code pages), and `Results.Problem(...)` / `Results.ValidationProblem(errors)` produce it from your own code. One consistent error shape for the whole API is worth more than clever per-endpoint messages.\n\n## DTOs against over-posting\n\nNever bind request bodies straight to entities:\n\n```csharp\napp.MapPut(\"/users/{id:int}\", async (int id, UpdateUserDto dto, AppDb db) => {\n    var user = await db.Users.FindAsync(id);\n    if (user is null) return Results.NotFound();\n    user.Name = dto.Name;        // copy ONLY what the client may change\n    user.Bio = dto.Bio;\n    await db.SaveChangesAsync();\n    return Results.NoContent();\n});\n```\n\nBinding to the entity would let a client send `\"isAdmin\": true` or `\"balance\": 1000000` (**over-posting** / mass assignment). Separate input DTOs, output DTOs (no password hashes) and entities.\n\n## Shape validation versus business rules\n\nDataAnnotations check a request in isolation: required, lengths, ranges, formats. Rules that need data (the email is already taken, the product is out of stock, the order is already shipped) belong in the service, and usually map to **409 Conflict** or **422 Unprocessable Content** rather than 400. Keep both kinds returning problem details.\n\n## Normalise as you validate\n\nTrim strings, normalise case for emails and codes, treat empty strings as missing where the field is optional. Doing it once at the boundary keeps the rest of the code simple and the database clean.\n",
+   "quiz": [
+    {
+     "key": "fund:csharp/18-validation-and-problem-details/q01",
+     "prompt": "With `[ApiController]`, what happens when the bound model fails DataAnnotations validation?",
+     "choices": [
+      "The action runs with ModelState invalid",
+      "The framework returns 400 with ValidationProblemDetails before the action runs",
+      "A 500",
+      "The invalid fields are set to null"
+     ],
+     "answer": 1,
+     "explanation": "Automatic 400 responses are part of the ApiController conventions."
+    },
+    {
+     "key": "fund:csharp/18-validation-and-problem-details/q02",
+     "prompt": "In .NET 10 minimal APIs, what turns on DataAnnotations validation of parameters?",
+     "choices": [
+      "Nothing: it is not supported",
+      "[ApiController]",
+      "app.UseValidation()",
+      "builder.Services.AddValidation()"
+     ],
+     "answer": 3,
+     "explanation": ".NET 10 added built-in minimal API validation; earlier versions needed filters or a library."
+    },
+    {
+     "key": "fund:csharp/18-validation-and-problem-details/q03",
+     "prompt": "Which property of a ValidationProblemDetails body holds the per-field messages?",
+     "choices": [
+      "errors",
+      "detail",
+      "title",
+      "instance"
+     ],
+     "answer": 0,
+     "explanation": "errors maps field names to arrays of messages, ready to display next to form inputs."
+    },
+    {
+     "key": "fund:csharp/18-validation-and-problem-details/q04",
+     "prompt": "Why bind request bodies to DTOs instead of EF entities?",
+     "choices": [
+      "Entities cannot be deserialised",
+      "For performance",
+      "To prevent over-posting: clients setting fields like IsAdmin they must not control",
+      "DTOs are required by EF Core"
+     ],
+     "answer": 2,
+     "explanation": "Copy only the allowed fields from the DTO onto the entity."
+    },
+    {
+     "key": "fund:csharp/18-validation-and-problem-details/q05",
+     "prompt": "Signup with an email that is already registered. Which response fits best?",
+     "choices": [
+      "400 from DataAnnotations",
+      "409 Conflict (or 422) with a problem details body",
+      "500",
+      "404"
+     ],
+     "answer": 1,
+     "explanation": "It is a business rule that needs data, not a shape error; report it from the service as a conflict."
+    },
+    {
+     "key": "fund:csharp/18-validation-and-problem-details/q06",
+     "prompt": "What is RFC 9457 problem details?",
+     "choices": [
+      "A standard JSON shape for HTTP API errors: type, title, status, detail, instance",
+      "A logging format",
+      "A validation library",
+      "A status code"
+     ],
+     "answer": 0,
+     "explanation": "Using it everywhere gives clients one error format to handle."
+    },
+    {
+     "key": "fund:csharp/18-validation-and-problem-details/q07",
+     "prompt": "What does `[Range(13, 120)] public int Age` reject?",
+     "choices": [
+      "Only negative ages",
+      "Missing ages only",
+      "Nothing at runtime",
+      "Ages below 13 or above 120"
+     ],
+     "answer": 3,
+     "explanation": "Range validates both bounds inclusively."
+    },
+    {
+     "key": "fund:csharp/18-validation-and-problem-details/q08",
+     "prompt": "Where should trimming and case normalisation of an email happen?",
+     "choices": [
+      "In the database",
+      "In every service method",
+      "At the boundary, once, while validating input",
+      "In the UI only"
+     ],
+     "answer": 2,
+     "explanation": "Normalising at the edge keeps business code and stored data consistent."
+    },
+    {
+     "key": "fund:csharp/18-validation-and-problem-details/q09",
+     "prompt": "Which kind of rule belongs in DataAnnotations?",
+     "choices": [
+      "Email is required and at most 254 characters",
+      "The product is in stock",
+      "The user may edit this order",
+      "The coupon is not expired"
+     ],
+     "answer": 0,
+     "explanation": "Attributes check a request on its own; rules that need data or state live in services."
+    },
+    {
+     "key": "fund:csharp/18-validation-and-problem-details/q10",
+     "prompt": "What does `builder.Services.AddProblemDetails()` change?",
+     "choices": [
+      "It validates DTOs",
+      "Framework-generated errors (exceptions, status pages) use the problem details format",
+      "It logs requests",
+      "It disables 500s"
+     ],
+     "answer": 1,
+     "explanation": "Combined with UseExceptionHandler, unhandled exceptions become 500 problem responses."
+    }
+   ],
+   "flashcards": [
+    {
+     "key": "fund:csharp/18-validation-and-problem-details/c01",
+     "front": "What does [ApiController] do with an invalid model?",
+     "back": "Returns 400 with a ValidationProblemDetails body before the action method runs."
+    },
+    {
+     "key": "fund:csharp/18-validation-and-problem-details/c02",
+     "front": "Minimal API validation in .NET 10",
+     "back": "AddValidation registers built-in validation of DataAnnotations on endpoint parameters, with the same 400 response."
+    },
+    {
+     "key": "fund:csharp/18-validation-and-problem-details/c03",
+     "front": "Shape of a validation problem response",
+     "back": "A problem details object whose errors property maps each field name to a list of messages."
+    },
+    {
+     "key": "fund:csharp/18-validation-and-problem-details/c04",
+     "front": "What is over-posting?",
+     "back": "A client setting fields it should not control, such as IsAdmin, because the body was bound straight onto an entity."
+    },
+    {
+     "key": "fund:csharp/18-validation-and-problem-details/c05",
+     "front": "Input DTO, output DTO, entity",
+     "back": "Separate types for what clients may send, what they may see, and what is stored."
+    },
+    {
+     "key": "fund:csharp/18-validation-and-problem-details/c06",
+     "front": "Shape validation versus business rules",
+     "back": "Attributes check a request in isolation (400); rules needing data or state live in services and map to 409 or 422."
+    },
+    {
+     "key": "fund:csharp/18-validation-and-problem-details/c07",
+     "front": "The RFC 9457 problem details fields",
+     "back": "type, title, status, detail and instance, plus custom extension members."
+    },
+    {
+     "key": "fund:csharp/18-validation-and-problem-details/c08",
+     "front": "Why normalise input at the boundary?",
+     "back": "Trimming and normalising once means services, comparisons and stored data never see untidy variants."
+    }
+   ],
+   "drillKeys": [
+    "fund-csharp/18-validation-and-problem-details/01-validate-signup"
+   ]
+  },
+  {
+   "id": "19-ef-core-basics",
+   "order": 19,
+   "title": "EF Core basics: DbContext & change tracking",
+   "level": "advanced",
+   "summary": "DbContext and DbSet, entity states and the change tracker, SaveChanges as one transaction, identity resolution and Find, AsNoTracking, Update on detached entities, migrations, and DbContext lifetime.",
+   "lesson": "## The unit of work\n\n```csharp\npublic class AppDb(DbContextOptions<AppDb> options) : DbContext(options)\n{\n    public DbSet<Order> Orders => Set<Order>();\n    public DbSet<Customer> Customers => Set<Customer>();\n}\nbuilder.Services.AddDbContext<AppDb>(o => o.UseSqlServer(cs));   // registered as SCOPED\n```\n\nA `DbContext` is a **unit of work**: it loads entities, tracks what you change, and writes everything in one `SaveChanges()`. It is registered **scoped** (one per request), is not thread-safe, and should be short-lived.\n\n## Entity states and the change tracker\n\nEvery tracked entity has a state:\n\n| state | how you get there | SaveChanges does |\n|---|---|---|\n| Added | `db.Orders.Add(o)` | INSERT |\n| Unchanged | loaded by a query | nothing |\n| Modified | change a property of a tracked entity | UPDATE (changed columns) |\n| Deleted | `db.Orders.Remove(o)` | DELETE |\n| Detached | not tracked (`AsNoTracking`, a new object) | nothing |\n\n```csharp\nvar order = await db.Orders.FirstAsync(o => o.Id == id);  // tracked, Unchanged\norder.Status = \"shipped\";                                  // detected as Modified\nawait db.SaveChangesAsync();                               // UPDATE Orders SET Status = ... WHERE Id = ...\n```\n\nThe change tracker keeps a **snapshot** of each loaded entity's original values and compares it with the current values in `DetectChanges` (called automatically by `SaveChanges`). Only modified columns are written.\n\n## SaveChanges is a transaction\n\nAll inserts, updates and deletes of one `SaveChanges` call run in one database transaction: if any statement fails, none of them is applied and a `DbUpdateException` is thrown. For work spanning several `SaveChanges` calls, use `db.Database.BeginTransaction()` and commit (or roll back) explicitly.\n\n## Identity resolution and Find\n\nWithin one context, a given row is represented by ONE object: querying the same id twice returns the same instance. `db.Orders.Find(id)` first looks in the tracker and only queries the database if the entity is not already tracked.\n\n## AsNoTracking for reads\n\n`db.Orders.AsNoTracking().Where(...).ToListAsync()` skips snapshots and identity resolution: faster and lighter for read-only queries (lists, reports, API GETs). Changes to no-tracking entities are NOT saved: they are Detached.\n\n## Updating from a request\n\n- Load, change, save (above) is the simplest and only writes what changed.\n- `db.Update(entity)` on a DETACHED object marks it Modified and writes EVERY column, overwriting values you did not intend to touch. Prefer load-and-copy from a DTO (topic 18).\n\n## Migrations\n\n`dotnet ef migrations add AddOrderStatus` generates a C# migration from model changes; `dotnet ef database update` (or a migration bundle in CI) applies it. Review generated migrations: renames can appear as drop-and-add and lose data.\n\n## Navigations are not loaded automatically\n\n`order.Customer` is null and `customer.Orders` is empty unless you load them (`Include`, projection, or explicit loading). Lazy loading exists but is off by default and causes N+1 queries (topic 20).\n",
+   "quiz": [
+    {
+     "key": "fund:csharp/19-ef-core-basics/q01",
+     "prompt": "What is the state of an entity right after `db.Orders.Add(order)`?",
+     "choices": [
+      "Unchanged",
+      "Added",
+      "Modified",
+      "Detached"
+     ],
+     "answer": 1,
+     "explanation": "Added entities are inserted on the next SaveChanges."
+    },
+    {
+     "key": "fund:csharp/19-ef-core-basics/q02",
+     "prompt": "You load an order with tracking and change its Status. What does SaveChanges do?",
+     "choices": [
+      "Nothing until you call Update",
+      "An INSERT",
+      "It throws",
+      "An UPDATE of the changed column(s)"
+     ],
+     "answer": 3,
+     "explanation": "The change tracker compares the snapshot with current values and updates what changed."
+    },
+    {
+     "key": "fund:csharp/19-ef-core-basics/q03",
+     "prompt": "You load an order with `AsNoTracking()`, change it, and call SaveChanges. How many rows are saved?",
+     "choices": [
+      "0: the entity is detached",
+      "1",
+      "All rows",
+      "It throws"
+     ],
+     "answer": 0,
+     "explanation": "No-tracking entities are not watched, so their changes are never written."
+    },
+    {
+     "key": "fund:csharp/19-ef-core-basics/q04",
+     "prompt": "SaveChanges inserts two rows; the second violates a NOT NULL constraint. What is stored?",
+     "choices": [
+      "The first row",
+      "Both, with a default value",
+      "Neither: SaveChanges runs in one transaction and throws DbUpdateException",
+      "It depends on the provider's autocommit"
+     ],
+     "answer": 2,
+     "explanation": "Each SaveChanges call is atomic."
+    },
+    {
+     "key": "fund:csharp/19-ef-core-basics/q05",
+     "prompt": "Within one DbContext, you query the order with Id 1 twice. What do you get?",
+     "choices": [
+      "Two separate objects",
+      "The same object instance both times (identity resolution)",
+      "A copy and the original",
+      "An exception"
+     ],
+     "answer": 1,
+     "explanation": "A tracking context keeps one instance per row."
+    },
+    {
+     "key": "fund:csharp/19-ef-core-basics/q06",
+     "prompt": "What does `db.Orders.Find(1)` do when order 1 is already tracked?",
+     "choices": [
+      "Returns the tracked instance without a query",
+      "Queries the database again",
+      "Throws",
+      "Returns a detached copy"
+     ],
+     "answer": 0,
+     "explanation": "Find checks the change tracker first."
+    },
+    {
+     "key": "fund:csharp/19-ef-core-basics/q07",
+     "prompt": "Why is `db.Update(detachedEntity)` from a request body risky?",
+     "choices": [
+      "It deletes the row",
+      "It does nothing",
+      "It creates a duplicate",
+      "It marks every property Modified and overwrites all columns"
+     ],
+     "answer": 3,
+     "explanation": "Load the entity and copy the allowed DTO fields instead."
+    },
+    {
+     "key": "fund:csharp/19-ef-core-basics/q08",
+     "prompt": "With which lifetime does AddDbContext register the context?",
+     "choices": [
+      "Singleton",
+      "Transient",
+      "Scoped: one per request",
+      "Static"
+     ],
+     "answer": 2,
+     "explanation": "Contexts are units of work and not thread-safe, so one per request."
+    },
+    {
+     "key": "fund:csharp/19-ef-core-basics/q09",
+     "prompt": "Without Include, what is `order.Customer` after `db.Orders.First()` in a default setup?",
+     "choices": [
+      "null: navigations are not loaded automatically",
+      "The customer",
+      "A proxy that loads on access",
+      "An exception"
+     ],
+     "answer": 0,
+     "explanation": "Lazy loading is off by default; load related data explicitly."
+    },
+    {
+     "key": "fund:csharp/19-ef-core-basics/q10",
+     "prompt": "Which command creates a migration from your model changes?",
+     "choices": [
+      "dotnet ef database update",
+      "dotnet ef migrations add <Name>",
+      "dotnet build",
+      "dotnet ef dbcontext scaffold"
+     ],
+     "answer": 1,
+     "explanation": "database update applies migrations; migrations add generates one."
+    }
+   ],
+   "flashcards": [
+    {
+     "key": "fund:csharp/19-ef-core-basics/c01",
+     "front": "The five entity states",
+     "back": "Added (insert), Unchanged (no-op), Modified (update), Deleted (delete) and Detached (not tracked at all)."
+    },
+    {
+     "key": "fund:csharp/19-ef-core-basics/c02",
+     "front": "How does EF Core know what changed?",
+     "back": "It stores a snapshot of original values for tracked entities and compares them with current values in DetectChanges, run by SaveChanges."
+    },
+    {
+     "key": "fund:csharp/19-ef-core-basics/c03",
+     "front": "Is SaveChanges transactional?",
+     "back": "Yes. Every statement in one SaveChanges call commits together or not at all."
+    },
+    {
+     "key": "fund:csharp/19-ef-core-basics/c04",
+     "front": "What is identity resolution?",
+     "back": "A tracking context keeps exactly one instance per database row, so repeated queries return the same object."
+    },
+    {
+     "key": "fund:csharp/19-ef-core-basics/c05",
+     "front": "When use AsNoTracking?",
+     "back": "For read-only queries: it skips snapshots and identity tracking, and its results are never saved."
+    },
+    {
+     "key": "fund:csharp/19-ef-core-basics/c06",
+     "front": "Why prefer load-and-copy over Update on a detached entity?",
+     "back": "Update marks every column modified and overwrites fields the request never meant to change."
+    },
+    {
+     "key": "fund:csharp/19-ef-core-basics/c07",
+     "front": "DbContext lifetime",
+     "back": "Scoped and short-lived: one per request or unit of work, never shared between threads."
+    },
+    {
+     "key": "fund:csharp/19-ef-core-basics/c08",
+     "front": "Are navigation properties loaded automatically?",
+     "back": "No. Use Include, a projection, or explicit loading; lazy loading is off by default."
+    }
+   ],
+   "drillKeys": [
+    "fund-csharp/19-ef-core-basics/01-detect-changes"
+   ]
+  },
+  {
+   "id": "20-ef-core-queries-n-plus-1-and-transactions",
+   "order": 20,
+   "title": "EF Core queries: N+1, projections & transactions",
+   "level": "advanced",
+   "summary": "IQueryable translation to SQL, the N+1 problem and how Include, projections and batching fix it, client evaluation errors, parameterised raw SQL, explicit transactions and optimistic concurrency.",
+   "lesson": "## IQueryable is translated, IEnumerable is not\n\n```csharp\nvar recent = await db.Orders\n    .Where(o => o.CreatedAt > since)        // becomes WHERE in SQL\n    .OrderByDescending(o => o.CreatedAt)    // ORDER BY\n    .Take(20)                               // TOP / LIMIT\n    .ToListAsync();                         // runs ONE query here\n```\n\nEverything before the materialising call (`ToListAsync`, `FirstAsync`, `CountAsync`, `AnyAsync`) is translated into SQL. Calling `ToList()` (or `AsEnumerable()`) early pulls every row into memory and filters in C#. A method EF Core cannot translate (your own C# helper inside `Where`) throws `InvalidOperationException: The LINQ expression ... could not be translated`, which is better than silently loading the whole table.\n\n## The N+1 problem\n\n```csharp\nvar authors = await db.Authors.ToListAsync();               // 1 query\nforeach (var a in authors)\n    a.PostCount = await db.Posts.CountAsync(p => p.AuthorId == a.Id);  // + N queries\n```\n\nWith 3 authors that is 4 round-trips; with 500 it is 501, and the page gets slower as data grows. Lazy loading makes the same mistake invisible (`a.Posts.Count` inside a loop). Fixes:\n\n- **Include**: `db.Authors.Include(a => a.Posts)` loads related rows in the same query (or with `AsSplitQuery()`, one extra query per collection, not per row).\n- **Projection** (best for APIs): select exactly the shape you need, and EF Core writes one query with a JOIN or a subquery:\n\n```csharp\nvar rows = await db.Authors\n    .Select(a => new AuthorSummary(a.Name, a.Posts.Count))\n    .ToListAsync();   // one query: SELECT ..., (SELECT COUNT(*) FROM Posts ...) ...\n```\n\n- **Batching**: collect the ids first, then load the related rows with one `WHERE Id IN (...)` query and join in memory (the \"data loader\" pattern GraphQL servers use).\n\nWatch the SQL: `LogTo(Console.WriteLine)` or a logging level of Information for `Microsoft.EntityFrameworkCore.Database.Command` shows every round-trip.\n\n## Raw SQL safely\n\n```csharp\ndb.Users.FromSql($\"SELECT * FROM Users WHERE Email = {email}\")       // parameterised: safe\ndb.Users.FromSqlRaw(\"SELECT * FROM Users WHERE Email = '\" + email + \"'\") // injectable: never\n```\n\n`FromSql` and `ExecuteSql` turn interpolation holes into SQL **parameters**. String concatenation into `FromSqlRaw` is a SQL injection hole.\n\n## Transactions\n\nOne `SaveChanges` is already atomic (topic 19). When a business operation needs several saves (or raw SQL plus a save) to succeed or fail together:\n\n```csharp\nawait using var tx = await db.Database.BeginTransactionAsync();\n// ... SaveChangesAsync, ExecuteSqlAsync ...\nawait tx.CommitAsync();   // disposing without commit rolls back\n```\n\n## Optimistic concurrency\n\nTwo users edit the same order; the second save would silently overwrite the first. Mark a property as a **concurrency token** (`[ConcurrencyCheck]`, or a `rowversion` column with `[Timestamp]` on SQL Server). EF Core then adds the original value to the UPDATE's WHERE clause; if no row matches, `SaveChanges` throws `DbUpdateConcurrencyException`, which an API maps to **409 Conflict** (\"reload and try again\").\n\n## Bulk operations\n\n`ExecuteUpdateAsync` / `ExecuteDeleteAsync` run set-based UPDATE and DELETE statements without loading entities: `db.Sessions.Where(s => s.ExpiresAt < now).ExecuteDeleteAsync()`.\n",
+   "quiz": [
+    {
+     "key": "fund:csharp/20-ef-core-queries-n-plus-1-and-transactions/q01",
+     "prompt": "Listing 500 authors and then counting each author's posts with a separate query in a loop causes how many queries?",
+     "choices": [
+      "1",
+      "501",
+      "2",
+      "500"
+     ],
+     "answer": 1,
+     "explanation": "One query for the authors plus one per author: the N+1 problem."
+    },
+    {
+     "key": "fund:csharp/20-ef-core-queries-n-plus-1-and-transactions/q02",
+     "prompt": "Which query computes each author's post count in ONE round-trip?",
+     "choices": [
+      "A loop with CountAsync per author",
+      "db.Authors.ToList() then a.Posts.Count",
+      "Lazy loading",
+      "db.Authors.Select(a => new { a.Name, Count = a.Posts.Count }).ToListAsync()"
+     ],
+     "answer": 3,
+     "explanation": "A projection is translated into a single SQL statement with a subquery or join."
+    },
+    {
+     "key": "fund:csharp/20-ef-core-queries-n-plus-1-and-transactions/q03",
+     "prompt": "What happens to `db.Authors.ToList().Where(a => a.Name.StartsWith(\"a\"))`?",
+     "choices": [
+      "Every author row is loaded, then filtered in memory",
+      "The filter becomes a SQL WHERE",
+      "It throws",
+      "It is cached"
+     ],
+     "answer": 0,
+     "explanation": "ToList materialises; anything after it is LINQ to Objects."
+    },
+    {
+     "key": "fund:csharp/20-ef-core-queries-n-plus-1-and-transactions/q04",
+     "prompt": "A Where clause calls your own C# helper method that EF Core cannot translate. What happens?",
+     "choices": [
+      "EF Core runs it in SQL anyway",
+      "It silently loads the whole table",
+      "It throws InvalidOperationException: the expression could not be translated",
+      "It returns no rows"
+     ],
+     "answer": 2,
+     "explanation": "EF Core refuses client evaluation in the final filter rather than quietly loading everything."
+    },
+    {
+     "key": "fund:csharp/20-ef-core-queries-n-plus-1-and-transactions/q05",
+     "prompt": "Is `db.Users.FromSql($\"... WHERE Email = {email}\")` safe against SQL injection?",
+     "choices": [
+      "No, never",
+      "Yes: the interpolation holes become SQL parameters",
+      "Only for numbers",
+      "Only with AsNoTracking"
+     ],
+     "answer": 1,
+     "explanation": "FromSql and ExecuteSql parameterise interpolated values. Concatenating into FromSqlRaw is the unsafe pattern."
+    },
+    {
+     "key": "fund:csharp/20-ef-core-queries-n-plus-1-and-transactions/q06",
+     "prompt": "Two users edit order 7; the property is a concurrency token. The second SaveChanges...",
+     "choices": [
+      "throws DbUpdateConcurrencyException",
+      "silently overwrites the first change",
+      "merges both changes",
+      "creates a new row"
+     ],
+     "answer": 0,
+     "explanation": "The original value is part of the WHERE clause; zero affected rows means a conflict."
+    },
+    {
+     "key": "fund:csharp/20-ef-core-queries-n-plus-1-and-transactions/q07",
+     "prompt": "How should an API respond to a DbUpdateConcurrencyException on an update?",
+     "choices": [
+      "500",
+      "404",
+      "200 with the stale data",
+      "409 Conflict, asking the client to reload and retry"
+     ],
+     "answer": 3,
+     "explanation": "It is a conflict with a newer version, not a server failure."
+    },
+    {
+     "key": "fund:csharp/20-ef-core-queries-n-plus-1-and-transactions/q08",
+     "prompt": "When do you need an explicit transaction with BeginTransaction?",
+     "choices": [
+      "For every SaveChanges",
+      "Never",
+      "When several SaveChanges calls (or SQL commands) must succeed or fail together",
+      "Only for reads"
+     ],
+     "answer": 2,
+     "explanation": "A single SaveChanges is already atomic."
+    },
+    {
+     "key": "fund:csharp/20-ef-core-queries-n-plus-1-and-transactions/q09",
+     "prompt": "What does `Include(a => a.Posts)` do?",
+     "choices": [
+      "Loads the related posts as part of the query instead of one query per author",
+      "Enables lazy loading",
+      "Filters authors with posts",
+      "Counts posts"
+     ],
+     "answer": 0,
+     "explanation": "Include eager-loads navigations in the same query (or a few split queries)."
+    },
+    {
+     "key": "fund:csharp/20-ef-core-queries-n-plus-1-and-transactions/q10",
+     "prompt": "How do you delete all expired sessions without loading them?",
+     "choices": [
+      "Load them and call RemoveRange",
+      "db.Sessions.Where(s => s.ExpiresAt < now).ExecuteDeleteAsync()",
+      "Delete them one by one",
+      "Truncate the table"
+     ],
+     "answer": 1,
+     "explanation": "ExecuteDelete and ExecuteUpdate run set-based statements directly."
+    }
+   ],
+   "flashcards": [
+    {
+     "key": "fund:csharp/20-ef-core-queries-n-plus-1-and-transactions/c01",
+     "front": "What is the N+1 query problem?",
+     "back": "One query for a list, then one more query per item for related data, so round-trips grow with the size of the list."
+    },
+    {
+     "key": "fund:csharp/20-ef-core-queries-n-plus-1-and-transactions/c02",
+     "front": "Three fixes for N+1",
+     "back": "Include to eager-load, a projection that selects the needed shape in one query, or batching related ids into one IN query."
+    },
+    {
+     "key": "fund:csharp/20-ef-core-queries-n-plus-1-and-transactions/c03",
+     "front": "Why keep a query as IQueryable until the end?",
+     "back": "Everything before materialising is translated into SQL; calling ToList early drags every row into memory."
+    },
+    {
+     "key": "fund:csharp/20-ef-core-queries-n-plus-1-and-transactions/c04",
+     "front": "What does EF Core do with an untranslatable expression in Where?",
+     "back": "It throws an InvalidOperationException saying the expression could not be translated."
+    },
+    {
+     "key": "fund:csharp/20-ef-core-queries-n-plus-1-and-transactions/c05",
+     "front": "Safe versus unsafe raw SQL in EF Core",
+     "back": "FromSql and ExecuteSql parameterise interpolated values; string-concatenating into FromSqlRaw allows SQL injection."
+    },
+    {
+     "key": "fund:csharp/20-ef-core-queries-n-plus-1-and-transactions/c06",
+     "front": "How does optimistic concurrency work in EF Core?",
+     "back": "A concurrency token's original value goes into the UPDATE's WHERE clause; if no row matches, SaveChanges throws."
+    },
+    {
+     "key": "fund:csharp/20-ef-core-queries-n-plus-1-and-transactions/c07",
+     "front": "When is an explicit transaction needed?",
+     "back": "When several SaveChanges calls or SQL commands must be atomic together; one SaveChanges already is."
+    },
+    {
+     "key": "fund:csharp/20-ef-core-queries-n-plus-1-and-transactions/c08",
+     "front": "What do ExecuteUpdate and ExecuteDelete do?",
+     "back": "Run a set-based UPDATE or DELETE directly in the database without loading or tracking entities."
+    }
+   ],
+   "drillKeys": [
+    "fund-csharp/20-ef-core-queries-n-plus-1-and-transactions/01-batch-load-customers"
+   ]
   }
  ]
 }

@@ -1,0 +1,79 @@
+{
+ "format": "bootquest-pack@1",
+ "source": "fund-csharp",
+ "course": {
+  "id": "12-async-await-and-tasks",
+  "order": 12,
+  "title": "async/await & Task",
+  "description": "What await really does, sequential versus concurrent awaits with Task.WhenAll, async void, blocking with .Result, CancellationToken flow, exceptions from WhenAll, and async all the way down.",
+  "prerequisites": []
+ },
+ "modules": [
+  {
+   "id": "12-async-await-and-tasks",
+   "title": "async/await & Task",
+   "lessons": [
+    {
+     "id": "drills",
+     "title": "async/await & Task",
+     "explanation": "What await really does, sequential versus concurrent awaits with Task.WhenAll, async void, blocking with .Result, CancellationToken flow, exceptions from WhenAll, and async all the way down."
+    }
+   ]
+  }
+ ],
+ "units": [
+  {
+   "unit": {
+    "key": "fund-csharp/12-async-await-and-tasks/01-concurrent-quotes",
+    "track": "csharp",
+    "kind": "drill",
+    "title": "Fetch quotes concurrently, in order, cancellably",
+    "phase": "12-async-await-and-tasks",
+    "difficulty": 3,
+    "competencies": [
+     "language-fluency"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-cs",
+       "shape": "console-check",
+       "files": {
+        "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"quotes come back in input order\", async () =>\n{\n    async Task<decimal> Fetch(string s, CancellationToken ct) { await Task.Delay(s == \"AAA\" ? 60 : 10, ct); return s.Length * 10m; }\n    var quotes = await GetQuotesAsync(new[] { \"AAA\", \"B\", \"CC\" }, Fetch, CancellationToken.None);\n    Eq(quotes.Select(q => q.Symbol).ToList(), new[] { \"AAA\", \"B\", \"CC\" });\n    Eq(quotes.Select(q => q.Price).ToList(), new[] { 30m, 10m, 20m });\n});\n\nTest(\"the fetches run concurrently\", async () =>\n{\n    var active = 0;\n    var peak = 0;\n    async Task<decimal> Fetch(string s, CancellationToken ct)\n    {\n        var now = Interlocked.Increment(ref active);\n        lock (typeof(Quote)) peak = Math.Max(peak, now);\n        await Task.Delay(50, ct);\n        Interlocked.Decrement(ref active);\n        return 1m;\n    }\n    await GetQuotesAsync(new[] { \"A\", \"B\", \"C\", \"D\" }, Fetch, CancellationToken.None);\n    Eq(peak, 4);\n});\n\nTest(\"the token reaches every fetch\", async () =>\n{\n    using var cts = new CancellationTokenSource();\n    var seen = new List<CancellationToken>();\n    Task<decimal> Fetch(string s, CancellationToken ct) { lock (seen) seen.Add(ct); return Task.FromResult(1m); }\n    await GetQuotesAsync(new[] { \"A\", \"B\" }, Fetch, cts.Token);\n    Ok(seen.Count == 2 && seen.All(t => t == cts.Token), \"every fetch must receive the caller's token\");\n});\n\nTest(\"cancellation ends the call with OperationCanceledException\", async () =>\n{\n    using var cts = new CancellationTokenSource(30);\n    async Task<decimal> Slow(string s, CancellationToken ct) { await Task.Delay(5000, ct); return 1m; }\n    await ThrowsAsync<OperationCanceledException>(() => GetQuotesAsync(new[] { \"A\", \"B\" }, Slow, cts.Token));\n});\n\nTest(\"no symbols, no calls (boundary)\", async () =>\n{\n    var calls = 0;\n    Task<decimal> Fetch(string s, CancellationToken ct) { calls++; return Task.FromResult(1m); }\n    var quotes = await GetQuotesAsync(Array.Empty<string>(), Fetch, CancellationToken.None);\n    Eq(quotes.Count, 0);\n    Eq(calls, 0);\n});\n\n",
+        "tail": "// ──────────────────────────── types ──────────────────────────────────────\n\nrecord Quote(string Symbol, decimal Price);\n",
+        "frozen": []
+       },
+       "harness": "jstrain",
+       "timeoutMs": 20000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "12-async-await-and-tasks/01-concurrent-quotes",
+    "type": "code",
+    "module": "12-async-await-and-tasks",
+    "lesson": "drills",
+    "position": 0,
+    "skills": [
+     "Task.WhenAll",
+     "CancellationToken"
+    ]
+   }
+  }
+ ],
+ "content": {
+  "fund-csharp/12-async-await-and-tasks/01-concurrent-quotes": {
+   "instructions": "**Skills:** Task.WhenAll · CancellationToken  \n**Level:** ★★★\n\n**Interview prompt.** \"The portfolio page awaits one stock quote after another; with 20 symbols it takes 4 seconds. Make it concurrent without losing the order, and stop when the user leaves.\"\n\n**Why it matters.** Starting all tasks first and awaiting `Task.WhenAll` turns N sequential latencies into one. The results must still line up with the input, and the cancellation token must reach every call.\n\n**Your task.** Implement the stubbed local function\n`async Task<IReadOnlyList<Quote>> GetQuotesAsync(IReadOnlyList<string> symbols, Func<string, CancellationToken, Task<decimal>> fetch, CancellationToken ct)`:\n- calls `fetch(symbol, ct)` for every symbol, all started before any is awaited\n- returns one `Quote(Symbol, Price)` per symbol, in the INPUT order\n- passes `ct` to every fetch; if it is cancelled, the returned task ends with an `OperationCanceledException`\n- an empty symbol list returns an empty list without calling `fetch`\n\n**Worked example.** With three fetches of 100 ms each, the whole call takes about 100 ms, not 300 ms.\n",
+   "starter": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · concurrent quotes★★★ core\n//  concepts: Task.WhenAll · ordering · CancellationToken\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Start everything, then await once; the token goes to every call.\n\nusing static Bootcamp.Check;\n\nasync Task<IReadOnlyList<Quote>> GetQuotesAsync(IReadOnlyList<string> symbols, Func<string, CancellationToken, Task<decimal>> fetch, CancellationToken ct)\n{\n    // TODO: start every fetch, await them together, keep the input order\n    await Task.CompletedTask;\n    throw new NotImplementedException();\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"quotes come back in input order\", async () =>\n{\n    async Task<decimal> Fetch(string s, CancellationToken ct) { await Task.Delay(s == \"AAA\" ? 60 : 10, ct); return s.Length * 10m; }\n    var quotes = await GetQuotesAsync(new[] { \"AAA\", \"B\", \"CC\" }, Fetch, CancellationToken.None);\n    Eq(quotes.Select(q => q.Symbol).ToList(), new[] { \"AAA\", \"B\", \"CC\" });\n    Eq(quotes.Select(q => q.Price).ToList(), new[] { 30m, 10m, 20m });\n});\n\nTest(\"the fetches run concurrently\", async () =>\n{\n    var active = 0;\n    var peak = 0;\n    async Task<decimal> Fetch(string s, CancellationToken ct)\n    {\n        var now = Interlocked.Increment(ref active);\n        lock (typeof(Quote)) peak = Math.Max(peak, now);\n        await Task.Delay(50, ct);\n        Interlocked.Decrement(ref active);\n        return 1m;\n    }\n    await GetQuotesAsync(new[] { \"A\", \"B\", \"C\", \"D\" }, Fetch, CancellationToken.None);\n    Eq(peak, 4);\n});\n\nTest(\"the token reaches every fetch\", async () =>\n{\n    using var cts = new CancellationTokenSource();\n    var seen = new List<CancellationToken>();\n    Task<decimal> Fetch(string s, CancellationToken ct) { lock (seen) seen.Add(ct); return Task.FromResult(1m); }\n    await GetQuotesAsync(new[] { \"A\", \"B\" }, Fetch, cts.Token);\n    Ok(seen.Count == 2 && seen.All(t => t == cts.Token), \"every fetch must receive the caller's token\");\n});\n\nTest(\"cancellation ends the call with OperationCanceledException\", async () =>\n{\n    using var cts = new CancellationTokenSource(30);\n    async Task<decimal> Slow(string s, CancellationToken ct) { await Task.Delay(5000, ct); return 1m; }\n    await ThrowsAsync<OperationCanceledException>(() => GetQuotesAsync(new[] { \"A\", \"B\" }, Slow, cts.Token));\n});\n\nTest(\"no symbols, no calls (boundary)\", async () =>\n{\n    var calls = 0;\n    Task<decimal> Fetch(string s, CancellationToken ct) { calls++; return Task.FromResult(1m); }\n    var quotes = await GetQuotesAsync(Array.Empty<string>(), Fetch, CancellationToken.None);\n    Eq(quotes.Count, 0);\n    Eq(calls, 0);\n});\n\n// ──────────────────────────── types ──────────────────────────────────────\n\nrecord Quote(string Symbol, decimal Price);\n",
+   "solution": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · concurrent quotes★★★ core\n//  concepts: Task.WhenAll · ordering · CancellationToken\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Start everything, then await once; the token goes to every call.\n\nusing static Bootcamp.Check;\n\nasync Task<IReadOnlyList<Quote>> GetQuotesAsync(IReadOnlyList<string> symbols, Func<string, CancellationToken, Task<decimal>> fetch, CancellationToken ct)\n{\n    var tasks = symbols.Select(s => fetch(s, ct)).ToList();\n    var prices = await Task.WhenAll(tasks);\n    return symbols.Select((s, i) => new Quote(s, prices[i])).ToList();\n}\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"quotes come back in input order\", async () =>\n{\n    async Task<decimal> Fetch(string s, CancellationToken ct) { await Task.Delay(s == \"AAA\" ? 60 : 10, ct); return s.Length * 10m; }\n    var quotes = await GetQuotesAsync(new[] { \"AAA\", \"B\", \"CC\" }, Fetch, CancellationToken.None);\n    Eq(quotes.Select(q => q.Symbol).ToList(), new[] { \"AAA\", \"B\", \"CC\" });\n    Eq(quotes.Select(q => q.Price).ToList(), new[] { 30m, 10m, 20m });\n});\n\nTest(\"the fetches run concurrently\", async () =>\n{\n    var active = 0;\n    var peak = 0;\n    async Task<decimal> Fetch(string s, CancellationToken ct)\n    {\n        var now = Interlocked.Increment(ref active);\n        lock (typeof(Quote)) peak = Math.Max(peak, now);\n        await Task.Delay(50, ct);\n        Interlocked.Decrement(ref active);\n        return 1m;\n    }\n    await GetQuotesAsync(new[] { \"A\", \"B\", \"C\", \"D\" }, Fetch, CancellationToken.None);\n    Eq(peak, 4);\n});\n\nTest(\"the token reaches every fetch\", async () =>\n{\n    using var cts = new CancellationTokenSource();\n    var seen = new List<CancellationToken>();\n    Task<decimal> Fetch(string s, CancellationToken ct) { lock (seen) seen.Add(ct); return Task.FromResult(1m); }\n    await GetQuotesAsync(new[] { \"A\", \"B\" }, Fetch, cts.Token);\n    Ok(seen.Count == 2 && seen.All(t => t == cts.Token), \"every fetch must receive the caller's token\");\n});\n\nTest(\"cancellation ends the call with OperationCanceledException\", async () =>\n{\n    using var cts = new CancellationTokenSource(30);\n    async Task<decimal> Slow(string s, CancellationToken ct) { await Task.Delay(5000, ct); return 1m; }\n    await ThrowsAsync<OperationCanceledException>(() => GetQuotesAsync(new[] { \"A\", \"B\" }, Slow, cts.Token));\n});\n\nTest(\"no symbols, no calls (boundary)\", async () =>\n{\n    var calls = 0;\n    Task<decimal> Fetch(string s, CancellationToken ct) { calls++; return Task.FromResult(1m); }\n    var quotes = await GetQuotesAsync(Array.Empty<string>(), Fetch, CancellationToken.None);\n    Eq(quotes.Count, 0);\n    Eq(calls, 0);\n});\n\n// ──────────────────────────── types ──────────────────────────────────────\n\nrecord Quote(string Symbol, decimal Price);\n",
+   "explanation": "Materialise the tasks with `ToList()` so every fetch starts immediately, then await them together; `Task.WhenAll` returns results in the order of the tasks you passed:\n\n```csharp\nvar tasks = symbols.Select(s => fetch(s, ct)).ToList();\nvar prices = await Task.WhenAll(tasks);\nreturn symbols.Select((s, i) => new Quote(s, prices[i])).ToList();\n```\n\nA `foreach` with `await fetch(...)` inside passes the order and token tests but fails the concurrency test (peak 1). Forgetting `ToList()` and enumerating the deferred `Select` twice would start every fetch twice.",
+   "hints": [
+    "Concurrency comes from starting every task before awaiting any of them.",
+    "Build the list of tasks with Select and ToList, passing ct to each fetch, await Task.WhenAll, then zip the prices back with the symbols by index.",
+    "Kick off one lookup per symbol straight away, wait for all of them together, and pair each result with its symbol by position, handing the caller's token to every lookup."
+   ]
+  }
+ }
+}

@@ -1,0 +1,77 @@
+{
+ "format": "bootquest-pack@1",
+ "source": "fund-java",
+ "course": {
+  "id": "15-completablefuture",
+  "order": 15,
+  "title": "CompletableFuture",
+  "description": "supplyAsync and the common pool, thenApply versus thenCompose versus thenCombine, allOf for fan-out, exceptionally and handle for errors, join versus get, and timeouts with orTimeout and completeOnTimeout.",
+  "prerequisites": []
+ },
+ "modules": [
+  {
+   "id": "15-completablefuture",
+   "title": "CompletableFuture",
+   "lessons": [
+    {
+     "id": "drills",
+     "title": "CompletableFuture",
+     "explanation": "supplyAsync and the common pool, thenApply versus thenCompose versus thenCombine, allOf for fan-out, exceptionally and handle for errors, join versus get, and timeouts with orTimeout and completeOnTimeout."
+    }
+   ]
+  }
+ ],
+ "units": [
+  {
+   "unit": {
+    "key": "fund-java/15-completablefuture/01-fan-out-with-fallbacks",
+    "track": "java",
+    "kind": "drill",
+    "title": "Fan out calls with per-item fallbacks",
+    "phase": "15-completablefuture",
+    "difficulty": 3,
+    "competencies": [
+     "language-fluency"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-java",
+       "files": {
+        "tests": "    // ─── tests ───────────────────────────────────────────────────────────\n    public static void main(String[] args) {\n        test(\"results keep input order\", () -> eq(fetchAll(List.of(\"a\", \"b\", \"c\"), id -> delayed(id.toUpperCase(), id.equals(\"a\") ? 80 : 10), \"?\").join(), List.of(\"A\", \"B\", \"C\")));\n        test(\"a failing fetch becomes the fallback\", () -> eq(fetchAll(List.of(\"ok\", \"bad\"), id -> id.equals(\"bad\") ? CompletableFuture.failedFuture(new IllegalStateException(\"down\")) : delayed(id, 5), \"n/a\").join(), List.of(\"ok\", \"n/a\")));\n        test(\"the fetches run concurrently\", () -> {\n            long t0 = System.nanoTime();\n            fetchAll(List.of(\"1\", \"2\", \"3\", \"4\"), id -> delayed(id, 150), \"?\").join();\n            long ms = (System.nanoTime() - t0) / 1_000_000;\n            ok(ms < 450, \"took \" + ms + \" ms; expected well under 600\");\n        });\n        test(\"no ids completes with an empty list (boundary)\", () -> eq(fetchAll(List.of(), id -> delayed(id, 1), \"?\").join(), List.of()));\n        test(\"a fetch that throws synchronously is not recovered\", () -> raises(IllegalArgumentException.class, () -> fetchAll(List.of(\"x\"), id -> { throw new IllegalArgumentException(\"bad id\"); }, \"?\")));\n        System.exit(report());\n    }\n    // ─── end tests ───────────────────────────────────────────────────────\n",
+        "tail": "}\n"
+       },
+       "className": "Exercise",
+       "timeoutMs": 10000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "15-completablefuture/01-fan-out-with-fallbacks",
+    "type": "code",
+    "module": "15-completablefuture",
+    "lesson": "drills",
+    "position": 0,
+    "skills": [
+     "allOf",
+     "exceptionally"
+    ]
+   }
+  }
+ ],
+ "content": {
+  "fund-java/15-completablefuture/01-fan-out-with-fallbacks": {
+   "instructions": "**Skills:** allOf · exceptionally  \n**Level:** ★★★\n\n**Interview prompt.** \"The product page calls the reviews service once per product, one after another, and a single failing product breaks the whole page. Call them concurrently and show a placeholder for the ones that fail.\"\n\n**Why it matters.** Starting every future before waiting gives one round of latency instead of N; recovering each future individually with `exceptionally` keeps one failure from failing the rest.\n\n**Your task.** Implement `static CompletableFuture<List<String>> fetchAll(List<String> ids, Function<String, CompletableFuture<String>> fetch, String fallback)`:\n- call `fetch` for every id, all started before any result is awaited\n- each failed fetch contributes `fallback` instead of failing the whole result\n- the returned future completes with one value per id, in the INPUT order\n- an empty id list completes immediately with an empty list\n\n**Worked example.** With fetches of 100 ms each for 4 ids, the whole call completes in about 100 ms, and an id whose fetch throws shows the fallback.\n",
+   "starter": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · fan-out with fallbacks★★★\n//  concepts: CompletableFuture.allOf · exceptionally · ordering\n// ─────────────────────────────────────────────────────────────────────────\n\nimport static bootcamp.Check.*;\n\nimport java.util.*;\nimport java.util.concurrent.*;\nimport java.util.function.*;\n\nclass Exercise {\n\n    /** One value per id in input order; failed fetches become the fallback; all started at once. */\n    static CompletableFuture<List<String>> fetchAll(List<String> ids, Function<String, CompletableFuture<String>> fetch, String fallback) {\n        throw new UnsupportedOperationException(\"TODO: recover each future, then allOf + join in order\");\n    }\n\n    static CompletableFuture<String> delayed(String value, long ms) {\n        return CompletableFuture.supplyAsync(() -> {\n            try { Thread.sleep(ms); } catch (InterruptedException e) { throw new IllegalStateException(e); }\n            return value;\n        }, POOL);\n    }\n\n    static final ExecutorService POOL = Executors.newFixedThreadPool(8, r -> { var t = new Thread(r); t.setDaemon(true); return t; });\n\n    // ─── tests ───────────────────────────────────────────────────────────\n    public static void main(String[] args) {\n        test(\"results keep input order\", () -> eq(fetchAll(List.of(\"a\", \"b\", \"c\"), id -> delayed(id.toUpperCase(), id.equals(\"a\") ? 80 : 10), \"?\").join(), List.of(\"A\", \"B\", \"C\")));\n        test(\"a failing fetch becomes the fallback\", () -> eq(fetchAll(List.of(\"ok\", \"bad\"), id -> id.equals(\"bad\") ? CompletableFuture.failedFuture(new IllegalStateException(\"down\")) : delayed(id, 5), \"n/a\").join(), List.of(\"ok\", \"n/a\")));\n        test(\"the fetches run concurrently\", () -> {\n            long t0 = System.nanoTime();\n            fetchAll(List.of(\"1\", \"2\", \"3\", \"4\"), id -> delayed(id, 150), \"?\").join();\n            long ms = (System.nanoTime() - t0) / 1_000_000;\n            ok(ms < 450, \"took \" + ms + \" ms; expected well under 600\");\n        });\n        test(\"no ids completes with an empty list (boundary)\", () -> eq(fetchAll(List.of(), id -> delayed(id, 1), \"?\").join(), List.of()));\n        test(\"a fetch that throws synchronously is not recovered\", () -> raises(IllegalArgumentException.class, () -> fetchAll(List.of(\"x\"), id -> { throw new IllegalArgumentException(\"bad id\"); }, \"?\")));\n        System.exit(report());\n    }\n    // ─── end tests ───────────────────────────────────────────────────────\n}\n",
+   "solution": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · fan-out with fallbacks★★★\n//  concepts: CompletableFuture.allOf · exceptionally · ordering\n// ─────────────────────────────────────────────────────────────────────────\n\nimport static bootcamp.Check.*;\n\nimport java.util.*;\nimport java.util.concurrent.*;\nimport java.util.function.*;\n\nclass Exercise {\n\n    /** One value per id in input order; failed fetches become the fallback; all started at once. */\n    static CompletableFuture<List<String>> fetchAll(List<String> ids, Function<String, CompletableFuture<String>> fetch, String fallback) {\n        List<CompletableFuture<String>> futures = ids.stream()\n            .map(id -> fetch.apply(id).exceptionally(e -> fallback))\n            .toList();\n        return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))\n            .thenApply(v -> futures.stream().map(CompletableFuture::join).toList());\n    }\n\n    static CompletableFuture<String> delayed(String value, long ms) {\n        return CompletableFuture.supplyAsync(() -> {\n            try { Thread.sleep(ms); } catch (InterruptedException e) { throw new IllegalStateException(e); }\n            return value;\n        }, POOL);\n    }\n\n    static final ExecutorService POOL = Executors.newFixedThreadPool(8, r -> { var t = new Thread(r); t.setDaemon(true); return t; });\n\n    // ─── tests ───────────────────────────────────────────────────────────\n    public static void main(String[] args) {\n        test(\"results keep input order\", () -> eq(fetchAll(List.of(\"a\", \"b\", \"c\"), id -> delayed(id.toUpperCase(), id.equals(\"a\") ? 80 : 10), \"?\").join(), List.of(\"A\", \"B\", \"C\")));\n        test(\"a failing fetch becomes the fallback\", () -> eq(fetchAll(List.of(\"ok\", \"bad\"), id -> id.equals(\"bad\") ? CompletableFuture.failedFuture(new IllegalStateException(\"down\")) : delayed(id, 5), \"n/a\").join(), List.of(\"ok\", \"n/a\")));\n        test(\"the fetches run concurrently\", () -> {\n            long t0 = System.nanoTime();\n            fetchAll(List.of(\"1\", \"2\", \"3\", \"4\"), id -> delayed(id, 150), \"?\").join();\n            long ms = (System.nanoTime() - t0) / 1_000_000;\n            ok(ms < 450, \"took \" + ms + \" ms; expected well under 600\");\n        });\n        test(\"no ids completes with an empty list (boundary)\", () -> eq(fetchAll(List.of(), id -> delayed(id, 1), \"?\").join(), List.of()));\n        test(\"a fetch that throws synchronously is not recovered\", () -> raises(IllegalArgumentException.class, () -> fetchAll(List.of(\"x\"), id -> { throw new IllegalArgumentException(\"bad id\"); }, \"?\")));\n        System.exit(report());\n    }\n    // ─── end tests ───────────────────────────────────────────────────────\n}\n",
+   "explanation": "Recover each future on its own, then wait for all of them and join in order:\n\n```java\nList<CompletableFuture<String>> futures = ids.stream()\n    .map(id -> fetch.apply(id).exceptionally(e -> fallback))\n    .toList();\nreturn CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))\n    .thenApply(v -> futures.stream().map(CompletableFuture::join).toList());\n```\n\n`toList()` materialises the stream, so every fetch starts before `allOf` is built. Putting `exceptionally` on each future (not on the `allOf` result) is what turns one failure into one fallback instead of a failed page.",
+   "hints": [
+    "Recover from failures per item, before combining, so one failure cannot fail the whole result.",
+    "Map each id to fetch.apply(id).exceptionally(e -> fallback) and collect to a list, then allOf of those futures followed by thenApply that joins each one in order.",
+    "Start a recovered lookup for every id right away, wait for the whole group to finish, and then read each lookup's value in the original order."
+   ]
+  }
+ }
+}
