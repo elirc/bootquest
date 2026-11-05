@@ -1,0 +1,197 @@
+{
+  "format": "fundamentals-authoring@1",
+  "track": "js",
+  "topic": "17-node-core",
+  "title": "Node core: fs, path, process, events & streams",
+  "level": "advanced",
+  "summary": "The Node building blocks behind every backend: promise-based fs, path.join versus resolve, process.env strings, synchronous EventEmitter events and the error event, Buffers and bytes, and streams with backpressure.",
+  "lesson": "## fs: use the promise API\n\n```js\nimport { readFile, writeFile } from 'node:fs/promises';\nconst text = await readFile(new URL('./config.json', import.meta.url), 'utf8');\n```\n\nThe `*Sync` functions block the whole process (topic 12): fine in a CLI or at startup, wrong inside a request handler. Relative paths in fs calls resolve against `process.cwd()` (where the process was started), NOT the file's folder; build paths from `import.meta.dirname` (or `__dirname` in CommonJS).\n\n## path\n\n```js\npath.join('a', '../b')        // 'b'         joins and normalises\npath.join('/a/', '/b')        // '/a/b'\npath.resolve('/x', 'y', '../z') // '/x/z'    builds an ABSOLUTE path, right to left\npath.resolve('/x', '/y')      // '/y'        a later absolute segment restarts\npath.extname('a.tar.gz')      // '.gz'\n```\n\nNever concatenate paths with `+ '/'`; and never join untrusted input into a path without checking the result stays inside your base folder (path traversal: `../../etc/passwd`).\n\n## process\n\n- `process.env` values are **always strings** (or undefined). `process.env.PORT = 3000` stores `'3000'`, and `'false'` is truthy. Parse and validate configuration once at startup.\n- `process.argv`: `[nodePath, scriptPath, ...args]`.\n- `process.exitCode = 1` lets the process finish its work and exit non-zero; `process.exit()` kills it immediately, possibly losing buffered output.\n- Signals: listen for `SIGTERM` to shut down gracefully (stop accepting, finish in-flight requests, close the DB pool).\n\n## EventEmitter\n\n```js\nconst e = new EventEmitter();\ne.on('saved', (doc) => log(doc.id));\ne.emit('saved', doc);   // listeners run SYNCHRONOUSLY, in registration order, before emit returns\n```\n\n- `emit` returns `true` if there were listeners.\n- `once` removes the listener after its first call.\n- Emitting `'error'` with **no** `'error'` listener throws the error, which usually crashes the process. Always attach error listeners to streams, sockets and emitters you create.\n- Forgetting to remove listeners in long-lived objects leaks memory (Node warns after 10 listeners for one event).\n\n## Buffer: bytes, not characters\n\n`Buffer.byteLength('é')` is 2 while `'é'.length` is 1. HTTP `Content-Length`, file sizes and database column limits count **bytes** in UTF-8. Splitting a Buffer at an arbitrary byte can cut a multi-byte character in half; decode text with a streaming decoder or by lines.\n\n## Streams and backpressure\n\nStreams process data piece by piece: read a 5 GB file with constant memory. Readable streams are async iterables:\n\n```js\nimport { pipeline } from 'node:stream/promises';\nawait pipeline(createReadStream('in.csv'), transformRows, createWriteStream('out.csv'));\n```\n\n`pipeline` connects streams, forwards errors from any stage and destroys every stream on failure. **Backpressure**: when a writable stream's buffer is full, `write()` returns false and the producer should wait for `'drain'`; `pipeline` and `for await` handle this for you, a manual `on('data')` loop does not. Chunks are arbitrary slices: a line or a JSON record can span two chunks, so keep the incomplete tail between chunks.",
+  "quiz": [
+    {
+      "prompt": "What is `path.join(\"a\", \"../b\")`?",
+      "choices": [
+        "'a/../b'",
+        "'b'",
+        "'/b'",
+        "'a/b'"
+      ],
+      "answer": 1,
+      "explanation": "join concatenates and normalises, resolving the .. segment."
+    },
+    {
+      "prompt": "What does `path.resolve(\"/x\", \"/y\")` return?",
+      "choices": [
+        "'/y'",
+        "'/x/y'",
+        "'/x//y'",
+        "'y'"
+      ],
+      "answer": 0,
+      "explanation": "resolve works right to left and stops at the first absolute segment it meets."
+    },
+    {
+      "prompt": "After `process.env.FEATURE = false`, what is `typeof process.env.FEATURE` and is it truthy?",
+      "choices": [
+        "'boolean', falsy",
+        "'string' ('false'), truthy",
+        "'undefined', falsy",
+        "'boolean', truthy"
+      ],
+      "answer": 1,
+      "explanation": "Environment variables are always strings, and the non-empty string \"false\" is truthy. Parse config explicitly."
+    },
+    {
+      "prompt": "When do EventEmitter listeners run?",
+      "choices": [
+        "In the next microtask",
+        "On the next tick",
+        "After the current task",
+        "Synchronously, inside emit(), in registration order"
+      ],
+      "answer": 3,
+      "explanation": "emit calls each listener directly before returning; use setImmediate inside a listener if work must be deferred."
+    },
+    {
+      "prompt": "What happens on `emitter.emit(\"error\", err)` when no \"error\" listener is registered?",
+      "choices": [
+        "Nothing",
+        "It returns false",
+        "The error is thrown, typically crashing the process",
+        "It is logged as a warning"
+      ],
+      "answer": 2,
+      "explanation": "The error event is special: unhandled, it throws. Attach error listeners to every emitter and stream."
+    },
+    {
+      "prompt": "What are `Buffer.byteLength('é')` and `'é'.length`?",
+      "choices": [
+        "1 and 1",
+        "2 and 2",
+        "1 and 2",
+        "2 and 1"
+      ],
+      "answer": 3,
+      "explanation": "UTF-8 encodes é in two bytes, while length counts UTF-16 code units."
+    },
+    {
+      "prompt": "A relative path in `readFile(\"./data.json\")` is resolved against...",
+      "choices": [
+        "The current working directory of the process",
+        "The file's own folder",
+        "The project root",
+        "The home directory"
+      ],
+      "answer": 0,
+      "explanation": "Use import.meta.dirname (or __dirname) to build paths relative to the source file."
+    },
+    {
+      "prompt": "Why use `pipeline()` instead of chaining `.pipe()` calls?",
+      "choices": [
+        "It is faster",
+        "It forwards errors from every stage and destroys all the streams on failure",
+        "pipe() is removed",
+        "It compresses data"
+      ],
+      "answer": 1,
+      "explanation": "With .pipe() an error in the middle leaves other streams open and unhandled."
+    },
+    {
+      "prompt": "What is backpressure?",
+      "choices": [
+        "Compressing data in a stream",
+        "Retrying failed writes",
+        "The consumer signalling the producer to pause because its buffer is full",
+        "Reading a file backwards"
+      ],
+      "answer": 2,
+      "explanation": "write() returns false when the buffer is full; producers should wait for drain. pipeline and for await handle it."
+    },
+    {
+      "prompt": "Why can a readable stream of text split a line in two?",
+      "choices": [
+        "Chunks are arbitrary slices of the data, not aligned to lines or records",
+        "Only on Windows",
+        "Because of backpressure",
+        "It cannot"
+      ],
+      "answer": 0,
+      "explanation": "Keep the incomplete tail of each chunk and prepend it to the next one."
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "path.join versus path.resolve",
+      "back": "join glues segments and normalises them; resolve builds an absolute path, starting over at the right-most absolute segment."
+    },
+    {
+      "front": "What type are environment variables?",
+      "back": "Always strings or undefined. Numbers and booleans must be parsed, and the string false is still truthy."
+    },
+    {
+      "front": "process.exit() versus process.exitCode",
+      "back": "exit stops immediately and can drop buffered output; setting exitCode lets pending work finish and then exits with that code."
+    },
+    {
+      "front": "How does EventEmitter deliver events?",
+      "back": "Synchronously during emit, to every listener in the order they were added."
+    },
+    {
+      "front": "Why attach an error listener to every stream and emitter?",
+      "back": "An error event with no listener is thrown, which normally brings down the whole process."
+    },
+    {
+      "front": "Bytes versus characters in Node",
+      "back": "Content-Length, file sizes and many column limits count UTF-8 bytes; JavaScript string length counts UTF-16 code units."
+    },
+    {
+      "front": "What does stream.pipeline give you?",
+      "back": "Streams wired together with backpressure, errors from any stage propagated, and every stream cleaned up on failure."
+    },
+    {
+      "front": "Why avoid the Sync fs functions in request handlers?",
+      "back": "They block the single JavaScript thread, so every other request waits until the file operation finishes."
+    }
+  ],
+  "drills": [
+    {
+      "slug": "01-line-splitter",
+      "title": "Split streamed chunks into lines",
+      "difficulty": 2,
+      "skills": [
+        "streams",
+        "chunk boundaries"
+      ],
+      "instructions": "**Interview prompt.** \"Our log ingester reads a socket in chunks and splits each chunk on newlines. Some log entries arrive cut in half. Fix it.\"\n\n**Why it matters.** Stream chunks are arbitrary slices of the data. A splitter must keep the incomplete tail of each chunk and join it to the next one, and only emit it at the very end.\n\n**Your task.** Export `createLineSplitter()`. It returns an object with:\n- `push(chunk)`: takes a string chunk and returns an array of the COMPLETE lines it finished (possibly empty)\n- `end()`: returns an array with the final unterminated line, or an empty array if nothing is pending\n\nLines end with `\\n`; a `\\r` right before the `\\n` is removed (Windows line endings), even when `\\r` and `\\n` arrive in different chunks. Empty lines between two newlines are real lines and are returned as `''`.\n\n**Worked example.** `push('ab')` gives `[]`, `push('c\\nde')` gives `['abc']`, and `end()` gives `['de']`.",
+      "starter": "export function createLineSplitter() {\n  // TODO: keep the unfinished tail between chunks\n}\n",
+      "solution": "export function createLineSplitter() {\n  let tail = '';\n  const strip = (line) => (line.endsWith('\\r') ? line.slice(0, -1) : line);\n  return {\n    push(chunk) {\n      const parts = (tail + chunk).split('\\n');\n      tail = parts.pop();\n      return parts.map(strip);\n    },\n    end() {\n      const rest = tail;\n      tail = '';\n      return rest === '' ? [] : [strip(rest)];\n    },\n  };\n}\n",
+      "tests": [
+        {
+          "name": "a line split across chunks is joined",
+          "code": "assert.equal(typeof mod.createLineSplitter, 'function', 'export createLineSplitter');\nconst s = mod.createLineSplitter();\nassert.deepEqual(s.push('ab'), []);\nassert.deepEqual(s.push('c\\nde'), ['abc']);\nassert.deepEqual(s.end(), ['de']);"
+        },
+        {
+          "name": "several lines in one chunk, empty lines kept",
+          "code": "const s = mod.createLineSplitter();\nassert.deepEqual(s.push('one\\n\\ntwo\\n'), ['one', '', 'two']);\nassert.deepEqual(s.end(), []);"
+        },
+        {
+          "name": "CRLF is removed, even split between chunks",
+          "code": "const s = mod.createLineSplitter();\nassert.deepEqual(s.push('a\\r\\nb\\r'), ['a']);\nassert.deepEqual(s.push('\\nc'), ['b']);\nassert.deepEqual(s.end(), ['c']);"
+        },
+        {
+          "name": "nothing pushed means nothing at the end (boundary)",
+          "code": "const s = mod.createLineSplitter();\nassert.deepEqual(s.end(), []);"
+        },
+        {
+          "name": "two splitters do not share state",
+          "code": "const a = mod.createLineSplitter();\nconst b = mod.createLineSplitter();\na.push('left');\nassert.deepEqual(b.push('right\\n'), ['right']);\nassert.deepEqual(a.end(), ['left']);"
+        }
+      ],
+      "explanation": "Prepend the stored tail, split, and keep the LAST piece (it has no newline yet) for next time:\n\n```js\npush(chunk) {\n  const parts = (tail + chunk).split('\\n');\n  tail = parts.pop();\n  return parts.map(strip);\n}\n```\n\nStripping `\\r` only when a line is completed is what handles a `\\r` and `\\n` arriving in different chunks: the `\\r` waits in the tail until its `\\n` arrives.",
+      "hints": [
+        "The text after the last newline of a chunk is not a line yet; it has to wait for the next chunk.",
+        "Keep a tail string; on push, split tail plus chunk on newline, pop the last element back into tail, and strip one trailing carriage return from the finished lines.",
+        "Glue any leftover text to the front of each new chunk, hand back every piece that ended in a newline minus any trailing CR character, and remember the unfinished last piece until more text or the end arrives."
+      ]
+    }
+  ]
+}

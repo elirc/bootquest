@@ -1,0 +1,197 @@
+{
+  "format": "fundamentals-authoring@1",
+  "track": "js",
+  "topic": "13-async-await-patterns",
+  "title": "async/await patterns",
+  "level": "advanced",
+  "summary": "Sequential versus parallel awaits, Promise.all, allSettled, race and any, the async forEach trap, bounded concurrency, retries with backoff and cancellation with AbortController.",
+  "lesson": "## Sequential versus parallel\n\n```js\n// sequential: ~200 ms (each await waits for the previous one)\nconst user = await getUser(id);\nconst prefs = await getPrefs(id);\n\n// parallel: ~100 ms (both start before either is awaited)\nconst [user, prefs] = await Promise.all([getUser(id), getPrefs(id)]);\n```\n\nAwait in sequence only when a call needs the previous result. Independent calls should start together.\n\n## The four combinators\n\n- `Promise.all(ps)`: fulfils with an array of values in INPUT order; rejects as soon as ANY rejects (fail-fast; the other operations keep running, their results are ignored).\n- `Promise.allSettled(ps)`: always fulfils, with `{ status: 'fulfilled', value }` / `{ status: 'rejected', reason }` per input. Use it for \"send all notifications, report which failed\".\n- `Promise.race(ps)`: settles like the FIRST promise to settle, fulfilled or rejected (timeouts, topic 12).\n- `Promise.any(ps)`: fulfils with the first FULFILMENT; rejects with an `AggregateError` (with `.errors`) only if all reject. Use it for \"try three mirrors, take the first that works\".\n\n## The async forEach trap\n\n```js\nitems.forEach(async (item) => { await save(item); });\nconsole.log('done');   // runs BEFORE any save finished; errors become unhandled rejections\n```\n\n`forEach` ignores the promises its callback returns. Use `for (const item of items) await save(item)` for sequential work, or `await Promise.all(items.map(save))` for parallel.\n\n## Bounded concurrency\n\n`Promise.all(10000 ids.map(fetch))` opens 10,000 connections at once and gets you rate-limited. Limit how many run at a time: keep N \"workers\" that each pull the next item until the list is empty. Libraries like p-limit do this; it is a common interview exercise.\n\n## Retries with backoff\n\nRetry only **transient** failures (timeouts, 503, connection resets), never validation errors. Wait longer each time (exponential backoff: 100 ms, 200 ms, 400 ms), add random **jitter** so clients do not retry in lockstep, and cap the number of attempts. Retried writes must be **idempotent** (an idempotency key on POST /payments).\n\n## Cancellation with AbortController\n\n```js\nconst ac = new AbortController();\nconst res = await fetch(url, { signal: ac.signal });   // ac.abort() rejects with an AbortError\nawait fetch(url, { signal: AbortSignal.timeout(2000) }); // built-in timeout signal\n```\n\nPass a signal down through your own async functions and check `signal.aborted` (or listen for `'abort'`) so work stops when a client disconnects or a user navigates away.\n\n## Error handling\n\n`try/catch` around `await` catches rejections. With `Promise.all`, one try/catch catches the first failure; use `allSettled` when you need every outcome. Never leave a promise un-awaited unless you attach a `.catch`.",
+  "quiz": [
+    {
+      "prompt": "Two independent 100 ms calls: `const a = await f(); const b = await g();` takes about how long?",
+      "choices": [
+        "100 ms",
+        "200 ms",
+        "50 ms",
+        "0 ms"
+      ],
+      "answer": 1,
+      "explanation": "The second call does not start until the first finished. Start both and await Promise.all to take about 100 ms."
+    },
+    {
+      "prompt": "What does `Promise.all([ok(1), fail(\"boom\"), slowOk(3)])` do?",
+      "choices": [
+        "Rejects with \"boom\" as soon as it rejects",
+        "Waits for all, then rejects",
+        "Fulfils with [1, undefined, 3]",
+        "Fulfils with [1, 3]"
+      ],
+      "answer": 0,
+      "explanation": "Promise.all is fail-fast. The other operations still run; their results are just ignored."
+    },
+    {
+      "prompt": "Which combinator ALWAYS fulfils and reports each outcome?",
+      "choices": [
+        "Promise.all",
+        "Promise.race",
+        "Promise.allSettled",
+        "Promise.any"
+      ],
+      "answer": 2,
+      "explanation": "allSettled gives { status, value } or { status, reason } for every input."
+    },
+    {
+      "prompt": "What does `Promise.any` reject with when every input rejects?",
+      "choices": [
+        "The first error",
+        "The last error",
+        "undefined",
+        "An AggregateError holding all the errors"
+      ],
+      "answer": 3,
+      "explanation": "any only rejects when nothing fulfilled, and then reports every reason in .errors."
+    },
+    {
+      "prompt": "`items.forEach(async (i) => { await save(i); }); console.log(\"done\");` When does \"done\" print?",
+      "choices": [
+        "After every save finished",
+        "Before the saves finish: forEach does not wait for async callbacks",
+        "Never",
+        "After the first save"
+      ],
+      "answer": 1,
+      "explanation": "forEach ignores returned promises. Use for...of with await, or Promise.all over map."
+    },
+    {
+      "prompt": "Which failures should an automatic retry handle?",
+      "choices": [
+        "Transient ones like timeouts, 503s and connection resets",
+        "Every error",
+        "Validation errors (400)",
+        "Authentication failures (401)"
+      ],
+      "answer": 0,
+      "explanation": "Retrying a request that will deterministically fail again only adds load. Retry transient failures, with backoff and a cap."
+    },
+    {
+      "prompt": "Why add random jitter to retry delays?",
+      "choices": [
+        "To make retries faster",
+        "To satisfy HTTP specs",
+        "So many clients that failed together do not all retry at the same instant",
+        "To avoid timeouts"
+      ],
+      "answer": 2,
+      "explanation": "Synchronised retries create thundering herds that knock the recovering service down again."
+    },
+    {
+      "prompt": "What makes a retried POST /payments safe?",
+      "choices": [
+        "A longer timeout",
+        "Using PUT instead",
+        "An idempotency key the server uses to deduplicate the request",
+        "Retrying at most twice"
+      ],
+      "answer": 2,
+      "explanation": "Without idempotency a retry after a lost response can charge the customer twice."
+    },
+    {
+      "prompt": "Which API cancels an in-flight fetch?",
+      "choices": [
+        "clearTimeout",
+        "An AbortController signal passed in the fetch options, then controller.abort()",
+        "Promise.race",
+        "Deleting the promise variable"
+      ],
+      "answer": 1,
+      "explanation": "Promises themselves cannot be cancelled; AbortSignal is the standard cancellation channel."
+    },
+    {
+      "prompt": "Fetching 10,000 URLs with `Promise.all(urls.map(fetch))` is risky because...",
+      "choices": [
+        "Promise.all has a size limit",
+        "Results come back out of order",
+        "It is always slower",
+        "Every request starts at once: you exhaust sockets and hit rate limits"
+      ],
+      "answer": 3,
+      "explanation": "Bound the concurrency: a small pool of workers pulling from the list keeps throughput high without flooding the server."
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "When should awaits run in sequence?",
+      "back": "Only when a call needs the previous call's result. Independent work should start together and be awaited with Promise.all."
+    },
+    {
+      "front": "Promise.all versus Promise.allSettled",
+      "back": "all fails fast on the first rejection and gives values in input order; allSettled waits for everything and reports every fulfilment and rejection."
+    },
+    {
+      "front": "Promise.race versus Promise.any",
+      "back": "race settles like whichever input settles first, even a rejection; any waits for the first fulfilment and only fails if all fail."
+    },
+    {
+      "front": "Why is an async callback in forEach a bug?",
+      "back": "forEach discards the returned promises, so nothing waits for them and their errors go unhandled."
+    },
+    {
+      "front": "How does bounded concurrency work?",
+      "back": "Start a fixed number of workers; each repeatedly takes the next unprocessed item until none remain, writing results back by index."
+    },
+    {
+      "front": "The ingredients of a good retry policy",
+      "back": "Retry only transient failures, wait exponentially longer with jitter, cap the attempts, and make the operation idempotent."
+    },
+    {
+      "front": "How do you cancel async work in JavaScript?",
+      "back": "Pass an AbortSignal down the call chain; abort() rejects signal-aware APIs like fetch, and your code checks signal.aborted."
+    },
+    {
+      "front": "What does AbortSignal.timeout give you?",
+      "back": "A signal that aborts itself after the given milliseconds, a one-line timeout for fetch and other signal-aware APIs."
+    }
+  ],
+  "drills": [
+    {
+      "slug": "01-map-with-concurrency-limit",
+      "title": "mapLimit: async map with bounded concurrency",
+      "difficulty": 3,
+      "skills": [
+        "concurrency",
+        "Promise.all"
+      ],
+      "instructions": "**Interview prompt.** \"We resize 5,000 images with an external API that allows 4 concurrent requests. Write the helper.\"\n\n**Why it matters.** `Promise.all(items.map(fn))` starts everything at once. A small pool of workers that pull the next item when they finish keeps exactly N calls in flight and still returns results in input order.\n\n**Your task.** Export `mapLimit(items, limit, fn)`. It returns a promise of an array where element i is the result of `await fn(items[i], i)`, and:\n- at most `limit` calls of `fn` are in flight at any moment\n- results are in INPUT order, whatever order the calls finish in\n- if any call rejects, the returned promise rejects with that reason (calls already started may finish, but no NEW call starts after the failure)\n- an empty `items` array resolves to `[]`\n\n`limit` is a whole number of 1 or more.\n\n**Worked example.** With items `[30, 10, 20]` (each `fn` waits that many ms and returns it) and limit 2, the result is `[30, 10, 20]`, and never more than 2 calls overlap.",
+      "starter": "export async function mapLimit(items, limit, fn) {\n  // TODO: keep at most `limit` calls in flight; results in input order\n}\n",
+      "solution": "export async function mapLimit(items, limit, fn) {\n  const results = new Array(items.length);\n  let next = 0;\n  let failed = false;\n  const worker = async () => {\n    while (!failed && next < items.length) {\n      const i = next++;\n      try {\n        results[i] = await fn(items[i], i);\n      } catch (err) {\n        failed = true;\n        throw err;\n      }\n    }\n  };\n  const workers = Array.from({ length: Math.min(limit, items.length) }, worker);\n  await Promise.all(workers);\n  return results;\n}\n",
+      "tests": [
+        {
+          "name": "results keep input order",
+          "code": "assert.equal(typeof mod.mapLimit, 'function', 'export mapLimit');\nconst wait = (ms) => new Promise((r) => setTimeout(() => r(ms), ms));\nassert.deepEqual(await mod.mapLimit([30, 10, 20], 2, (ms) => wait(ms)), [30, 10, 20]);"
+        },
+        {
+          "name": "never more than limit calls in flight",
+          "code": "let active = 0;\nlet peak = 0;\nconst fn = async (x) => { active++; peak = Math.max(peak, active); await new Promise((r) => setTimeout(r, 5)); active--; return x * 2; };\nconst out = await mod.mapLimit([1, 2, 3, 4, 5, 6, 7, 8, 9], 3, fn);\nassert.deepEqual(out, [2, 4, 6, 8, 10, 12, 14, 16, 18]);\nassert.equal(peak, 3);"
+        },
+        {
+          "name": "fn receives the item and its index",
+          "code": "assert.deepEqual(await mod.mapLimit(['a', 'b'], 1, async (s, i) => s + i), ['a0', 'b1']);"
+        },
+        {
+          "name": "a failure rejects and starts no new calls",
+          "code": "const started = [];\nconst fn = async (x) => { started.push(x); await new Promise((r) => setTimeout(r, 5)); if (x === 2) throw new Error('bad item 2'); return x; };\nawait assert.rejects(mod.mapLimit([1, 2, 3, 4, 5, 6], 2, fn), /bad item 2/);\nawait new Promise((r) => setTimeout(r, 30));\nassert.ok(!started.includes(6), `started after the failure: ${started}`);"
+        },
+        {
+          "name": "an empty list resolves to [] without calling fn",
+          "code": "let calls = 0;\nassert.deepEqual(await mod.mapLimit([], 4, async () => { calls++; }), []);\nassert.equal(calls, 0);"
+        }
+      ],
+      "explanation": "Start `limit` workers that share one \"next index\" counter; each writes its result back by index:\n\n```js\nconst worker = async () => {\n  while (!failed && next < items.length) {\n    const i = next++;\n    try { results[i] = await fn(items[i], i); }\n    catch (err) { failed = true; throw err; }\n  }\n};\nawait Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));\n```\n\n`next++` is safe without locks: JavaScript runs one job at a time, so no two workers can read the same index. The `failed` flag stops workers from picking up new items once one call failed.",
+      "hints": [
+        "Instead of starting one promise per item, start a few worker loops that each keep taking the next item.",
+        "Share a next-index counter between limit async workers; each loops while items remain, stores results[i], and you await Promise.all of the workers; a shared failed flag stops new work.",
+        "Run a fixed number of loops in parallel that each claim the next unclaimed position, store their result at that position, and stop claiming as soon as any call has failed."
+      ]
+    }
+  ]
+}

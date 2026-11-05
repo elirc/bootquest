@@ -1,0 +1,201 @@
+{
+  "format": "fundamentals-authoring@1",
+  "track": "js",
+  "topic": "20-react-effects-and-rendering",
+  "title": "React: effects, rendering & data fetching",
+  "level": "advanced",
+  "summary": "When effects run, dependency arrays compared with Object.is, cleanup order, StrictMode double runs, stale closures, race conditions in fetch effects, and the effects you should not write at all.",
+  "lesson": "## When effects run\n\n`useEffect(fn, deps)` runs `fn` **after** React has committed the render to the screen, never during rendering. Then:\n\n- no dependency array: after EVERY render\n- `[]`: after the first render only (and its cleanup on unmount)\n- `[a, b]`: after the first render, and after any render where `a` or `b` changed, compared with `Object.is`\n\nIf `fn` returns a function, that is the **cleanup**. React runs the previous cleanup **before** running the effect again, and on unmount. Subscriptions, timers, sockets and fetches all need cleanup.\n\n```jsx\nuseEffect(() => {\n  const id = setInterval(tick, 1000);\n  return () => clearInterval(id);\n}, []);\n```\n\nIn development, **StrictMode** mounts, unmounts and re-mounts every component once, so each effect runs, cleans up, and runs again. An effect that breaks when run twice was already broken (it would leak or double-subscribe on fast navigation).\n\n## Dependencies: Object.is all the way down\n\nObjects, arrays and functions created during render are NEW every render, so an effect depending on them re-runs every time, and an effect that sets state from them can loop forever:\n\n```jsx\nconst options = { userId };                  // new object each render\nuseEffect(() => { load(options); }, [options]);   // runs after every render\nuseEffect(() => { load({ userId }); }, [userId]);  // depend on the primitive instead\n```\n\n`useMemo` and `useCallback` keep a value or function identity stable between renders when it must be a dependency. `NaN` as a dependency is stable (`Object.is(NaN, NaN)` is true); `0` and `-0` count as different.\n\n## Stale closures\n\nAn effect or callback sees the props and state of the render that created it. An interval created once with `[]` that reads `count` keeps reading the FIRST render's `count` forever. Fixes: include the value in the dependencies, use the updater form `setCount((c) => c + 1)`, or keep a mutable `useRef`.\n\n## Fetching in an effect: the race condition\n\n```jsx\nuseEffect(() => {\n  const ac = new AbortController();\n  fetch(`/api/users/${id}`, { signal: ac.signal })\n    .then((r) => r.json())\n    .then(setUser)\n    .catch((e) => { if (e.name !== 'AbortError') setError(e); });\n  return () => ac.abort();   // id changed or unmounted: ignore the stale response\n}, [id]);\n```\n\nWithout cleanup, a slow response for an OLD id can arrive after the new one and overwrite it. In real apps a data-fetching library (TanStack Query, SWR) or the framework's loaders handle caching, deduping and races for you.\n\n## You might not need an effect\n\n- **Derived values**: compute during render (topic 19), not `useEffect(() => setFull(first + last), [first, last])`.\n- **Responding to an event**: put the logic in the event handler, not in an effect watching a \"submitted\" flag.\n- **Resetting state when an id changes**: give the component `key={id}` so React remounts it with fresh state.\n\nEffects are for synchronising with things OUTSIDE React: the network, timers, the DOM, browser APIs, third-party widgets.\n\n## Rendering, briefly\n\nA state change re-renders that component and, by default, all of its children. Re-rendering is usually cheap; only optimise (`React.memo`, `useMemo`, moving state down, splitting components) when the profiler shows a real cost. Never mutate during render, and keep keys stable so React can preserve the right state.",
+  "quiz": [
+    {
+      "prompt": "When does an effect with dependency array `[]` run?",
+      "choices": [
+        "Before every render",
+        "After the first render only, with its cleanup on unmount",
+        "After every render",
+        "Never"
+      ],
+      "answer": 1,
+      "explanation": "An empty array means no dependency can change, so the effect runs once after mounting."
+    },
+    {
+      "prompt": "When does an effect with NO dependency array run?",
+      "choices": [
+        "After every render",
+        "Only on mount",
+        "Only on unmount",
+        "Only when state changes"
+      ],
+      "answer": 0,
+      "explanation": "Without a dependency array React has nothing to compare, so it re-runs after every render."
+    },
+    {
+      "prompt": "In what order do the cleanup and the next run of an effect happen when its dependencies change?",
+      "choices": [
+        "The new effect runs, then the old cleanup",
+        "They run in parallel",
+        "The old cleanup runs first, then the new effect",
+        "Cleanup only runs on unmount"
+      ],
+      "answer": 2,
+      "explanation": "React cleans up the previous effect before running it again with new values."
+    },
+    {
+      "prompt": "`const opts = { id }; useEffect(() => load(opts), [opts]);` What happens?",
+      "choices": [
+        "The effect runs only when id changes",
+        "The effect never runs",
+        "React warns and skips it",
+        "The effect runs after every render, because opts is a new object each time"
+      ],
+      "answer": 3,
+      "explanation": "Dependencies are compared with Object.is; depend on id (a primitive) or memoise opts."
+    },
+    {
+      "prompt": "Why does an effect run twice on mount in development?",
+      "choices": [
+        "A bug in React",
+        "StrictMode mounts, unmounts and remounts to expose missing cleanup",
+        "Because of hot reloading",
+        "Because deps were omitted"
+      ],
+      "answer": 1,
+      "explanation": "StrictMode deliberately double-invokes effects in development; correct effects with cleanup behave the same."
+    },
+    {
+      "prompt": "A user switches from user 1 to user 2 quickly, and user 1's slow response arrives last. Without cleanup, what is shown?",
+      "choices": [
+        "User 1's data, overwriting user 2",
+        "User 2's data",
+        "An error",
+        "Nothing"
+      ],
+      "answer": 0,
+      "explanation": "The stale response wins the race. Abort the fetch or ignore its result in the cleanup."
+    },
+    {
+      "prompt": "An interval set up with `[]` deps logs `count` every second while count changes. What does it log?",
+      "choices": [
+        "The latest count",
+        "undefined",
+        "The count from the first render, forever (a stale closure)",
+        "It throws"
+      ],
+      "answer": 2,
+      "explanation": "The callback closed over the first render's count. Use the updater form, a ref, or proper dependencies."
+    },
+    {
+      "prompt": "Which is NOT a good use of useEffect?",
+      "choices": [
+        "Subscribing to a WebSocket",
+        "Starting a timer",
+        "Syncing with a third-party chart library",
+        "Computing fullName from firstName and lastName"
+      ],
+      "answer": 3,
+      "explanation": "Derived values should be computed during render; an effect adds an extra render and a window of inconsistent UI."
+    },
+    {
+      "prompt": "How do you reset a form component's state when the edited record id changes?",
+      "choices": [
+        "Render it with key={id} so React remounts it",
+        "An effect that resets every field",
+        "Store the id in a ref",
+        "Use useMemo"
+      ],
+      "answer": 0,
+      "explanation": "A new key gives a fresh component instance with fresh initial state."
+    },
+    {
+      "prompt": "Is a dependency of `NaN` treated as changed on every render?",
+      "choices": [
+        "Yes, because NaN !== NaN",
+        "No: Object.is(NaN, NaN) is true",
+        "Only in StrictMode",
+        "React forbids NaN dependencies"
+      ],
+      "answer": 1,
+      "explanation": "React compares dependencies with Object.is, which treats NaN as equal to itself."
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "The three dependency-array cases of useEffect",
+      "back": "No array: it re-runs following each render. Empty array: once after mount. With values: after mount and whenever a value changed by Object.is."
+    },
+    {
+      "front": "When does an effect cleanup run?",
+      "back": "Before the effect runs again with new dependencies, and when the component unmounts."
+    },
+    {
+      "front": "Why do objects and functions make troublesome dependencies?",
+      "back": "They are recreated on every render, so they always look changed. Depend on primitives or keep their identity with useMemo or useCallback."
+    },
+    {
+      "front": "What is a stale closure in React?",
+      "back": "A callback or effect that keeps reading the props and state of the render that created it, because it was never recreated."
+    },
+    {
+      "front": "How do you avoid race conditions when fetching in an effect?",
+      "back": "Abort the request or set an ignore flag in the cleanup, so a response for outdated inputs is never applied."
+    },
+    {
+      "front": "Why does StrictMode run effects twice in development?",
+      "back": "To surface effects without proper cleanup; a correct effect behaves the same after a mount, unmount and remount."
+    },
+    {
+      "front": "Three effects you usually do not need",
+      "back": "Computing derived data, reacting to user events (use the handler), and resetting state on a prop change (use a key)."
+    },
+    {
+      "front": "What are effects actually for?",
+      "back": "Synchronising a component with systems outside React: network, timers, subscriptions, the DOM and browser APIs."
+    }
+  ],
+  "drills": [
+    {
+      "slug": "01-effect-runner",
+      "title": "Simulate useEffect: dependencies and cleanup",
+      "difficulty": 3,
+      "skills": [
+        "Object.is",
+        "cleanup ordering"
+      ],
+      "instructions": "**Interview prompt.** \"Explain exactly when React re-runs an effect and when it calls the cleanup. Then implement that logic without React.\"\n\n**Why it matters.** Most effect bugs (infinite loops, double subscriptions, stale data) come from misunderstanding two rules: dependencies are compared with `Object.is`, and the previous cleanup always runs before the next effect.\n\n**Your task.** Export `createEffectSlot()`. It returns an object modelling ONE `useEffect` call across renders:\n- `render(effect, deps)`: call this once per render. The effect runs when this is the first render, when `deps` is `undefined` (no array: every render), or when the array's length changed or any element differs from the previous render's by `Object.is`. Before running the effect again, call the cleanup returned by its previous run (if it returned a function). `render` returns `true` if the effect ran, `false` otherwise. The previous deps are only replaced when the effect runs.\n- `unmount()`: calls the pending cleanup, if any, exactly once.\n\n**Worked example.** `render(fx, [1])` runs fx; `render(fx, [1])` does not; `render(fx, [2])` calls fx's cleanup, then runs fx again.",
+      "starter": "export function createEffectSlot() {\n  // TODO: remember the previous deps and the pending cleanup\n}\n",
+      "solution": "const changed = (prev, next) => prev.length !== next.length || next.some((d, i) => !Object.is(d, prev[i]));\n\nexport function createEffectSlot() {\n  let prevDeps;\n  let mounted = false;\n  let cleanup;\n  const runCleanup = () => {\n    const c = cleanup;\n    cleanup = undefined;\n    if (typeof c === 'function') c();\n  };\n  return {\n    render(effect, deps) {\n      const run = !mounted || deps === undefined || prevDeps === undefined || changed(prevDeps, deps);\n      mounted = true;\n      if (!run) return false;\n      runCleanup();\n      prevDeps = deps;\n      cleanup = effect();\n      return true;\n    },\n    unmount() {\n      runCleanup();\n    },\n  };\n}\n",
+      "tests": [
+        {
+          "name": "runs on the first render and when deps change",
+          "code": "assert.equal(typeof mod.createEffectSlot, 'function', 'export createEffectSlot');\nconst slot = mod.createEffectSlot();\nlet runs = 0;\nconst fx = () => { runs++; };\nassert.equal(slot.render(fx, [1]), true);\nassert.equal(slot.render(fx, [1]), false);\nassert.equal(slot.render(fx, [2]), true);\nassert.equal(runs, 2);"
+        },
+        {
+          "name": "the previous cleanup runs before the next effect",
+          "code": "const slot = mod.createEffectSlot();\nconst log = [];\nconst fx = (n) => () => { log.push('run ' + n); return () => log.push('cleanup ' + n); };\nslot.render(fx(1), ['a']);\nslot.render(fx(2), ['b']);\nslot.unmount();\nassert.deepEqual(log, ['run 1', 'cleanup 1', 'run 2', 'cleanup 2']);"
+        },
+        {
+          "name": "an empty array runs once; no array runs every render",
+          "code": "const once = mod.createEffectSlot();\nlet a = 0;\nonce.render(() => { a++; }, []);\nonce.render(() => { a++; }, []);\nassert.equal(a, 1);\nconst every = mod.createEffectSlot();\nlet b = 0;\nevery.render(() => { b++; });\nevery.render(() => { b++; });\nassert.equal(b, 2);"
+        },
+        {
+          "name": "deps are compared with Object.is",
+          "code": "const slot = mod.createEffectSlot();\nlet runs = 0;\nconst fx = () => { runs++; };\nslot.render(fx, [NaN]);\nassert.equal(slot.render(fx, [NaN]), false, 'NaN is stable');\nassert.equal(slot.render(fx, [{}]), true);\nassert.equal(slot.render(fx, [{}]), true, 'a new object is a change');\nconst o = {};\nslot.render(fx, [o]);\nassert.equal(slot.render(fx, [o]), false);"
+        },
+        {
+          "name": "a changed deps length counts as a change",
+          "code": "const slot = mod.createEffectSlot();\nslot.render(() => {}, [1]);\nassert.equal(slot.render(() => {}, [1, 2]), true);"
+        },
+        {
+          "name": "unmount calls the cleanup exactly once (boundary)",
+          "code": "const slot = mod.createEffectSlot();\nlet cleaned = 0;\nslot.render(() => () => { cleaned++; }, []);\nslot.unmount();\nslot.unmount();\nassert.equal(cleaned, 1);\nconst none = mod.createEffectSlot();\nnone.unmount();"
+        }
+      ],
+      "explanation": "Decide whether to run, then clean up the previous run, then run and store the new cleanup:\n\n```js\nrender(effect, deps) {\n  const run = !mounted || deps === undefined || prevDeps === undefined || changed(prevDeps, deps);\n  mounted = true;\n  if (!run) return false;\n  runCleanup();\n  prevDeps = deps;\n  cleanup = effect();\n  return true;\n}\n```\n\n`changed` compares lengths and then every element with `Object.is`, which is why `NaN` is stable while a fresh `{}` always re-runs: exactly the behaviour behind the \"object in deps\" infinite loop.",
+      "hints": [
+        "You need to remember three things between renders: whether this is the first render, the last deps the effect ran with, and the cleanup it returned.",
+        "Run when it is the first render, deps is undefined, the lengths differ, or some element fails Object.is; call the stored cleanup first, then store the new deps and the effect's return value.",
+        "On each render decide whether the effect is due, and if it is, first undo the previous run by calling its stored cleanup, then run it and keep its new cleanup. On unmount, call the stored cleanup and forget it."
+      ]
+    }
+  ]
+}

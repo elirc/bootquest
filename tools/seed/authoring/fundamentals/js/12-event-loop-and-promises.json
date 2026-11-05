@@ -1,0 +1,197 @@
+{
+  "format": "fundamentals-authoring@1",
+  "track": "js",
+  "topic": "12-event-loop-and-promises",
+  "title": "The event loop & promises",
+  "level": "intermediate",
+  "summary": "One thread, a call stack and queues: tasks versus microtasks, where process.nextTick fits, promise states and chaining, and why CPU-heavy work freezes a Node server.",
+  "lesson": "## One thread, many waiting jobs\n\nJavaScript runs your code on a single thread with a **call stack**. Slow work (timers, file and network I/O) is handed to the runtime, and its callback is queued for later. The **event loop** repeatedly takes the next job and runs it to completion; nothing interrupts a running function.\n\nTwo kinds of queue matter:\n\n- **Tasks** (macrotasks): timer callbacks, I/O callbacks, `setImmediate`, UI events.\n- **Microtasks**: promise reactions (`then`/`catch`/`finally` callbacks, the code after an `await`) and `queueMicrotask`.\n\nAfter each task, the **entire microtask queue is drained** before the next task starts. Node adds `process.nextTick`, a queue that runs ahead of promise microtasks.\n\n```js\n// a CommonJS script\nsetTimeout(() => log('timeout'), 0);\nPromise.resolve().then(() => log('promise'));\nprocess.nextTick(() => log('nextTick'));\nlog('sync');\n// sync, nextTick, promise, timeout\n```\n\nSynchronous code always finishes first; microtasks run before any timer. Two caveats: at the top level of an **ES module** the module body itself runs as part of a promise job, so promise callbacks queued there can run before nextTick callbacks; and in the main module the order of `setTimeout(fn, 0)` versus `setImmediate(fn)` is not guaranteed (inside an I/O callback, setImmediate always runs first). Do not write code that depends on those orders.\n\n## Promises\n\nA promise is **pending**, then settles exactly once: **fulfilled** with a value or **rejected** with a reason.\n\n- The executor in `new Promise((resolve, reject) => ...)` runs **synchronously**, immediately.\n- `then` returns a NEW promise. Returning a value fulfils it; returning a promise makes it follow that promise (flattening); **throwing** rejects it.\n- `catch(fn)` is `then(undefined, fn)`; after a catch that returns normally, the chain continues fulfilled.\n- `Promise.resolve(x)` / `Promise.reject(e)` create settled promises.\n\n```js\nfetchUser(id)\n  .then((u) => fetchOrders(u.id))   // flattened: the next then gets the orders\n  .then((orders) => orders.length)\n  .catch((err) => 0)                // any failure above lands here\n```\n\n`async` functions always return a promise; `await p` pauses the function (not the thread) and resumes it in a microtask when `p` settles.\n\n## Blocking the loop\n\nBecause jobs run to completion, a CPU-heavy loop (parsing a 200 MB JSON, a synchronous bcrypt, an accidental O(n^2) over a big array) stops EVERYTHING: a 10 ms timer waits until the loop is free, and a web server answers no other request meanwhile. Fixes: async/streaming APIs, chunking work with `setImmediate`, or moving it to a worker thread.\n\n## Starvation\n\nMicrotasks that keep queueing microtasks (or a recursive `process.nextTick`) prevent the loop from ever reaching timers and I/O. Recursion that should yield must go through a task (`setImmediate`, `setTimeout`).",
+  "quiz": [
+    {
+      "prompt": "In a CommonJS script: `setTimeout(() => log(\"T\"), 0); Promise.resolve().then(() => log(\"P\")); log(\"S\");` What is the order?",
+      "choices": [
+        "T P S",
+        "S T P",
+        "S P T",
+        "P S T"
+      ],
+      "answer": 2,
+      "explanation": "Synchronous code first, then the microtask queue (the promise reaction), then the next task (the timer)."
+    },
+    {
+      "prompt": "When does the executor function passed to `new Promise(executor)` run?",
+      "choices": [
+        "Immediately and synchronously, inside the constructor",
+        "In the next microtask",
+        "When then is called",
+        "After the current task"
+      ],
+      "answer": 0,
+      "explanation": "Only the reactions (then/catch callbacks) are asynchronous; the executor runs right away."
+    },
+    {
+      "prompt": "What does `Promise.resolve(1).then(() => { throw new Error(\"x\"); })` produce?",
+      "choices": [
+        "A promise fulfilled with undefined",
+        "A synchronous exception",
+        "A promise fulfilled with the Error",
+        "A rejected promise"
+      ],
+      "answer": 3,
+      "explanation": "Throwing inside a then callback rejects the promise that then returned."
+    },
+    {
+      "prompt": "What value does the next `then` receive after `.then(() => Promise.resolve(2))`?",
+      "choices": [
+        "A promise",
+        "2",
+        "undefined",
+        "The original value"
+      ],
+      "answer": 1,
+      "explanation": "Returning a promise from then makes the chain adopt its eventual value: promises flatten."
+    },
+    {
+      "prompt": "In Node, which runs first after the current synchronous code in a CommonJS script: a `process.nextTick` callback or a promise `then` callback?",
+      "choices": [
+        "process.nextTick",
+        "The promise callback",
+        "Whichever was scheduled first",
+        "Neither: both wait for timers"
+      ],
+      "answer": 0,
+      "explanation": "Node drains the nextTick queue before the promise microtask queue."
+    },
+    {
+      "prompt": "A 10 ms timer is set, then the code runs a busy loop for 100 ms. When does the timer callback run?",
+      "choices": [
+        "After 10 ms, interrupting the loop",
+        "Never",
+        "After the loop finishes, about 100 ms later",
+        "In a separate thread at 10 ms"
+      ],
+      "answer": 2,
+      "explanation": "Callbacks run only when the call stack is empty; a busy loop delays every timer and request."
+    },
+    {
+      "prompt": "What does `await somePromise` pause?",
+      "choices": [
+        "The whole Node process",
+        "Only the async function it is in; the event loop keeps running other work",
+        "The event loop until it settles",
+        "All other async functions"
+      ],
+      "answer": 1,
+      "explanation": "await suspends that function and resumes it in a microtask when the promise settles."
+    },
+    {
+      "prompt": "What does `.catch((err) => 0)` do to the rest of the chain?",
+      "choices": [
+        "The chain continues fulfilled with 0",
+        "The chain stays rejected",
+        "It stops the chain entirely",
+        "It rethrows the error"
+      ],
+      "answer": 0,
+      "explanation": "A catch that returns normally recovers: subsequent thens see its return value."
+    },
+    {
+      "prompt": "Which of these is a MICROTASK?",
+      "choices": [
+        "A setTimeout callback",
+        "A setImmediate callback",
+        "A then callback of a resolved promise",
+        "An HTTP request handler"
+      ],
+      "answer": 2,
+      "explanation": "Promise reactions and queueMicrotask callbacks are microtasks; timers, immediates and I/O callbacks are tasks."
+    },
+    {
+      "prompt": "Your Node API becomes unresponsive while one request hashes a password with a synchronous function. Why?",
+      "choices": [
+        "Hashing uses all memory",
+        "Node starts a thread per request",
+        "The OS throttles Node",
+        "The synchronous work occupies the single JavaScript thread, so no other callback can run"
+      ],
+      "answer": 3,
+      "explanation": "Use the async variant (which runs in the libuv thread pool) or a worker thread for CPU-heavy work."
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "Task versus microtask",
+      "back": "Tasks are timers, I/O callbacks and immediates; microtasks are promise reactions and queueMicrotask. All pending microtasks run after each task."
+    },
+    {
+      "front": "Order of sync code, nextTick, promise callback and setTimeout 0 in a Node CommonJS script",
+      "back": "Synchronous code, then the nextTick queue, then promise callbacks, then the timer."
+    },
+    {
+      "front": "Which part of a promise runs synchronously?",
+      "back": "The executor passed to the constructor. Every then, catch and finally callback is asynchronous."
+    },
+    {
+      "front": "Three ways a then callback can settle the promise it returns",
+      "back": "Returning a value fulfils it, returning a promise makes it follow that promise, and throwing rejects it."
+    },
+    {
+      "front": "What does await actually suspend?",
+      "back": "Only its own async function. The thread returns to the event loop and other work continues until the promise settles."
+    },
+    {
+      "front": "Why does CPU-heavy synchronous code hurt a Node server?",
+      "back": "Every request shares one JavaScript thread, so nothing else is served until the heavy function returns."
+    },
+    {
+      "front": "What is microtask starvation?",
+      "back": "Microtasks that keep scheduling more microtasks never let the loop reach timers or I/O. Yield through a real task instead."
+    },
+    {
+      "front": "setTimeout 0 versus setImmediate",
+      "back": "Inside an I/O callback, setImmediate always runs first; in the main module their order is not guaranteed."
+    }
+  ],
+  "drills": [
+    {
+      "slug": "01-with-timeout",
+      "title": "withTimeout: race a promise against a timer",
+      "difficulty": 2,
+      "skills": [
+        "Promise.race",
+        "timers"
+      ],
+      "instructions": "**Interview prompt.** \"A payment provider sometimes never answers. Make any call fail after N milliseconds instead of hanging the request forever.\"\n\n**Why it matters.** A promise cannot be cancelled, but you can stop WAITING for it: race it against a timer. Clearing the timer once the race is decided matters too, or every successful call leaves a pending timer behind.\n\n**Your task.** Export `withTimeout(promise, ms)`. It returns a promise that:\n- fulfils with `promise`'s value if `promise` fulfils first\n- rejects with `promise`'s own reason if it rejects first\n- otherwise, after `ms` milliseconds, rejects with an `Error` whose `name` is `'TimeoutError'` and whose message is `'timed out after <ms>ms'`\n- clears its timer as soon as the race is decided either way\n\n**Worked example.** `withTimeout(Promise.resolve('ok'), 0)` fulfils with `'ok'`: an already-fulfilled promise wins against a timer, because its reaction is a microtask.",
+      "starter": "export function withTimeout(promise, ms) {\n  // TODO: race the promise against a timer that rejects with a TimeoutError\n}\n",
+      "solution": "export function withTimeout(promise, ms) {\n  let timer;\n  const timeout = new Promise((_, reject) => {\n    timer = setTimeout(() => {\n      const err = new Error(`timed out after ${ms}ms`);\n      err.name = 'TimeoutError';\n      reject(err);\n    }, ms);\n  });\n  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));\n}\n",
+      "tests": [
+        {
+          "name": "a fast promise wins with its value",
+          "code": "assert.equal(typeof mod.withTimeout, 'function', 'export withTimeout');\nconst fast = new Promise((r) => setTimeout(() => r('ok'), 5));\nassert.equal(await mod.withTimeout(fast, 200), 'ok');"
+        },
+        {
+          "name": "a slow promise loses with a TimeoutError",
+          "code": "const slow = new Promise((r) => setTimeout(() => r('late'), 300));\nawait assert.rejects(mod.withTimeout(slow, 20), (e) => e instanceof Error && e.name === 'TimeoutError' && e.message === 'timed out after 20ms');"
+        },
+        {
+          "name": "a rejection passes through unchanged",
+          "code": "const boom = new Error('provider down');\nawait assert.rejects(mod.withTimeout(Promise.reject(boom), 200), (e) => e === boom);"
+        },
+        {
+          "name": "an already-fulfilled promise beats a 0 ms timer",
+          "code": "assert.equal(await mod.withTimeout(Promise.resolve('ok'), 0), 'ok');"
+        },
+        {
+          "name": "the timer is cleared once the race is decided",
+          "code": "const real = globalThis.clearTimeout;\nlet cleared = 0;\nglobalThis.clearTimeout = (t) => { cleared++; return real(t); };\ntry {\n  await mod.withTimeout(Promise.resolve(1), 1000);\n} finally {\n  globalThis.clearTimeout = real;\n}\nassert.ok(cleared >= 1, 'clearTimeout was never called');"
+        }
+      ],
+      "explanation": "`Promise.race` settles with whichever promise settles first; `finally` runs either way and clears the timer:\n\n```js\nlet timer;\nconst timeout = new Promise((_, reject) => {\n  timer = setTimeout(() => {\n    const err = new Error(`timed out after ${ms}ms`);\n    err.name = 'TimeoutError';\n    reject(err);\n  }, ms);\n});\nreturn Promise.race([promise, timeout]).finally(() => clearTimeout(timer));\n```\n\nWithout the `clearTimeout`, a server making thousands of fast calls keeps thousands of pointless timers alive (and a short script cannot exit until they fire).",
+      "hints": [
+        "You cannot stop the original promise, but you can race it against a second promise that rejects later.",
+        "Create a timeout promise whose setTimeout rejects with an Error named TimeoutError, pass both to Promise.race, and clear the timer in a finally.",
+        "Build a second promise that fails after the given delay, let the two compete, and make sure the delay timer is cancelled whichever side wins."
+      ]
+    }
+  ]
+}

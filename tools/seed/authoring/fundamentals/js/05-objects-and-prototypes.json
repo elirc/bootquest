@@ -1,0 +1,205 @@
+{
+  "format": "fundamentals-authoring@1",
+  "track": "js",
+  "topic": "05-objects-and-prototypes",
+  "title": "Objects & prototypes",
+  "level": "intermediate",
+  "summary": "Own versus inherited properties, the prototype chain, copying objects (shallow, structuredClone, JSON), getters, and why merging untrusted JSON can pollute every object.",
+  "lesson": "## Objects are bags of properties with a parent\n\nEvery object has a hidden link to another object, its **prototype**. Reading a property that the object does not have walks up that chain:\n\n```js\nconst base = { greet() { return 'hi'; } };\nconst user = Object.create(base);   // user's prototype is base\nuser.name = 'Ana';\n\nuser.greet()               // 'hi'   found on base\nObject.keys(user)          // ['name']  own, enumerable keys only\nObject.hasOwn(user, 'greet') // false\n'greet' in user            // true   (in walks the chain)\n```\n\nArrays get `map` from `Array.prototype`, plain objects get `toString` from `Object.prototype`: `Object.getPrototypeOf([]) === Array.prototype`. `Object.create(null)` makes an object with no prototype at all (no `toString`), a safe dictionary.\n\n**Writing** never walks the chain: `user.greet = ...` creates an OWN property that **shadows** the inherited one; `base` is untouched.\n\n## Own versus inherited, in practice\n\n- `Object.keys`, `Object.entries`, `JSON.stringify` and spread see only own enumerable properties.\n- `for...in` also visits **inherited** enumerable properties, which is why it is rarely what you want.\n- Methods defined on a prototype (or in a class body) are shared: one function object for every instance.\n\n## Getters and setters\n\n```js\nconst person = {\n  first: 'Ada', last: 'Lovelace',\n  get full() { return this.first + ' ' + this.last; },\n};\nperson.full   // 'Ada Lovelace': read like a property, computed on every read\n```\n\n## Copying objects\n\n- **Shallow**: `{ ...obj }` or `Object.assign({}, obj)` copy own enumerable properties one level deep; nested objects are shared.\n- **JSON round trip**: `JSON.parse(JSON.stringify(obj))` is deep but lossy: Dates become strings, `undefined` properties vanish, `NaN` becomes `null`, Maps become `{}`.\n- **structuredClone(obj)**: deep, keeps Dates, Maps, Sets and cycles; throws on functions.\n\n## Prototype pollution\n\n`JSON.parse('{\"__proto__\": {\"admin\": true}}')` creates an object with an OWN key named `\"__proto__\"`. A naive recursive merge then does `target['__proto__']`, which is `Object.prototype`, and copies `admin: true` into it. From then on **every** object in the process has `admin === true`. This is a real class of security bug in config loaders and deep-merge utilities. Defences: skip the keys `__proto__`, `constructor` and `prototype` when merging untrusted data, copy only own properties, or merge into `Object.create(null)` objects.\n\n## Equality and identity\n\nObjects compare by reference. Two literals with identical contents are never `===`. To compare by value you compare fields (or serialise in a stable order). Keep that in mind for caching, React dependencies and `includes` on arrays of objects.",
+  "quiz": [
+    {
+      "prompt": "`const a = { x: 1 }; const b = Object.create(a);` What are `b.x` and `Object.keys(b)`?",
+      "choices": [
+        "undefined and []",
+        "1 and ['x']",
+        "1 and []",
+        "undefined and ['x']"
+      ],
+      "answer": 2,
+      "explanation": "b inherits x through its prototype, but Object.keys lists only own properties."
+    },
+    {
+      "prompt": "With the same objects, `b.x = 2`. What is `a.x`?",
+      "choices": [
+        "1",
+        "2",
+        "undefined",
+        "It throws"
+      ],
+      "answer": 0,
+      "explanation": "Assignment creates an own property on b that shadows the inherited one; the prototype is not changed."
+    },
+    {
+      "prompt": "Which one also visits INHERITED enumerable properties?",
+      "choices": [
+        "Object.keys(obj)",
+        "for (const k in obj)",
+        "Object.entries(obj)",
+        "{ ...obj }"
+      ],
+      "answer": 1,
+      "explanation": "for...in walks the prototype chain. keys, entries, spread and JSON.stringify see own properties only."
+    },
+    {
+      "prompt": "What does `JSON.parse(JSON.stringify({ d: new Date(0), u: undefined }))` produce?",
+      "choices": [
+        "{ d: Date, u: undefined }",
+        "{ d: \"1970-01-01T00:00:00.000Z\" }",
+        "It throws",
+        "{ d: 0 }"
+      ],
+      "answer": 1,
+      "explanation": "Dates serialise to ISO strings and undefined properties are dropped, so the round trip is lossy."
+    },
+    {
+      "prompt": "Which copies a value deeply while keeping Dates and Maps intact?",
+      "choices": [
+        "{ ...obj }",
+        "Object.assign({}, obj)",
+        "structuredClone(obj)",
+        "JSON.parse(JSON.stringify(obj))"
+      ],
+      "answer": 2,
+      "explanation": "structuredClone is a deep copy that supports Date, Map, Set and cycles. It throws on functions."
+    },
+    {
+      "prompt": "Why can a recursive merge of `JSON.parse('{\"__proto__\":{\"admin\":true}}')` affect every object?",
+      "choices": [
+        "JSON.parse sets the global prototype directly",
+        "The parsed object has an own \"__proto__\" key, and target[\"__proto__\"] is Object.prototype, so the merge writes into it",
+        "JSON cannot contain __proto__",
+        "Only Object.assign is affected"
+      ],
+      "answer": 1,
+      "explanation": "Reading target.__proto__ returns the shared prototype; copying properties into it pollutes every object that inherits from it."
+    },
+    {
+      "prompt": "What is `typeof Object.create(null).toString`?",
+      "choices": [
+        "'function'",
+        "'object'",
+        "'string'",
+        "'undefined'"
+      ],
+      "answer": 3,
+      "explanation": "An object created with a null prototype inherits nothing, not even toString."
+    },
+    {
+      "prompt": "`const o = Object.assign({}, a)` where `a.n` is a nested object. Then `o.n.x = 9`. Does `a.n.x` change?",
+      "choices": [
+        "Yes: assign is a shallow copy",
+        "No: assign is a deep copy",
+        "Only in strict mode",
+        "It throws"
+      ],
+      "answer": 0,
+      "explanation": "Object.assign copies top-level property values; the nested object reference is shared."
+    },
+    {
+      "prompt": "A getter `get full() { return this.first + \" \" + this.last; }` is read as...",
+      "choices": [
+        "person.full()",
+        "person.getFull()",
+        "person.full",
+        "person[\"get full\"]"
+      ],
+      "answer": 2,
+      "explanation": "A getter is accessed like a property and runs its body on every read."
+    },
+    {
+      "prompt": "Two instances created with `new Person()` call `p.greet()`, defined in the class body. How many greet functions exist?",
+      "choices": [
+        "One per instance",
+        "One, shared on the prototype",
+        "None until called",
+        "Two, one per instance"
+      ],
+      "answer": 1,
+      "explanation": "Class methods live on Class.prototype and are shared by every instance (arrow class fields, by contrast, are per instance)."
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "What happens when you read a property an object does not own?",
+      "back": "The engine looks it up along the prototype chain, object by object, and returns undefined only if no ancestor has it."
+    },
+    {
+      "front": "Object.hasOwn(obj, k) versus k in obj",
+      "back": "hasOwn checks the object itself; in also succeeds for properties inherited through the prototype chain."
+    },
+    {
+      "front": "Why is for...in usually the wrong loop for objects?",
+      "back": "It also iterates inherited enumerable properties. Object.keys or Object.entries give exactly the own ones."
+    },
+    {
+      "front": "Three ways to copy an object and their limits",
+      "back": "Spread or assign: one level only. JSON round trip: deep but drops undefined and turns Dates into strings. structuredClone: deep and type-preserving, but no functions."
+    },
+    {
+      "front": "What is prototype pollution?",
+      "back": "Writing attacker-controlled keys such as __proto__ into a shared prototype, so every object in the process suddenly carries the injected property."
+    },
+    {
+      "front": "How do you make a merge safe against prototype pollution?",
+      "back": "Iterate only own keys and skip __proto__, constructor and prototype, or merge into objects created with a null prototype."
+    },
+    {
+      "front": "Does assigning to an inherited property change the prototype?",
+      "back": "No. Writes go to the object itself and shadow the inherited value; only that one object changes."
+    },
+    {
+      "front": "Why are two identical object literals never ===?",
+      "back": "Objects compare by identity (reference). Each literal creates a new object, whatever its contents."
+    }
+  ],
+  "drills": [
+    {
+      "slug": "01-safe-deep-merge",
+      "title": "A deep merge that cannot pollute prototypes",
+      "difficulty": 3,
+      "skills": [
+        "prototype chain",
+        "recursion"
+      ],
+      "instructions": "**Interview prompt.** \"Our config loader deep-merges user JSON over the defaults. A security report says one request made every object in the server an admin. Rewrite the merge.\"\n\n**Why it matters.** Recursive merges that follow `__proto__` write into `Object.prototype`. Merging must also never mutate its inputs: the defaults object is shared by every request.\n\n**Your task.** Export `deepMerge(base, override)`. It returns a NEW object where:\n- every own enumerable key of `base` and `override` appears; for a key in both, the `override` value wins\n- when BOTH values are plain objects (not arrays, not null), they are merged recursively by the same rules\n- arrays and every other value are taken as-is from whichever side wins (arrays are replaced, not concatenated)\n- the keys `__proto__`, `constructor` and `prototype` are skipped entirely, at every depth\n- neither `base` nor `override` is modified\n\n**Worked example.** Merging `{ db: { host: 'a', port: 1 } }` with `{ db: { port: 2 } }` gives `{ db: { host: 'a', port: 2 } }`.",
+      "starter": "export function deepMerge(base, override) {\n  // TODO: a new object, recursive for plain objects, never following __proto__\n}\n",
+      "solution": "const FORBIDDEN = new Set(['__proto__', 'constructor', 'prototype']);\nconst isPlain = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);\n\nexport function deepMerge(base, override) {\n  const out = {};\n  for (const src of [base, override]) {\n    for (const key of Object.keys(src)) {\n      if (FORBIDDEN.has(key)) continue;\n      const value = src[key];\n      out[key] = isPlain(out[key]) && isPlain(value) ? deepMerge(out[key], value) : isPlain(value) ? deepMerge({}, value) : value;\n    }\n  }\n  return out;\n}\n",
+      "tests": [
+        {
+          "name": "nested objects merge and the override wins",
+          "code": "assert.equal(typeof mod.deepMerge, 'function', 'export deepMerge');\nassert.deepEqual(mod.deepMerge({ db: { host: 'a', port: 1 }, debug: false }, { db: { port: 2 }, debug: true }), { db: { host: 'a', port: 2 }, debug: true });"
+        },
+        {
+          "name": "arrays are replaced, not merged",
+          "code": "assert.deepEqual(mod.deepMerge({ tags: ['a', 'b'] }, { tags: ['c'] }), { tags: ['c'] });"
+        },
+        {
+          "name": "a __proto__ key from JSON pollutes nothing",
+          "code": "const evil = JSON.parse('{\"__proto__\": {\"admin\": true}, \"nested\": {\"__proto__\": {\"admin\": true}}}');\nconst out = mod.deepMerge({ nested: {} }, evil);\nassert.equal(({}).admin, undefined, 'Object.prototype was polluted');\nassert.equal(out.admin, undefined);\nassert.equal(out.nested.admin, undefined);\nassert.equal(Object.getPrototypeOf(out), Object.prototype);"
+        },
+        {
+          "name": "constructor and prototype keys are skipped",
+          "code": "const out = mod.deepMerge({}, JSON.parse('{\"constructor\": {\"prototype\": {\"x\": 1}}, \"ok\": 1}'));\nassert.deepEqual(Object.keys(out), ['ok']);"
+        },
+        {
+          "name": "the inputs are not modified",
+          "code": "const base = { db: { host: 'a' } };\nconst over = { db: { port: 2 } };\nconst out = mod.deepMerge(base, over);\nassert.deepEqual(base, { db: { host: 'a' } });\nassert.deepEqual(over, { db: { port: 2 } });\nout.db.host = 'changed';\nassert.equal(base.db.host, 'a');"
+        },
+        {
+          "name": "empty objects merge to an empty object (boundary)",
+          "code": "const out = mod.deepMerge({}, {});\nassert.deepEqual(out, {});"
+        },
+        {
+          "name": "null in the override replaces a nested object",
+          "code": "assert.deepEqual(mod.deepMerge({ cache: { ttl: 5 } }, { cache: null }), { cache: null });"
+        }
+      ],
+      "explanation": "Copy own keys only, skip the three dangerous names, and recurse only when both sides are plain objects. Recursing into `{}` for an override-only object also clones it, so the result never shares nested objects with the inputs:\n\n```js\nfor (const src of [base, override]) {\n  for (const key of Object.keys(src)) {\n    if (FORBIDDEN.has(key)) continue;\n    const value = src[key];\n    out[key] = isPlain(out[key]) && isPlain(value) ? deepMerge(out[key], value)\n             : isPlain(value) ? deepMerge({}, value) : value;\n  }\n}\n```\n\n`Object.keys` returns the parsed own `\"__proto__\"` key, which is why the explicit skip is needed: `out['__proto__'] = ...` would set the result's prototype.",
+      "hints": [
+        "Own keys from JSON can include \"__proto__\"; assigning or recursing through that key reaches Object.prototype.",
+        "Build a fresh object, loop Object.keys of base then override, skip a small set of forbidden key names, and recurse only when both values are plain objects (not arrays, not null).",
+        "Start from an empty result, copy both sides in order while ignoring the three prototype-related key names, and only go one level deeper when the existing and incoming values are both ordinary objects."
+      ]
+    }
+  ]
+}

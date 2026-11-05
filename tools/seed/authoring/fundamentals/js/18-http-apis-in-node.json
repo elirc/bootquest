@@ -1,0 +1,201 @@
+{
+  "format": "fundamentals-authoring@1",
+  "track": "js",
+  "topic": "18-http-apis-in-node",
+  "title": "HTTP APIs in Node",
+  "level": "advanced",
+  "summary": "Methods and idempotency, the status codes that matter, routes and query strings, middleware order and error middleware, validating bodies at the boundary, and pagination.",
+  "lesson": "## Methods and their promises\n\n| method | use | safe | idempotent |\n|---|---|---|---|\n| GET | read | yes | yes |\n| POST | create / run an action | no | no |\n| PUT | replace a resource at a known URL | no | yes |\n| PATCH | partial update | no | not necessarily |\n| DELETE | remove | no | yes |\n\n**Idempotent** means repeating the request has the same effect as sending it once (DELETE twice: still deleted). Clients, proxies and retry logic rely on that; a non-idempotent POST needs an idempotency key to be retried safely.\n\n## Status codes that matter\n\n- **200** OK, **201** Created (send a `Location` header with the new resource URL), **204** No Content (successful DELETE or an update with no body).\n- **400** Bad Request (malformed or invalid input), **401** Unauthorized (not authenticated: missing or bad credentials), **403** Forbidden (authenticated but not allowed), **404** Not Found, **409** Conflict (duplicate key, stale version), **422** Unprocessable Content (well-formed but semantically invalid; some APIs use it instead of 400 for validation), **429** Too Many Requests (send `Retry-After`).\n- **500** for unexpected server failures (never leak internals, topic 10), **503** when temporarily unavailable.\n\n## URLs: routes, params and query strings\n\n```js\nconst u = new URL(req.url, 'http://localhost');\nu.pathname                     // '/users/42'\nu.searchParams.get('page')     // '2'  <- a STRING (or null when absent)\nnew URLSearchParams('tag=a&tag=b').getAll('tag')  // ['a', 'b']\nnew URLSearchParams('q=x+y').get('q')             // 'x y': + decodes to a space\n```\n\nRoute parameters (`/users/:id`) and query values are **strings**: convert and validate them (`?page=abc` must be a 400, not `NaN` reaching the database). Path segments are percent-encoded: `decodeURIComponent('caf%C3%A9')` is `'café'`, and malformed encodings throw a `URIError`, which is also a 400.\n\n## Middleware\n\nFrameworks like Express run middleware **in registration order**: each one handles the request or calls `next()`. Order matters: body parsing before handlers that read the body, authentication before authorisation, the 404 handler after every route, and the **error handler last**. In Express an error handler is recognised by its four parameters `(err, req, res, next)`; any `next(err)` (or, in Express 5, a rejected async handler) jumps straight to it.\n\n## Validate at the boundary\n\nParse, validate and normalise once, at the edge: types of every field, required fields, string lengths, enum values, number ranges. Respond 400 (or 422) with field-level messages. **Allow-list** fields: never `Object.assign(user, req.body)`, which lets a client set `role: 'admin'` (mass assignment).\n\n## Pagination\n\n- **Offset**: `?limit=20&offset=40`. Simple, but slow for deep pages and unstable while rows are inserted.\n- **Cursor**: `?limit=20&after=<opaque cursor>` based on a sort key (id or created_at plus id). Stable and fast for infinite scroll.\n\nAlways cap `limit` server-side and return a stable sort order.\n\n## Response conventions\n\n`Content-Type: application/json`, a consistent error body (problem details: `{ title, status, detail, errors }`), ISO-8601 timestamps in UTC, and ids as strings. Return 404 rather than 403 for resources the caller must not even know exist.",
+  "quiz": [
+    {
+      "prompt": "Which methods are idempotent?",
+      "choices": [
+        "GET, PUT and DELETE",
+        "POST and PATCH",
+        "Only GET",
+        "All of them"
+      ],
+      "answer": 0,
+      "explanation": "Repeating GET, PUT or DELETE leaves the same state; POST creates again, and PATCH may not be idempotent."
+    },
+    {
+      "prompt": "A POST /orders succeeds. Which response is most correct?",
+      "choices": [
+        "200 with the order",
+        "204 with no body",
+        "201 Created with a Location header for the new order",
+        "202 Accepted"
+      ],
+      "answer": 2,
+      "explanation": "201 signals a created resource; Location tells the client its URL."
+    },
+    {
+      "prompt": "A logged-in user requests another tenant's invoice they may not see. What is the usual safest response?",
+      "choices": [
+        "401",
+        "403 or, to avoid revealing it exists, 404",
+        "409",
+        "500"
+      ],
+      "answer": 1,
+      "explanation": "401 means not authenticated. For a resource the caller should not know exists, many APIs answer 404."
+    },
+    {
+      "prompt": "What does `new URLSearchParams('page=2').get('page')` return?",
+      "choices": [
+        "2",
+        "'2'",
+        "null",
+        "NaN"
+      ],
+      "answer": 1,
+      "explanation": "Query values are always strings (or null). Convert and validate before use."
+    },
+    {
+      "prompt": "What does `new URLSearchParams('q=x+y').get('q')` return?",
+      "choices": [
+        "'x+y'",
+        "'x%2By'",
+        "'x y'",
+        "'xy'"
+      ],
+      "answer": 2,
+      "explanation": "In query strings '+' decodes to a space; a literal plus is sent as %2B."
+    },
+    {
+      "prompt": "In Express, how is an error-handling middleware recognised?",
+      "choices": [
+        "By its name",
+        "By being registered first",
+        "By returning a promise",
+        "By having four parameters: (err, req, res, next)"
+      ],
+      "answer": 3,
+      "explanation": "Express checks the function arity; register it after the routes."
+    },
+    {
+      "prompt": "Why is `Object.assign(user, req.body)` in an update handler dangerous?",
+      "choices": [
+        "It is slow",
+        "It lets clients set fields they should never control, like role or isAdmin",
+        "It loses the id",
+        "It only works for POST"
+      ],
+      "answer": 1,
+      "explanation": "This is mass assignment. Copy only an explicit allow-list of fields."
+    },
+    {
+      "prompt": "A client sends `?limit=100000`. What should the server do?",
+      "choices": [
+        "Return 100,000 rows",
+        "Cap the limit at a server-side maximum (or reject it)",
+        "Return 500",
+        "Ignore pagination"
+      ],
+      "answer": 1,
+      "explanation": "Unbounded page sizes let one request overload the database."
+    },
+    {
+      "prompt": "What does `decodeURIComponent(\"%E0%A4%A\")` do?",
+      "choices": [
+        "Returns the input unchanged",
+        "Returns ''",
+        "Returns null",
+        "Throws a URIError, which a router should turn into a 400"
+      ],
+      "answer": 3,
+      "explanation": "Malformed percent-encoding throws; an unhandled URIError would surface as a 500."
+    },
+    {
+      "prompt": "Why is cursor pagination preferred for infinite scroll over offset pagination?",
+      "choices": [
+        "It is stable when rows are inserted and fast for deep pages",
+        "It needs no sort order",
+        "It returns more rows",
+        "Browsers require it"
+      ],
+      "answer": 0,
+      "explanation": "Offsets shift as rows are added (duplicates, gaps) and the database must skip all earlier rows."
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "Define idempotent for HTTP.",
+      "back": "Sending the same request many times has the same effect on the server as sending it once."
+    },
+    {
+      "front": "401 versus 403",
+      "back": "401: the caller is not authenticated (missing or invalid credentials). 403: authenticated, but not permitted to do this."
+    },
+    {
+      "front": "When do you return 409?",
+      "back": "When a request conflicts with current state: a duplicate unique value, or an update based on a stale version."
+    },
+    {
+      "front": "What type are route params and query values?",
+      "back": "Strings, or null when a query key is absent. Convert and validate them before they reach business logic."
+    },
+    {
+      "front": "Why does middleware order matter?",
+      "back": "Each middleware sees only what earlier ones prepared, so parsing comes before handlers, auth before routes, and the error handler last."
+    },
+    {
+      "front": "What is mass assignment and how do you prevent it?",
+      "back": "Copying a whole request body onto a model so clients can set privileged fields. Copy only an explicit list of allowed fields."
+    },
+    {
+      "front": "Offset versus cursor pagination",
+      "back": "Offset is simple but slow deep down and shifts when rows are inserted; a cursor over a stable sort key is fast and consistent."
+    },
+    {
+      "front": "What should a 201 response include?",
+      "back": "A Location header pointing at the new resource, usually with the created representation in the body."
+    }
+  ],
+  "drills": [
+    {
+      "slug": "01-route-matcher",
+      "title": "Match a route pattern and extract params",
+      "difficulty": 2,
+      "skills": [
+        "routing",
+        "URL decoding"
+      ],
+      "instructions": "**Interview prompt.** \"Write the matcher behind `app.get('/users/:id/orders/:orderId', ...)` without a framework.\"\n\n**Why it matters.** Every router compares path segments, captures named parameters and decodes them. The edge cases (query strings, trailing slashes, percent-encoding, malformed input) are where real routers differ from naive `split('/')` code.\n\n**Your task.** Export `matchRoute(pattern, url)`. It returns an object of params, or `null` when the URL does not match:\n- ignore everything from `?` onwards in `url`\n- a single trailing slash on the path is ignored (a path of users, 42 and a final slash still matches a two-segment pattern), except for the root path\n- the pattern and the path must have the same number of segments\n- a static segment must equal the path segment exactly (case-sensitive)\n- a `:name` segment matches any NON-EMPTY segment and captures it, percent-decoded\n- a segment that fails to decode (a malformed `%` sequence) makes the result `null`, never a thrown error\n\n**Worked example.** `matchRoute('/users/:id', '/users/caf%C3%A9?x=1')` is `{ id: 'café' }`.",
+      "starter": "export function matchRoute(pattern, url) {\n  // TODO: compare segments, capture :params, decode them\n}\n",
+      "solution": "const segments = (p) => p.split('/').slice(1);\n\nexport function matchRoute(pattern, url) {\n  let path = url.split('?')[0];\n  if (path.length > 1 && path.endsWith('/')) path = path.slice(0, -1);\n  const want = segments(pattern);\n  const have = segments(path);\n  if (want.length !== have.length) return null;\n  const params = {};\n  for (let i = 0; i < want.length; i++) {\n    const w = want[i];\n    const h = have[i];\n    if (w.startsWith(':')) {\n      if (h === '') return null;\n      try {\n        params[w.slice(1)] = decodeURIComponent(h);\n      } catch {\n        return null;\n      }\n    } else if (w !== h) {\n      return null;\n    }\n  }\n  return params;\n}\n",
+      "tests": [
+        {
+          "name": "captures named params",
+          "code": "assert.equal(typeof mod.matchRoute, 'function', 'export matchRoute');\nassert.deepEqual(mod.matchRoute('/users/:id/orders/:orderId', '/users/42/orders/7'), { id: '42', orderId: '7' });"
+        },
+        {
+          "name": "query string ignored, params decoded",
+          "code": "assert.deepEqual(mod.matchRoute('/users/:id', '/users/caf%C3%A9?x=1'), { id: 'café' });"
+        },
+        {
+          "name": "a trailing slash is tolerated",
+          "code": "assert.deepEqual(mod.matchRoute('/users/:id', '/users/42/'), { id: '42' });\nassert.deepEqual(mod.matchRoute('/', '/'), {});"
+        },
+        {
+          "name": "wrong segment count, static mismatch or an empty param do not match",
+          "code": "assert.equal(mod.matchRoute('/users/:id', '/users'), null);\nassert.equal(mod.matchRoute('/users/:id', '/users/42/orders'), null);\nassert.equal(mod.matchRoute('/users/:id', '/Users/42'), null);\nassert.equal(mod.matchRoute('/users/:id/orders', '/users//orders'), null);"
+        },
+        {
+          "name": "malformed encoding returns null instead of throwing (boundary)",
+          "code": "assert.equal(mod.matchRoute('/files/:name', '/files/%E0%A4%A'), null);"
+        },
+        {
+          "name": "a static route returns an empty params object",
+          "code": "assert.deepEqual(mod.matchRoute('/health', '/health?verbose=1'), {});"
+        }
+      ],
+      "explanation": "Normalise the path (drop the query, drop one trailing slash), compare segment counts, then walk both lists:\n\n```js\nif (w.startsWith(':')) {\n  if (h === '') return null;\n  try { params[w.slice(1)] = decodeURIComponent(h); } catch { return null; }\n} else if (w !== h) {\n  return null;\n}\n```\n\nDecoding per segment AFTER splitting matters: decoding the whole URL first would turn an encoded `%2F` inside an id into a real `/` and change the segment count.",
+      "hints": [
+        "Strip the query string and one trailing slash first, then compare the two paths segment by segment.",
+        "Split both on slash, require equal lengths, capture segments whose pattern starts with a colon using decodeURIComponent inside try/catch, and compare static segments with ===.",
+        "Clean the path, line up pattern pieces and path pieces one to one, treat colon pieces as named captures that must be non-empty and decodable, and fail as soon as a fixed piece differs."
+      ]
+    }
+  ]
+}
