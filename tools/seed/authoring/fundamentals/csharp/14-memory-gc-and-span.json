@@ -1,0 +1,176 @@
+{
+  "format": "fundamentals-authoring@1",
+  "track": "csharp",
+  "topic": "14-memory-gc-and-span",
+  "title": "Memory, GC & Span<T>",
+  "level": "advanced",
+  "summary": "Stack versus heap in practice, the generational GC and the large object heap, what allocates (strings, boxing, closures, LINQ), Span<T> and ReadOnlySpan<T> for allocation-free slicing, and ArrayPool.",
+  "lesson": "## Where values live (the useful approximation)\n\n- **Locals of value types** (an `int`, a small struct) live in the method's stack frame or inside whatever contains them.\n- **Objects** (class instances, arrays, strings, boxed values, closures) are allocated on the **managed heap** and cleaned up by the garbage collector.\n\nThe real rule is \"value types live where their container lives\": an `int` field of a class is on the heap, inside that object.\n\n## The generational GC\n\nNew objects start in **generation 0**. A gen-0 collection is fast and frequent; objects that survive move to gen 1, then gen 2. `GC.MaxGeneration` is 2. Objects of 85,000 bytes or more go straight to the **large object heap** (collected with gen 2), so allocating big temporary arrays repeatedly is expensive.\n\nMost objects die young, which is why short-lived allocations are cheap but not free: every allocation brings the next collection closer, and in a busy API, allocations per request translate directly into GC pauses and CPU.\n\n## What allocates, often unnoticed\n\n- **Strings**: every `Substring`, `Split`, `+`, `ToLower`, `string.Format` creates new strings.\n- **Boxing**: putting a value type into `object` or a non-generic interface (`ArrayList`, `string.Format(\"{0}\", 42)` in old APIs, `IComparable` on a struct).\n- **Closures**: a lambda that captures locals allocates a closure object (and a delegate).\n- **LINQ**: iterators and delegates per call; fine in normal code, avoidable in hot loops.\n- **params arrays**, `ToList()` copies, async state machines for methods that actually await.\n\nMeasure before optimising: `GC.GetAllocatedBytesForCurrentThread()`, BenchmarkDotNet with `[MemoryDiagnoser]`, or `dotnet-counters`.\n\n## Span<T>: a view, not a copy\n\n`Span<T>` and `ReadOnlySpan<T>` represent a contiguous slice of memory (an array, a string, stack memory) without copying it:\n\n```csharp\nReadOnlySpan<char> s = \"2026-11-04\".AsSpan();\nint year  = int.Parse(s[..4]);        // no Substring, no new string\nint month = int.Parse(s.Slice(5, 2));\n\nvar arr = new[] { 1, 2, 3 };\nSpan<int> tail = arr.AsSpan(1);\ntail[0] = 9;                          // writes through: arr is now [1, 9, 3]\n\nSpan<byte> buffer = stackalloc byte[256];   // stack memory, no heap allocation\n```\n\nSpans are **ref structs**: they can live only on the stack, so they cannot be fields of classes, be captured by lambdas, or live across `await`. For those cases use `Memory<T>` / `ReadOnlyMemory<T>`, which can be stored and sliced the same way.\n\nMost parsing APIs (`int.Parse`, `DateOnly.TryParse`, `Utf8JsonReader`, `string.Split` successors) accept spans.\n\n## Reusing buffers\n\n`ArrayPool<T>.Shared.Rent(size)` hands out an array of AT LEAST that size from a pool; `Return` it when done (and never use it afterwards). It avoids allocating a new large buffer per request for things like stream copies and compression.\n\n## When to care\n\nFor typical CRUD endpoints, database round-trips dominate and allocation tuning is irrelevant. It matters in hot paths: parsing large files, serialisation, middleware that runs on every request, and high-throughput services. Clarity first; Span where a profiler says so.",
+  "quiz": [
+    {
+      "prompt": "In which generation does a newly allocated small object start?",
+      "choices": [
+        "Gen 2",
+        "The large object heap",
+        "Gen 0",
+        "Gen 1"
+      ],
+      "answer": 2,
+      "explanation": "New objects start in gen 0; survivors are promoted to gen 1 and gen 2."
+    },
+    {
+      "prompt": "Where is a `new byte[100_000]` allocated?",
+      "choices": [
+        "Gen 0",
+        "The stack",
+        "The large object heap (collected with gen 2)",
+        "Unmanaged memory"
+      ],
+      "answer": 2,
+      "explanation": "Objects of 85,000 bytes or more go to the LOH."
+    },
+    {
+      "prompt": "Which of these allocates on the heap?",
+      "choices": [
+        "int x = 5;",
+        "object o = 5;",
+        "Span<int> s = stackalloc int[3];",
+        "var t = (1, 2);"
+      ],
+      "answer": 1,
+      "explanation": "Assigning a value type to object boxes it into a new heap object."
+    },
+    {
+      "prompt": "`int.Parse(\"2026-11-04\".AsSpan()[..4])` versus `int.Parse(s.Substring(0, 4))`: what is the difference?",
+      "choices": [
+        "The span version parses without allocating a new string",
+        "They are identical",
+        "The span version is slower",
+        "Substring does not allocate"
+      ],
+      "answer": 0,
+      "explanation": "Slicing a span is a view over the original string; Substring copies characters into a new string."
+    },
+    {
+      "prompt": "`var arr = new[] { 1, 2, 3 }; var t = arr.AsSpan(1); t[0] = 9;` What is arr now?",
+      "choices": [
+        "[1, 2, 3]",
+        "[9, 2, 3]",
+        "[1, 9, 3]",
+        "It throws"
+      ],
+      "answer": 2,
+      "explanation": "A span is a window onto the same memory; writes go through to the array."
+    },
+    {
+      "prompt": "Why can a `Span<T>` not be a field of a class or survive an `await`?",
+      "choices": [
+        "It is too large",
+        "It is a ref struct that must live on the stack",
+        "It is not thread-safe",
+        "It is immutable"
+      ],
+      "answer": 1,
+      "explanation": "Use Memory<T> when the slice must be stored or cross an await."
+    },
+    {
+      "prompt": "Which statement about ArrayPool<T>.Shared.Rent(10) is true?",
+      "choices": [
+        "It returns an array of exactly 10",
+        "It returns an array of at least 10 that you must Return and not use afterwards",
+        "It allocates on the stack",
+        "It never reuses arrays"
+      ],
+      "answer": 1,
+      "explanation": "Pooled arrays may be larger than requested; track the length you actually use."
+    },
+    {
+      "prompt": "A lambda captures a local variable. What extra allocations can that cause?",
+      "choices": [
+        "None",
+        "A closure object holding the captured variables, plus the delegate",
+        "A new thread",
+        "A boxed copy of every local in the method"
+      ],
+      "answer": 1,
+      "explanation": "Captured locals move into a compiler-generated class instance."
+    },
+    {
+      "prompt": "Your CRUD endpoint is slow. Where should you look first?",
+      "choices": [
+        "Replacing strings with spans",
+        "Database round-trips, missing indexes and N+1 queries",
+        "Tuning the GC",
+        "Using stackalloc"
+      ],
+      "answer": 1,
+      "explanation": "In typical APIs, I/O dominates; allocation tuning matters in measured hot paths."
+    },
+    {
+      "prompt": "Which tool reports allocated bytes per benchmark?",
+      "choices": [
+        "BenchmarkDotNet with [MemoryDiagnoser]",
+        "Console.WriteLine",
+        "The debugger's locals window",
+        "dotnet format"
+      ],
+      "answer": 0,
+      "explanation": "Measure allocations before and after an optimisation instead of guessing."
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "Value types on the stack: the precise version",
+      "back": "Value types live wherever their container lives: a local in the stack frame, a field inside its object on the heap."
+    },
+    {
+      "front": "How does the generational GC work?",
+      "back": "New objects start in gen 0, which is collected often and cheaply; survivors move up to gen 1 and gen 2, collected less often."
+    },
+    {
+      "front": "What is the large object heap?",
+      "back": "Where objects of 85,000 bytes or more are allocated; it is collected with gen 2, so churning big arrays is costly."
+    },
+    {
+      "front": "Five common hidden allocations",
+      "back": "New strings from string operations, boxing, closures from capturing lambdas, LINQ iterators and delegates, and params arrays."
+    },
+    {
+      "front": "What is a Span<T>?",
+      "back": "A view over contiguous memory (array, string or stack) that slices without copying."
+    },
+    {
+      "front": "Span<T> versus Memory<T>",
+      "back": "Span is a stack-only ref struct for synchronous code; Memory can be stored in fields and used across await."
+    },
+    {
+      "front": "Rules for pooled arrays",
+      "back": "They may be larger than requested, must be returned to the pool, and must not be touched after being returned."
+    },
+    {
+      "front": "When do allocations matter?",
+      "back": "In measured hot paths such as parsing, serialisation and per-request middleware; elsewhere clarity wins."
+    }
+  ],
+  "drills": [
+    {
+      "slug": "01-allocation-free-date-parse",
+      "title": "Parse an ISO date without allocating",
+      "difficulty": 3,
+      "skills": [
+        "ReadOnlySpan<char>",
+        "validation"
+      ],
+      "instructions": "**Interview prompt.** \"Our log importer parses 50 million timestamps, and a profile shows most time in GC from Substring calls. Rewrite the date parser so it allocates nothing.\"\n\n**Why it matters.** Slicing a `ReadOnlySpan<char>` and parsing the slices directly avoids creating three temporary strings per date. The validation rules stay exactly the same.\n\n**Your task.** Implement the stubbed local function `bool TryParseIsoDate(ReadOnlySpan<char> s, out int year, out int month, out int day)`:\n- the text must be exactly 10 characters: four digits, `-`, two digits, `-`, two digits (ASCII digits only; no signs or spaces)\n- the month must be 1 to 12 and the day must exist in that month and year (leap years included)\n- on success return true with the parts; on failure return false (the out values are then 0)\n- the method must not allocate on the managed heap (no Substring, Split, ToString or new strings)\n\n**Worked example.** `\"2024-02-29\"` parses (2024 is a leap year); `\"2023-02-29\"` does not.",
+      "starterHead": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · allocation-free date parsing★★★ core\n//  concepts: ReadOnlySpan<char> · slicing · validation\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Slice the span and parse the slices: no temporary strings.\n\nusing static Bootcamp.Check;\n\nbool TryParseIsoDate(ReadOnlySpan<char> s, out int year, out int month, out int day)\n{\n    // TODO: validate the shape, parse the slices, check the calendar; never allocate\n    throw new NotImplementedException();\n}\n\n",
+      "solutionHead": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · allocation-free date parsing★★★ core\n//  concepts: ReadOnlySpan<char> · slicing · validation\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Slice the span and parse the slices: no temporary strings.\n\nusing static Bootcamp.Check;\n\nbool TryParseIsoDate(ReadOnlySpan<char> s, out int year, out int month, out int day)\n{\n    year = month = day = 0;\n    if (s.Length != 10 || s[4] != '-' || s[7] != '-') return false;\n    for (var i = 0; i < 10; i++)\n    {\n        if (i == 4 || i == 7) continue;\n        if (s[i] < '0' || s[i] > '9') return false;\n    }\n    var y = int.Parse(s[..4]);\n    var m = int.Parse(s.Slice(5, 2));\n    var d = int.Parse(s.Slice(8, 2));\n    if (y < 1 || m is < 1 or > 12 || d < 1 || d > DateTime.DaysInMonth(y, m)) return false;\n    (year, month, day) = (y, m, d);\n    return true;\n}\n\n",
+      "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"a valid date parses\", () =>\n{\n    Ok(TryParseIsoDate(\"2026-11-04\", out var y, out var m, out var d), \"should parse\");\n    Eq((y, m, d), (2026, 11, 4));\n});\n\nTest(\"leap days follow the calendar\", () =>\n{\n    Ok(TryParseIsoDate(\"2024-02-29\", out _, out _, out _), \"2024 is a leap year\");\n    Ok(!TryParseIsoDate(\"2023-02-29\", out _, out _, out _), \"2023 is not\");\n    Ok(!TryParseIsoDate(\"2026-04-31\", out _, out _, out _), \"April has 30 days\");\n});\n\nTest(\"wrong shapes are rejected\", () =>\n{\n    foreach (var bad in new[] { \"2026-1-04\", \"2026/11/04\", \"2026-11-04T\", \"20261104\", \"2026-13-01\", \"2026-00-10\", \"2026-11-00\", \"+026-11-04\", \"2026-1a-04\", \"\" })\n    {\n        Ok(!TryParseIsoDate(bad, out var y, out _, out _), bad);\n        Eq(y, 0);\n    }\n});\n\nTest(\"parsing allocates nothing (boundary)\", () =>\n{\n    var text = \"2026-11-04 rest of the log line\".AsSpan(0, 10).ToArray();\n    TryParseIsoDate(text, out _, out _, out _);\n    var before = GC.GetAllocatedBytesForCurrentThread();\n    for (var i = 0; i < 1000; i++) TryParseIsoDate(text, out _, out _, out _);\n    var allocated = GC.GetAllocatedBytesForCurrentThread() - before;\n    Ok(allocated < 1000, $\"allocated {allocated} bytes for 1000 parses\");\n});\n\n",
+      "explanation": "Check the shape character by character, then let `int.Parse` read each slice of the span directly:\n\n```csharp\nif (s.Length != 10 || s[4] != '-' || s[7] != '-') return false;\n// ... every other character must be an ASCII digit ...\nvar y = int.Parse(s[..4]);\nvar m = int.Parse(s.Slice(5, 2));\nvar d = int.Parse(s.Slice(8, 2));\nif (y < 1 || m is < 1 or > 12 || d < 1 || d > DateTime.DaysInMonth(y, m)) return false;\n```\n\nThe digit check comes first so `int.Parse` never sees a sign or a letter (and never throws). A `Substring`-based version gives the same answers but allocates three strings per call, about 90 KB for the 1,000 parses in the last test.",
+      "hints": [
+        "A ReadOnlySpan can be indexed and sliced like a string, and int.Parse accepts a span slice directly.",
+        "Check the length and the two dashes, loop to make sure every other character is between 0 and 9, parse the three slices with int.Parse, and validate the day with DateTime.DaysInMonth.",
+        "Confirm the overall shape and that the right positions hold digits before converting anything, read the year, month and day straight from slices of the input, and accept the date only if that month really has that day."
+      ]
+    }
+  ]
+}

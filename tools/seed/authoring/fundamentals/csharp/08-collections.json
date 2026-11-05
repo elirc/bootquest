@@ -1,0 +1,177 @@
+{
+  "format": "fundamentals-authoring@1",
+  "track": "csharp",
+  "topic": "08-collections",
+  "title": "Collections",
+  "level": "intermediate",
+  "summary": "List, Dictionary, HashSet, Queue and Stack: their costs, TryGetValue versus the indexer, key comparers, modifying a list while iterating, read-only views, and choosing the right collection.",
+  "lesson": "## The everyday collections\n\n| type | strength | lookup cost |\n|---|---|---|\n| `List<T>` | ordered, indexable, growable array | by index O(1), by value O(n) |\n| `Dictionary<TKey, TValue>` | lookup by key | O(1) average |\n| `HashSet<T>` | unique values, membership | O(1) average |\n| `Queue<T>` / `Stack<T>` | FIFO / LIFO work lists | O(1) enqueue / push |\n| `SortedDictionary` / `SortedSet` | keys kept in sorted order | O(log n) |\n\nChoosing the right one is most of the performance work in CRUD code: a `List.Contains` inside a loop over 10,000 items is 100 million comparisons; a `HashSet.Contains` is 10,000.\n\n## Dictionary: indexer, Add and TryGetValue\n\n```csharp\nvar stock = new Dictionary<string, int> { [\"pen\"] = 4 };\nstock[\"ink\"]                       // KeyNotFoundException\nstock.TryGetValue(\"ink\", out var n)  // false, n = 0: the no-exception lookup\nstock[\"pen\"] = 9;                  // indexer SET: adds or overwrites\nstock.Add(\"pen\", 1);               // ArgumentException: key already exists\nstock.GetValueOrDefault(\"ink\")     // 0\n```\n\nUse `TryGetValue` for \"may be missing\" lookups (one hash lookup instead of `ContainsKey` plus the indexer). Do not rely on Dictionary enumeration order; it is not guaranteed.\n\n## Key equality and comparers\n\nDictionary and HashSet compare keys with the key type's `Equals` and `GetHashCode` (topic 13). For strings you usually want a comparer:\n\n```csharp\nvar byEmail = new Dictionary<string, User>(StringComparer.OrdinalIgnoreCase);\nbyEmail[\"Ana@Example.com\"] = ana;\nbyEmail.ContainsKey(\"ana@example.com\")   // true\n```\n\nNever mutate an object that is used as a key: its hash changes and the dictionary can no longer find it.\n\n## Modifying while iterating\n\n```csharp\nforeach (var x in list) if (x == 2) list.Remove(x);   // InvalidOperationException: collection was modified\nlist.RemoveAll(x => x == 2);                           // correct\n```\n\nAlternatives: iterate a copy (`foreach (var x in list.ToList())`), loop backwards by index, or build a new list.\n\n## Exposing collections\n\nReturn `IReadOnlyList<T>` / `IReadOnlyCollection<T>` / `IReadOnlyDictionary` from APIs so callers cannot add or remove. Note this is a read-only **view**: if the owner changes the underlying list, the view reflects it. For a true snapshot, copy (`ToList()`, or the immutable collections in `System.Collections.Immutable`).\n\n## Other details worth knowing\n\n- `list[i]` outside the range throws `ArgumentOutOfRangeException`.\n- `HashSet.Add` returns `false` when the value was already present: a cheap \"seen before?\" check.\n- `List<T>` grows by doubling its capacity; pre-size with `new List<T>(count)` when you know the size.\n- None of these collections are thread-safe for writes. Use `ConcurrentDictionary` (or a lock) when several threads write.",
+  "quiz": [
+    {
+      "prompt": "What does `dict[\"missing\"]` do on a Dictionary without that key?",
+      "choices": [
+        "Returns default",
+        "Returns null",
+        "Throws KeyNotFoundException",
+        "Adds the key"
+      ],
+      "answer": 2,
+      "explanation": "The indexer GET throws for missing keys; TryGetValue and GetValueOrDefault do not."
+    },
+    {
+      "prompt": "What does `dict.Add(\"pen\", 1)` do when \"pen\" already exists?",
+      "choices": [
+        "Throws ArgumentException",
+        "Overwrites the value",
+        "Ignores the call",
+        "Returns false"
+      ],
+      "answer": 0,
+      "explanation": "Add requires a new key. The indexer setter dict[\"pen\"] = 1 overwrites."
+    },
+    {
+      "prompt": "Removing items from a List inside a foreach over that same list...",
+      "choices": [
+        "works",
+        "skips every other item silently",
+        "throws InvalidOperationException: collection was modified",
+        "only works for value types"
+      ],
+      "answer": 2,
+      "explanation": "Enumerators detect modification. Use RemoveAll, iterate a copy, or loop backwards."
+    },
+    {
+      "prompt": "What does `new HashSet<int> { 1 }.Add(1)` return?",
+      "choices": [
+        "true",
+        "false",
+        "It throws",
+        "1"
+      ],
+      "answer": 1,
+      "explanation": "Add reports whether the value was newly added, which makes HashSet a cheap duplicate detector."
+    },
+    {
+      "prompt": "Which makes a string-keyed Dictionary match keys case-insensitively?",
+      "choices": [
+        "Lower-casing keys on read only",
+        "Using SortedDictionary",
+        "It is the default",
+        "Constructing it with StringComparer.OrdinalIgnoreCase"
+      ],
+      "answer": 3,
+      "explanation": "Pass a comparer to the constructor; it is used for both hashing and equality."
+    },
+    {
+      "prompt": "You check 10,000 ids against a list of 10,000 allowed ids. What is the better data structure for the allowed ids?",
+      "choices": [
+        "A HashSet<int>",
+        "A List<int>",
+        "A Queue<int>",
+        "An array"
+      ],
+      "answer": 0,
+      "explanation": "HashSet membership is O(1) average; List.Contains scans the list each time."
+    },
+    {
+      "prompt": "A method returns its private list as `IReadOnlyList<T>`. The class then adds an item. What does a caller holding the view see?",
+      "choices": [
+        "The old count",
+        "An exception",
+        "The new item: it is a view of the same list, not a copy",
+        "Nothing until it refreshes"
+      ],
+      "answer": 2,
+      "explanation": "IReadOnlyList prevents callers from writing, but it is not a snapshot."
+    },
+    {
+      "prompt": "Is the enumeration order of a Dictionary<TKey, TValue> guaranteed?",
+      "choices": [
+        "Yes, insertion order",
+        "Yes, sorted by key",
+        "Only for string keys",
+        "No: do not rely on it; use SortedDictionary or sort explicitly"
+      ],
+      "answer": 3,
+      "explanation": "The order is an implementation detail; sort or use an ordered collection when order matters."
+    },
+    {
+      "prompt": "Why is `TryGetValue` preferred over `ContainsKey` followed by the indexer?",
+      "choices": [
+        "It performs one lookup instead of two and cannot throw",
+        "ContainsKey is obsolete",
+        "It is thread-safe",
+        "It sorts the keys"
+      ],
+      "answer": 0,
+      "explanation": "TryGetValue does the hash lookup once and reports success."
+    },
+    {
+      "prompt": "Several request threads add to the same Dictionary. What should you use?",
+      "choices": [
+        "A plain Dictionary",
+        "A List instead",
+        "ConcurrentDictionary or a lock",
+        "A static field"
+      ],
+      "answer": 2,
+      "explanation": "Standard collections are not safe for concurrent writes and can corrupt their internal state."
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "Dictionary indexer get versus TryGetValue",
+      "back": "The indexer throws KeyNotFoundException for a missing key; TryGetValue returns false and sets the out value to default."
+    },
+    {
+      "front": "Dictionary Add versus indexer set",
+      "back": "Add throws when the key exists; assigning through the indexer adds or overwrites."
+    },
+    {
+      "front": "How do you remove items while iterating a List?",
+      "back": "Use RemoveAll with a predicate, iterate a copy, or walk the indexes backwards."
+    },
+    {
+      "front": "What does HashSet.Add's return value tell you?",
+      "back": "Whether the value was new; false means it was already in the set."
+    },
+    {
+      "front": "How do you make string keys case-insensitive?",
+      "back": "Construct the Dictionary or HashSet with StringComparer.OrdinalIgnoreCase."
+    },
+    {
+      "front": "Is an IReadOnlyList a snapshot?",
+      "back": "No, it is a read-only view; changes by the owner show through. Copy it for a snapshot."
+    },
+    {
+      "front": "Why never mutate a dictionary key object?",
+      "back": "Its hash code changes, so the entry sits in the wrong bucket and can no longer be found."
+    },
+    {
+      "front": "Which collections are safe for concurrent writes?",
+      "back": "The System.Collections.Concurrent types such as ConcurrentDictionary; the ordinary collections need a lock."
+    }
+  ],
+  "drills": [
+    {
+      "slug": "01-index-posts-by-tag",
+      "title": "Index posts by tag",
+      "difficulty": 2,
+      "skills": [
+        "Dictionary",
+        "comparers"
+      ],
+      "instructions": "**Interview prompt.** \"The tag page searches every post for every request. Build an index once: tag to posts, case-insensitive, no duplicates.\"\n\n**Why it matters.** Turning an O(n) scan per request into one O(1) lookup is the most common collection optimisation in CRUD apps, and getting key equality right (case, duplicates) is where it usually goes wrong.\n\n**Your task.** Implement the stubbed local function `Dictionary<string, List<int>> IndexByTag(IEnumerable<Post> posts)`:\n- keys are tags, compared case-insensitively (ordinal), so lookups of `\"csharp\"` and `\"CSharp\"` find the same entry\n- each value is the list of post ids having that tag, in the order the posts appear\n- a post lists each of its tags at most once in a tag's list, even if the post repeats the tag in different cases\n- blank or whitespace-only tags are ignored; tags are trimmed\n\n**Worked example.** Posts 1 (`\"CSharp\"`, `\"linq\"`) and 2 (`\"csharp\"`) give `csharp → [1, 2]` and `linq → [1]`.",
+      "starterHead": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · index posts by tag★★☆ core\n//  concepts: Dictionary · StringComparer · HashSet\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Build the lookup once instead of scanning every post per request.\n\nusing static Bootcamp.Check;\n\nDictionary<string, List<int>> IndexByTag(IEnumerable<Post> posts)\n{\n    // TODO: case-insensitive tag -> post ids, no duplicates, blank tags skipped\n    throw new NotImplementedException();\n}\n\n",
+      "solutionHead": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · index posts by tag★★☆ core\n//  concepts: Dictionary · StringComparer · HashSet\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Build the lookup once instead of scanning every post per request.\n\nusing static Bootcamp.Check;\n\nDictionary<string, List<int>> IndexByTag(IEnumerable<Post> posts)\n{\n    var index = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);\n    foreach (var post in posts)\n    {\n        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);\n        foreach (var raw in post.Tags)\n        {\n            var tag = raw.Trim();\n            if (tag.Length == 0 || !seen.Add(tag)) continue;\n            if (!index.TryGetValue(tag, out var ids)) index[tag] = ids = new List<int>();\n            ids.Add(post.Id);\n        }\n    }\n    return index;\n}\n\n",
+      "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"tags map to post ids in order\", () =>\n{\n    var idx = IndexByTag(new[] { new Post(1, new[] { \"CSharp\", \"linq\" }), new Post(2, new[] { \"csharp\" }) });\n    Eq(idx[\"csharp\"], new[] { 1, 2 });\n    Eq(idx[\"linq\"], new[] { 1 });\n});\n\nTest(\"lookups are case-insensitive\", () =>\n{\n    var idx = IndexByTag(new[] { new Post(7, new[] { \"EF Core\" }) });\n    Ok(idx.ContainsKey(\"ef core\"), \"lower-case lookup\");\n    Ok(idx.ContainsKey(\"EF CORE\"), \"upper-case lookup\");\n});\n\nTest(\"a post repeating a tag is listed once\", () =>\n{\n    var idx = IndexByTag(new[] { new Post(3, new[] { \"api\", \"API\", \" api \" }) });\n    Eq(idx[\"api\"], new[] { 3 });\n    Eq(idx.Count, 1);\n});\n\nTest(\"blank tags are ignored (boundary)\", () =>\n{\n    var idx = IndexByTag(new[] { new Post(4, new[] { \"\", \"   \" }) });\n    Eq(idx.Count, 0);\n});\n\nTest(\"no posts gives an empty index\", () =>\n    Eq(IndexByTag(Array.Empty<Post>()).Count, 0));\n\n",
+      "tail": "// ──────────────────────────── types ──────────────────────────────────────\n\nrecord Post(int Id, string[] Tags);\n",
+      "explanation": "Give the dictionary a case-insensitive comparer, and use a per-post HashSet with the same comparer to skip repeated tags:\n\n```csharp\nvar index = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);\nforeach (var post in posts)\n{\n    var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);\n    foreach (var raw in post.Tags)\n    {\n        var tag = raw.Trim();\n        if (tag.Length == 0 || !seen.Add(tag)) continue;\n        if (!index.TryGetValue(tag, out var ids)) index[tag] = ids = new List<int>();\n        ids.Add(post.Id);\n    }\n}\n```\n\n`TryGetValue` gets or creates the list with a single lookup. Lower-casing keys yourself would also work for the index but not for callers who look up with another case unless they remember to lower-case too: the comparer makes it automatic.",
+      "hints": [
+        "The dictionary itself can be told how to compare keys, and HashSet.Add tells you whether a tag was already seen.",
+        "Create the Dictionary and a per-post HashSet with StringComparer.OrdinalIgnoreCase, trim each tag, skip blanks and repeats, and use TryGetValue to get or create each list.",
+        "Build one case-insensitive map from tag to a list of ids, and for every post keep a small case-insensitive set of the tags already handled so a repeated or blank tag is skipped."
+      ]
+    }
+  ]
+}

@@ -1,0 +1,178 @@
+{
+  "format": "fundamentals-authoring@1",
+  "track": "csharp",
+  "topic": "13-equality-and-hashing",
+  "title": "Equality & hashing",
+  "level": "advanced",
+  "summary": "== versus Equals for classes, structs, strings and boxed values; the Equals/GetHashCode contract; IEquatable<T>; why mutable keys vanish from dictionaries; double, decimal and NaN.",
+  "lesson": "## Two questions: same object, or same value?\n\n| type | `==` by default | `Equals` by default |\n|---|---|---|\n| class | reference (same object) | reference |\n| struct | not defined unless you add it | field-by-field (via reflection: slow) |\n| string | value (overloaded) | value |\n| record | value (generated) | value (generated) |\n\n```csharp\nobject a = 1, b = 1;\na == b        // False: == on object compares references, and these are two boxes\na.Equals(b)   // True:  Int32.Equals compares values\n```\n\nThe `==` operator is chosen at **compile time** from the static types; `Equals` is virtual and dispatched at runtime. Code that compares `object` or generic `T` values must use `Equals` (or `EqualityComparer<T>.Default`).\n\n## The contract\n\nIf you override `Equals`, you MUST override `GetHashCode` consistently:\n\n1. Equal objects must return equal hash codes.\n2. The hash code must not change while the object is in a hash-based collection.\n3. Equals must be reflexive, symmetric and transitive, and `x.Equals(null)` is false.\n\nDictionary and HashSet first compare hash codes to pick a bucket, then call Equals. Break rule 1 and equal keys are not found; break rule 2 and an existing key disappears:\n\n```csharp\nvar key = new Key { Id = 1 };\nvar set = new HashSet<Key> { key };\nkey.Id = 2;              // its hash changes\nset.Contains(key)        // False: it sits in the bucket for the OLD hash\n```\n\nMake key types **immutable** (records are ideal).\n\n## Implementing value equality by hand\n\n```csharp\npublic sealed class Email : IEquatable<Email>\n{\n    private readonly string _value;\n    public Email(string raw) => _value = raw.Trim().ToLowerInvariant();\n    public bool Equals(Email? other) => other is not null && _value == other._value;\n    public override bool Equals(object? obj) => Equals(obj as Email);\n    public override int GetHashCode() => _value.GetHashCode();\n    public static bool operator ==(Email? a, Email? b) => Equals(a, b);\n    public static bool operator !=(Email? a, Email? b) => !Equals(a, b);\n}\n```\n\n`IEquatable<T>` gives collections a typed, non-boxing `Equals`. `HashCode.Combine(a, b, c)` builds a good hash from several fields. For most value objects a **record** generates all of this correctly; hand-write it only when equality is not \"all fields equal\" (normalised email, case-insensitive codes).\n\n## Comparers instead of changing the type\n\n`new HashSet<string>(StringComparer.OrdinalIgnoreCase)` or a custom `IEqualityComparer<T>` changes equality for ONE collection without changing the type everywhere.\n\n## Floating point\n\n`0.1 + 0.2 == 0.3` is false for `double` but true for `decimal` (base-10). Use `decimal` for money. `double.NaN == double.NaN` is false, yet `double.NaN.Equals(double.NaN)` is true, so NaN keys still work in dictionaries.\n\n## Entities versus value objects\n\nAn **entity** (an Order with an Id) is equal to itself across changes: compare by Id, never by all fields. A **value object** (Money, Email) has no identity: compare by value. Mixing the two causes duplicate rows and \"the same order twice\" in sets.",
+  "quiz": [
+    {
+      "prompt": "`object a = 1, b = 1;` What are `a == b` and `a.Equals(b)`?",
+      "choices": [
+        "True and True",
+        "False and True",
+        "True and False",
+        "False and False"
+      ],
+      "answer": 1,
+      "explanation": "== on object compares references of two separate boxes; Int32.Equals compares the values."
+    },
+    {
+      "prompt": "When you override Equals, what else must you override?",
+      "choices": [
+        "ToString",
+        "CompareTo",
+        "GetHashCode, consistently with Equals",
+        "Nothing"
+      ],
+      "answer": 2,
+      "explanation": "Hash-based collections rely on equal objects having equal hash codes."
+    },
+    {
+      "prompt": "A key object's Id (used by its hash code) changes after it was added to a HashSet. What does `set.Contains(key)` return?",
+      "choices": [
+        "True",
+        "It throws",
+        "It depends on Equals only",
+        "False: the object sits in the bucket of its old hash"
+      ],
+      "answer": 3,
+      "explanation": "Mutating a key changes its hash. Keep keys immutable."
+    },
+    {
+      "prompt": "For two `class Customer` instances with identical fields and no overrides, what does `Equals` return?",
+      "choices": [
+        "True",
+        "False: classes use reference equality by default",
+        "Depends on the fields",
+        "It does not compile"
+      ],
+      "answer": 1,
+      "explanation": "Only records, strings and types that override Equals compare by value."
+    },
+    {
+      "prompt": "Is `==` dispatched at runtime like a virtual method?",
+      "choices": [
+        "Yes",
+        "Only for records",
+        "No: the operator is chosen at compile time from the static types",
+        "Only for structs"
+      ],
+      "answer": 2,
+      "explanation": "That is why comparing object or generic T values must use Equals."
+    },
+    {
+      "prompt": "What is `0.1m + 0.2m == 0.3m`?",
+      "choices": [
+        "True",
+        "False",
+        "It throws",
+        "It does not compile"
+      ],
+      "answer": 0,
+      "explanation": "decimal is base-10 and represents these values exactly; double would give false."
+    },
+    {
+      "prompt": "What are `double.NaN == double.NaN` and `double.NaN.Equals(double.NaN)`?",
+      "choices": [
+        "True and True",
+        "False and False",
+        "False and True",
+        "True and False"
+      ],
+      "answer": 2,
+      "explanation": "The operator follows IEEE (NaN is never equal); Equals is defined so NaN can be found in collections."
+    },
+    {
+      "prompt": "Why implement `IEquatable<T>` on a value type or sealed class?",
+      "choices": [
+        "It is required for ==",
+        "It gives collections a typed Equals without boxing or casting",
+        "It enables sorting",
+        "It makes the type immutable"
+      ],
+      "answer": 1,
+      "explanation": "Generic collections call IEquatable<T>.Equals when available."
+    },
+    {
+      "prompt": "How should two Order ENTITIES with the same Id but different totals compare?",
+      "choices": [
+        "Equal: they are the same entity at different moments",
+        "Not equal",
+        "By total",
+        "By reference only"
+      ],
+      "answer": 0,
+      "explanation": "Entities have identity; value objects compare by all their values."
+    },
+    {
+      "prompt": "You need case-insensitive email uniqueness in ONE HashSet without changing the string type. What do you do?",
+      "choices": [
+        "Override string.Equals",
+        "Lower-case before every Add",
+        "Construct the set with StringComparer.OrdinalIgnoreCase",
+        "Use a List"
+      ],
+      "answer": 2,
+      "explanation": "Equality comparers customise equality per collection."
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "Default == and Equals for classes, structs, strings, records",
+      "back": "Classes: reference. Structs: field-wise Equals, no ==. Strings and records: value equality for both."
+    },
+    {
+      "front": "The Equals and GetHashCode contract",
+      "back": "Equal objects must have equal hash codes, and the hash must stay stable while the object is in a hash collection."
+    },
+    {
+      "front": "Why should dictionary keys be immutable?",
+      "back": "Changing a field used by the hash moves the key's hash away from its bucket, so lookups stop finding it."
+    },
+    {
+      "front": "Why compare object or T values with Equals rather than ==?",
+      "back": "Operators are picked at compile time from static types; Equals is virtual and uses the runtime type's definition."
+    },
+    {
+      "front": "What does IEquatable<T> add?",
+      "back": "A strongly typed Equals that collections use without boxing value types or casting."
+    },
+    {
+      "front": "How do you build a hash from several fields?",
+      "back": "HashCode.Combine over the same fields that Equals compares."
+    },
+    {
+      "front": "Entities versus value objects",
+      "back": "Entities are equal when they share identity (their id); value objects are equal when all their values match."
+    },
+    {
+      "front": "double versus decimal for money",
+      "back": "double is binary and cannot represent most decimal fractions exactly; decimal is base-10 and exact for money amounts."
+    }
+  ],
+  "drills": [
+    {
+      "slug": "01-email-value-object",
+      "title": "An Email value object with correct equality",
+      "difficulty": 2,
+      "skills": [
+        "IEquatable",
+        "GetHashCode"
+      ],
+      "instructions": "**Interview prompt.** \"Sign-up allows 'Ana@Example.com' and 'ana@example.com ' as two accounts. Introduce an Email type whose equality ignores case and surrounding spaces, and make sure it works as a dictionary key.\"\n\n**Why it matters.** Normalised equality is exactly the case a record cannot generate for you. Equals, GetHashCode and the operators must agree, or hash-based collections misbehave.\n\n**Your task.** Complete `sealed class Email : IEquatable<Email>` in the types section:\n- the constructor trims the raw text and lower-cases it with the invariant culture; `Value` exposes the result; a blank input throws `ArgumentException`\n- `Equals(Email?)`, `Equals(object?)`, `GetHashCode()`, `==` and `!=` all compare the normalised values; anything compared with null is not equal (and `null == null` is true)\n- `ToString()` returns `Value`\n\n**Worked example.** `new Email(\" Ana@Example.com \") == new Email(\"ana@example.com\")` is true, and a HashSet of both holds one entry.",
+      "starterHead": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · an Email value object★★☆ core\n//  concepts: IEquatable · GetHashCode · operators\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Normalised equality: the case a record cannot generate for you.\n\nusing static Bootcamp.Check;\n\n// TODO: complete Email in the types section\n\n",
+      "solutionHead": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · an Email value object★★☆ core\n//  concepts: IEquatable · GetHashCode · operators\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Normalised equality: the case a record cannot generate for you.\n\nusing static Bootcamp.Check;\n\n// Email is implemented in the types section\n\n",
+      "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"equality ignores case and surrounding spaces\", () =>\n{\n    Ok(new Email(\" Ana@Example.com \") == new Email(\"ana@example.com\"), \"== should be true\");\n    Ok(new Email(\"Ana@Example.com\").Equals(new Email(\"ANA@EXAMPLE.COM\")), \"Equals should be true\");\n    Ok(new Email(\"a@x.io\") != new Email(\"b@x.io\"), \"!= should be true for different addresses\");\n});\n\nTest(\"works as a HashSet and Dictionary key\", () =>\n{\n    var set = new HashSet<Email> { new Email(\"Ana@Example.com\"), new Email(\" ana@example.com\") };\n    Eq(set.Count, 1);\n    var d = new Dictionary<Email, int> { [new Email(\"BO@x.io\")] = 7 };\n    Eq(d[new Email(\"bo@X.io\")], 7);\n});\n\nTest(\"Equals(object) and null handling\", () =>\n{\n    object other = new Email(\"a@x.io\");\n    Ok(new Email(\"A@x.io\").Equals(other), \"Equals(object)\");\n    Ok(!new Email(\"a@x.io\").Equals(null), \"Equals(null) must be false\");\n    Ok(!(new Email(\"a@x.io\") == null), \"email == null must be false\");\n    Email? none = null;\n    Ok(none == null, \"null == null must be true\");\n});\n\nTest(\"Value and ToString are normalised\", () =>\n{\n    var e = new Email(\"  Ana@Example.COM \");\n    Eq(e.Value, \"ana@example.com\");\n    Eq(e.ToString(), \"ana@example.com\");\n});\n\nTest(\"a blank address throws (boundary)\", () =>\n    Throws<ArgumentException>(() => new Email(\"   \")));\n\n",
+      "tail": "// ──────────────────────────── types ──────────────────────────────────────\n\nsealed class Email : IEquatable<Email>\n{\n    public Email(string raw)\n    {\n        // TODO: trim + ToLowerInvariant into Value; blank input throws ArgumentException\n        throw new NotImplementedException();\n    }\n\n    public string Value { get; } = \"\";\n\n    public bool Equals(Email? other) => throw new NotImplementedException(); // TODO\n\n    public override bool Equals(object? obj) => throw new NotImplementedException(); // TODO\n\n    public override int GetHashCode() => throw new NotImplementedException(); // TODO\n\n    public override string ToString() => throw new NotImplementedException(); // TODO\n\n    public static bool operator ==(Email? a, Email? b) => throw new NotImplementedException(); // TODO\n\n    public static bool operator !=(Email? a, Email? b) => throw new NotImplementedException(); // TODO\n}\n",
+      "solutionTail": "// ──────────────────────────── types ──────────────────────────────────────\n\nsealed class Email : IEquatable<Email>\n{\n    public Email(string raw)\n    {\n        if (string.IsNullOrWhiteSpace(raw)) throw new ArgumentException(\"an email address is required\", nameof(raw));\n        Value = raw.Trim().ToLowerInvariant();\n    }\n\n    public string Value { get; } = \"\";\n\n    public bool Equals(Email? other) => other is not null && Value == other.Value;\n\n    public override bool Equals(object? obj) => Equals(obj as Email);\n\n    public override int GetHashCode() => Value.GetHashCode();\n\n    public override string ToString() => Value;\n\n    public static bool operator ==(Email? a, Email? b) => a is null ? b is null : a.Equals(b);\n\n    public static bool operator !=(Email? a, Email? b) => !(a == b);\n}\n",
+      "explanation": "Normalise once in the constructor; then every member compares the normalised `Value`, and `GetHashCode` uses the same value so equal emails always land in the same bucket:\n\n```csharp\npublic bool Equals(Email? other) => other is not null && Value == other.Value;\npublic override bool Equals(object? obj) => Equals(obj as Email);\npublic override int GetHashCode() => Value.GetHashCode();\npublic static bool operator ==(Email? a, Email? b) => a is null ? b is null : a.Equals(b);\n```\n\nInside `operator ==`, use `a is null` (not `a == null`), or the operator would call itself forever. Hashing the RAW input instead of the normalised value would fail the HashSet test.",
+      "hints": [
+        "If every member works on the same normalised string, they cannot disagree with each other.",
+        "Store raw.Trim().ToLowerInvariant() in Value, compare Value in Equals, delegate Equals(object) to it, hash Value, and handle nulls in == with is null checks.",
+        "Normalise the text once when the object is created, base equality, hashing and printing on that one normalised value, and make the operators treat two missing values as equal and one missing value as different."
+      ]
+    }
+  ]
+}

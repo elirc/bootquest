@@ -1,0 +1,177 @@
+{
+  "format": "fundamentals-authoring@1",
+  "track": "csharp",
+  "topic": "02-nullable-reference-types",
+  "title": "Nullable reference types & null handling",
+  "level": "beginner",
+  "summary": "string versus string?, what the compiler warnings mean, ?. ?? ??= and the ! operator, required and init members, and handling missing values at API boundaries.",
+  "lesson": "## Why nullable reference types exist\n\n`NullReferenceException` used to be the most common .NET crash. With **nullable reference types** enabled (the default in every new project: `<Nullable>enable</Nullable>`), the compiler tracks which references may be null:\n\n- `string` means \"never null\": assigning null, or leaving a non-nullable property unset, produces a **warning**.\n- `string?` means \"may be null\": dereferencing it without a check warns **CS8602** (\"Dereference of a possibly null reference\").\n\nThese are compile-time warnings only. The runtime type is the same `string`; nothing stops a null arriving from JSON, a database or old code. Treat the warnings as errors in CI (`<TreatWarningsAsErrors>` or `<WarningsAsErrors>nullable</WarningsAsErrors>`) and validate external input anyway.\n\n## The null operators\n\n```csharp\nstring? nickname = customer?.Nickname;   // ?. : null if customer is null (no exception)\nint? len = nickname?.Length;             // a member access through ?. becomes nullable\nstring shown = nickname ?? \"Guest\";      // ?? : the right side when the left is null\ncache ??= new Dictionary<string, int>(); // ??= : assign only when currently null\nif (nickname is not null) Use(nickname); // narrowing: no warning inside the if\n```\n\nThe **null-forgiving** operator `nickname!` tells the compiler \"trust me, it is not null\". It silences the warning and does nothing at runtime: if you were wrong, you still get a NullReferenceException. Use it only when you can prove the value is set (a test fixture, a value checked elsewhere the compiler cannot see).\n\n## Constructors, required and init\n\nA non-nullable property must be set by the time the constructor finishes, or the compiler warns **CS8618**. Options:\n\n```csharp\npublic class Customer\n{\n    public required string Name { get; init; }  // must be set in the object initializer (error CS9035 otherwise)\n    public string? Nickname { get; init; }      // genuinely optional\n    public List<Order> Orders { get; } = new(); // initialised: never null\n}\nvar c = new Customer { Name = \"Ana\" };\n```\n\n`init` accessors allow setting only during object initialisation, which makes immutable DTOs pleasant. `required` (C# 11) moves \"you forgot to set it\" from a runtime bug to a compile error.\n\n## Nullable value types are a different thing\n\n`int?` is `Nullable<int>`, a real struct with `HasValue` and `Value` (topic 01). `string?` is just an annotation on the same `string` type. Both use the same operators.\n\n## Patterns for real code\n\n- **Validate at the edge**: a DTO from JSON can contain nulls despite non-nullable annotations. Model optional input as nullable, check it, then map to a non-nullable domain object.\n- **Prefer empty collections over null**: return `Array.Empty<T>()` or an empty list, so callers never need a null check to loop.\n- **Blank is not missing**: `string.IsNullOrWhiteSpace(s)` treats null, empty and whitespace-only alike; `IsNullOrEmpty` does not catch `\"  \"`.\n- **Fail early**: `ArgumentNullException.ThrowIfNull(arg)` at the top of public methods.",
+  "quiz": [
+    {
+      "prompt": "With nullable reference types enabled, what does `string? name` mean?",
+      "choices": [
+        "A different runtime type from string",
+        "An annotation: name may be null, so the compiler warns on unchecked dereferences",
+        "A Nullable<string> struct",
+        "name defaults to an empty string"
+      ],
+      "answer": 1,
+      "explanation": "string? is the same runtime type as string; the annotation drives compile-time flow analysis."
+    },
+    {
+      "prompt": "`string? nickname = null;` What is `nickname?.Length`?",
+      "choices": [
+        "0",
+        "It throws NullReferenceException",
+        "null (an int? with no value)",
+        "-1"
+      ],
+      "answer": 2,
+      "explanation": "?. short-circuits to null, and the result type becomes int?."
+    },
+    {
+      "prompt": "What does `maybe!.Length` do at runtime when `maybe` is null?",
+      "choices": [
+        "Returns 0",
+        "Returns null",
+        "Nothing: ! makes it safe",
+        "Throws NullReferenceException"
+      ],
+      "answer": 3,
+      "explanation": "The null-forgiving operator only silences the compiler warning; it adds no runtime check."
+    },
+    {
+      "prompt": "Which compiler result do you get for `new Customer()` when `Name` is declared `required`?",
+      "choices": [
+        "Error CS9035: required member must be set",
+        "Warning CS8618",
+        "No diagnostic",
+        "A runtime exception"
+      ],
+      "answer": 0,
+      "explanation": "Missing required members is a compile error, unlike the nullable warnings."
+    },
+    {
+      "prompt": "What does `string.IsNullOrEmpty(\"  \")` return?",
+      "choices": [
+        "true",
+        "false",
+        "It throws",
+        "null"
+      ],
+      "answer": 1,
+      "explanation": "Only null and \"\" count as empty. IsNullOrWhiteSpace also treats whitespace-only strings as blank."
+    },
+    {
+      "prompt": "What does `cache ??= new Dictionary<string, int>();` do?",
+      "choices": [
+        "Always creates a new dictionary",
+        "Throws if cache is null",
+        "Compares cache with a new dictionary",
+        "Assigns a new dictionary only if cache is currently null"
+      ],
+      "answer": 3,
+      "explanation": "??= is \"assign if null\", handy for lazy initialisation."
+    },
+    {
+      "prompt": "A JSON body is deserialised into a DTO whose `Name` is a non-nullable `string`. The JSON has no name. What is `dto.Name`?",
+      "choices": [
+        "Guaranteed non-null by the compiler",
+        "An empty string",
+        "Possibly null: annotations do not enforce anything at runtime",
+        "A compile error"
+      ],
+      "answer": 2,
+      "explanation": "Deserialisers and old code can put null anywhere. Validate external input explicitly."
+    },
+    {
+      "prompt": "Which warning does `public string Name { get; set; }` with no initialiser produce in a class without a constructor?",
+      "choices": [
+        "CS8602",
+        "CS8618: non-nullable property must contain a non-null value when exiting the constructor",
+        "CS0168",
+        "None"
+      ],
+      "answer": 1,
+      "explanation": "Initialise it, make it nullable, add required, or set it in the constructor."
+    },
+    {
+      "prompt": "Inside `if (nickname is not null) { ... }`, the compiler treats `nickname` as...",
+      "choices": [
+        "non-null, so dereferencing it gives no warning",
+        "still possibly null",
+        "an int",
+        "a compile error"
+      ],
+      "answer": 0,
+      "explanation": "Flow analysis narrows the variable after a null check."
+    },
+    {
+      "prompt": "A method returns a list of orders. What is the best value when there are none?",
+      "choices": [
+        "null",
+        "An empty list",
+        "A list containing null",
+        "Throw an exception"
+      ],
+      "answer": 1,
+      "explanation": "Empty collections let callers loop without null checks and avoid a whole class of crashes."
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "Are nullable reference type annotations enforced at runtime?",
+      "back": "No. They drive compiler warnings only; nulls can still arrive from JSON, databases and unannotated code."
+    },
+    {
+      "front": "What does the ! operator do?",
+      "back": "It suppresses the compiler's nullability warning for one expression and adds no runtime check at all."
+    },
+    {
+      "front": "?. ?? and ??= in one line each",
+      "back": "?. yields null instead of throwing when the target is null; ?? supplies a fallback for null; ??= assigns only if the variable is null."
+    },
+    {
+      "front": "Ways to satisfy CS8618 for a non-nullable property",
+      "back": "Initialise it, set it in every constructor, mark it required, or make it nullable if it is genuinely optional."
+    },
+    {
+      "front": "What does required add over init?",
+      "back": "init allows setting during initialisation only; required makes the compiler reject object creation that forgets to set the member."
+    },
+    {
+      "front": "IsNullOrEmpty versus IsNullOrWhiteSpace",
+      "back": "The first accepts null and the empty string; the second also rejects strings made only of spaces or tabs."
+    },
+    {
+      "front": "Why return empty collections instead of null?",
+      "back": "Callers can enumerate them safely without a null check, so a missing check can never crash the caller."
+    },
+    {
+      "front": "How should a public method reject a null argument?",
+      "back": "Call ArgumentNullException.ThrowIfNull at the top so the failure points at the caller, not deep inside."
+    }
+  ],
+  "drills": [
+    {
+      "slug": "01-display-name-and-optional-age",
+      "title": "Fallbacks for missing values",
+      "difficulty": 1,
+      "skills": [
+        "null operators",
+        "IsNullOrWhiteSpace"
+      ],
+      "instructions": "**Interview prompt.** \"Profile pages crash for customers without a nickname, and an empty age field shows age 0. Make missing data explicit.\"\n\n**Why it matters.** Optional data has three shapes in practice: null, empty and whitespace. The null operators handle null; `IsNullOrWhiteSpace` handles the other two. A parse that cannot succeed should give \"no value\", not a fake 0.\n\n**Your task.** Implement the two stubbed local functions:\n- `string DisplayName(Customer? c)` returns the trimmed `Nickname` if it is not blank, else the trimmed `FullName` if it is not blank, else `\"Guest\"` (also when `c` is null)\n- `int? ParseAge(string? input)` returns the age for a string holding a whole number from 0 to 150 (surrounding whitespace allowed), and `null` for null, blank, non-numeric or out-of-range input\n\n**Worked example.** `DisplayName(new Customer(\"  \", \"Ana Lima\"))` is `\"Ana Lima\"`; `ParseAge(\" 42 \")` is 42 and `ParseAge(\"\")` is null.",
+      "starterHead": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · fallbacks for missing values★☆☆ core\n//  concepts: null operators · IsNullOrWhiteSpace · int?\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Missing data must stay visibly missing: never a crash, never a fake 0.\n\nusing static Bootcamp.Check;\n\nstring DisplayName(Customer? c)\n{\n    // TODO: nickname, then full name, then \"Guest\" (blank counts as missing)\n    throw new NotImplementedException();\n}\n\nint? ParseAge(string? input)\n{\n    // TODO: a whole number 0..150, otherwise null\n    throw new NotImplementedException();\n}\n\n",
+      "solutionHead": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · fallbacks for missing values★☆☆ core\n//  concepts: null operators · IsNullOrWhiteSpace · int?\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Missing data must stay visibly missing: never a crash, never a fake 0.\n\nusing static Bootcamp.Check;\n\nstring DisplayName(Customer? c)\n{\n    if (!string.IsNullOrWhiteSpace(c?.Nickname)) return c.Nickname.Trim();\n    if (!string.IsNullOrWhiteSpace(c?.FullName)) return c.FullName.Trim();\n    return \"Guest\";\n}\n\nint? ParseAge(string? input)\n{\n    if (string.IsNullOrWhiteSpace(input)) return null;\n    return int.TryParse(input.Trim(), out var age) && age is >= 0 and <= 150 ? age : null;\n}\n\n",
+      "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"a nickname wins, trimmed\", () =>\n    Eq(DisplayName(new Customer(\" Ana \", \"Ana Lima\")), \"Ana\"));\n\nTest(\"a blank nickname falls back to the full name\", () =>\n    Eq(DisplayName(new Customer(\"   \", \"Ana Lima\")), \"Ana Lima\"));\n\nTest(\"null customer or nothing usable gives Guest (boundary)\", () =>\n{\n    Eq(DisplayName(null), \"Guest\");\n    Eq(DisplayName(new Customer(null, \" \")), \"Guest\");\n});\n\nTest(\"ParseAge reads whole numbers with whitespace\", () =>\n{\n    Eq(ParseAge(\" 42 \"), (int?)42);\n    Eq(ParseAge(\"0\"), (int?)0);\n});\n\nTest(\"ParseAge rejects null, blank, junk and out-of-range values\", () =>\n{\n    Ok(ParseAge(null) is null, \"null\");\n    Ok(ParseAge(\"\") is null, \"empty\");\n    Ok(ParseAge(\"abc\") is null, \"abc\");\n    Ok(ParseAge(\"-1\") is null, \"-1\");\n    Ok(ParseAge(\"151\") is null, \"151\");\n});\n\n",
+      "tail": "// ──────────────────────────── types ──────────────────────────────────────\n\nrecord Customer(string? Nickname, string? FullName);\n",
+      "explanation": "`IsNullOrWhiteSpace` covers null, empty and blank in one call; after it returns false the compiler knows the value is not null:\n\n```csharp\nif (!string.IsNullOrWhiteSpace(c?.Nickname)) return c.Nickname.Trim();\nif (!string.IsNullOrWhiteSpace(c?.FullName)) return c.FullName.Trim();\nreturn \"Guest\";\n```\n\n`int.TryParse` never throws, and returning `int?` keeps \"no age\" distinct from \"age 0\". `c?.Nickname ?? c?.FullName ?? \"Guest\"` passes the null tests but fails the blank-nickname one.",
+      "hints": [
+        "Null is not the only kind of missing: an empty or whitespace-only string must be treated the same way.",
+        "Use string.IsNullOrWhiteSpace with ?. for each candidate name, and int.TryParse plus a range pattern for the age, returning null when anything fails.",
+        "Try each name in order and keep the first one that has real characters, otherwise use the guest label. For the age, give up on anything blank, unparsable or outside the allowed range."
+      ]
+    }
+  ]
+}

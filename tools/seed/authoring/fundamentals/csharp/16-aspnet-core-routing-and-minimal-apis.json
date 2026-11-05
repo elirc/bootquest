@@ -1,0 +1,176 @@
+{
+  "format": "fundamentals-authoring@1",
+  "track": "csharp",
+  "topic": "16-aspnet-core-routing-and-minimal-apis",
+  "title": "ASP.NET Core: routing & minimal APIs",
+  "level": "advanced",
+  "summary": "Mapping endpoints with MapGet and friends, route templates and constraints, where parameters bind from, Results and TypedResults, route groups, and the status codes the framework produces for you.",
+  "lesson": "## Endpoints\n\n```csharp\nvar app = builder.Build();\n\napp.MapGet(\"/orders/{id:int}\", async (int id, AppDb db, CancellationToken ct) =>\n    await db.Orders.FindAsync(new object[] { id }, ct) is { } order\n        ? Results.Ok(order)\n        : Results.NotFound());\n\napp.MapPost(\"/orders\", async (CreateOrder body, AppDb db) =>\n{\n    var order = new Order(body.Sku, body.Qty);\n    db.Orders.Add(order);\n    await db.SaveChangesAsync();\n    return Results.Created($\"/orders/{order.Id}\", order);   // 201 + Location header\n});\n```\n\n`MapGet`, `MapPost`, `MapPut`, `MapPatch`, `MapDelete` register a handler for a method and a **route template**. Controllers (`[ApiController]` classes with `[HttpGet]` actions) do the same with attributes; both run on the same routing and binding system.\n\n## Route templates and constraints\n\n- `{id}` captures a segment; `{id:int}`, `{id:guid}`, `{slug:alpha}`, `{n:min(1)}` add **constraints**.\n- A constraint that does not match means the route does not match: `/orders/abc` against `{id:int}` gives **404**, not 400. Constraints are for routing (disambiguation), not input validation.\n- `{**path}` is a catch-all. Literal segments match case-insensitively.\n- A path that matches a route for another HTTP method gives **405 Method Not Allowed**; a path that matches nothing gives 404.\n\n## Where parameters come from\n\nMinimal API parameters bind by convention:\n- simple types named like a route parameter: from the **route**\n- other simple types (`int page = 1`, `string? q`): from the **query string**; an optional parameter needs a default or a nullable type\n- complex types (records, classes): from the JSON **body** (for POST/PUT/PATCH)\n- registered services (`AppDb`, `ILogger<T>`), `HttpContext`, `CancellationToken`: injected\n\nUse `[FromRoute]`, `[FromQuery]`, `[FromHeader]`, `[FromBody]` to be explicit. The framework answers some bad requests itself: a query value that cannot be converted (`?page=abc` for an int) is **400**, malformed JSON is **400**, a body with the wrong `Content-Type` is **415 Unsupported Media Type**. JSON property names bind case-insensitively by default.\n\n## Results and TypedResults\n\n`Results.Ok(x)`, `Results.NotFound()`, `Results.Created(uri, x)`, `Results.NoContent()`, `Results.BadRequest()`, `Results.Conflict()`, `Results.ValidationProblem(errors)`, `Results.Problem(...)`. `TypedResults` returns concrete types, so a handler can declare `Results<Ok<Order>, NotFound>`: the compiler checks every branch and OpenAPI documents both responses.\n\n## Route groups\n\n```csharp\nvar orders = app.MapGroup(\"/api/v1/orders\").RequireAuthorization().WithTags(\"Orders\");\norders.MapGet(\"/\", ListOrders);\norders.MapGet(\"/{id:int}\", GetOrder);\n```\n\nA group applies a prefix and shared conventions (auth, filters, OpenAPI tags) to every endpoint in it. Keep handlers thin: bind and validate, call a service, map the outcome to a result (topic 04's switch over results fits perfectly here).",
+  "quiz": [
+    {
+      "prompt": "A request for `/orders/abc` reaches an app with only `MapGet(\"/orders/{id:int}\", ...)`. What is the response?",
+      "choices": [
+        "400 Bad Request",
+        "404 Not Found: the constraint makes the route not match",
+        "500",
+        "405"
+      ],
+      "answer": 1,
+      "explanation": "Route constraints decide whether a route matches. Validate input in the handler when you want a 400."
+    },
+    {
+      "prompt": "In `app.MapGet(\"/search\", (string? q, int page = 1) => ...)`, where does `page` come from?",
+      "choices": [
+        "The route",
+        "The JSON body",
+        "A header",
+        "The query string"
+      ],
+      "answer": 3,
+      "explanation": "Simple-type parameters that are not route parameters bind from the query string."
+    },
+    {
+      "prompt": "`GET /search?page=abc` for an `int page` parameter gives...",
+      "choices": [
+        "A 400: the value cannot be converted",
+        "page = 0",
+        "page = 1 (the default)",
+        "A 500"
+      ],
+      "answer": 0,
+      "explanation": "Binding failures for simple types are answered with 400 by the framework."
+    },
+    {
+      "prompt": "What does `Results.Created($\"/orders/{id}\", order)` send?",
+      "choices": [
+        "200 with the order",
+        "204",
+        "201 with a Location header and the order",
+        "202"
+      ],
+      "answer": 2,
+      "explanation": "Created sets the 201 status and the Location header pointing at the new resource."
+    },
+    {
+      "prompt": "A POST to a JSON endpoint arrives with `Content-Type: text/plain`. What does ASP.NET Core return?",
+      "choices": [
+        "400",
+        "415 Unsupported Media Type",
+        "200 with an empty body",
+        "406"
+      ],
+      "answer": 1,
+      "explanation": "The JSON body binder only accepts JSON content types."
+    },
+    {
+      "prompt": "A DELETE request hits a path that only has a MapGet. What is the status?",
+      "choices": [
+        "405 Method Not Allowed",
+        "404",
+        "400",
+        "501"
+      ],
+      "answer": 0,
+      "explanation": "The path matches an endpoint, but not for this HTTP method."
+    },
+    {
+      "prompt": "Which parameter is bound from the request body in a MapPost handler?",
+      "choices": [
+        "int id (also in the route)",
+        "CancellationToken ct",
+        "AppDb db (registered service)",
+        "CreateOrder body (a record)"
+      ],
+      "answer": 3,
+      "explanation": "Complex types bind from the JSON body; services and the cancellation token are injected."
+    },
+    {
+      "prompt": "What does declaring a handler's return type as `Results<Ok<Order>, NotFound>` give you?",
+      "choices": [
+        "Faster responses",
+        "Automatic caching",
+        "Compile-time checking of the possible results and accurate OpenAPI metadata",
+        "Nothing"
+      ],
+      "answer": 2,
+      "explanation": "TypedResults make every response type explicit to the compiler and the API description."
+    },
+    {
+      "prompt": "What is `MapGroup(\"/api/v1/orders\")` for?",
+      "choices": [
+        "A shared route prefix plus shared conventions such as auth and tags",
+        "Load balancing",
+        "Grouping database queries",
+        "Versioning the DLL"
+      ],
+      "answer": 0,
+      "explanation": "Groups remove repetition and keep policies consistent across related endpoints."
+    },
+    {
+      "prompt": "Is a JSON property `\"NAME\"` bound to a record parameter `Name` by default?",
+      "choices": [
+        "No, names are case-sensitive",
+        "Yes: web defaults bind property names case-insensitively",
+        "Only for GET",
+        "Only with [FromBody]"
+      ],
+      "answer": 1,
+      "explanation": "ASP.NET Core's JSON options use case-insensitive property matching by default."
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "What happens when a route constraint does not match?",
+      "back": "The route simply does not match, so the request ends as a 404 (or another route handles it); constraints are not validation."
+    },
+    {
+      "front": "Minimal API binding rules in brief",
+      "back": "Route names bind from the route, other simple types from the part of the URL after the question mark, complex types from the JSON body, and services, HttpContext and CancellationToken are injected."
+    },
+    {
+      "front": "Bad requests the framework rejects for you",
+      "back": "Unconvertible route or query values and malformed JSON get 400; a non-JSON content type on a JSON body gets 415."
+    },
+    {
+      "front": "404 versus 405 in routing",
+      "back": "404: no endpoint matches the path. 405: an endpoint matches the path but not the HTTP method."
+    },
+    {
+      "front": "Results versus TypedResults",
+      "back": "Results returns IResult; TypedResults returns concrete types that let you declare every possible response in the signature."
+    },
+    {
+      "front": "What should a Created response include?",
+      "back": "Status 201, a Location header with the new resource's URL, and usually the created representation."
+    },
+    {
+      "front": "What does MapGroup add?",
+      "back": "A common prefix and shared conventions (authorisation, filters, OpenAPI tags) for all endpoints inside it."
+    },
+    {
+      "front": "Keeping minimal API handlers thin",
+      "back": "Bind and validate, call a service, and map its outcome to a result; business rules live in the service."
+    }
+  ],
+  "drills": [
+    {
+      "slug": "01-route-template-matcher",
+      "title": "Match route templates with constraints",
+      "difficulty": 2,
+      "skills": [
+        "route templates",
+        "constraints"
+      ],
+      "instructions": "**Interview prompt.** \"Explain why `/orders/abc` is a 404 and not a 400 for `/orders/{id:int}`, by implementing the matcher.\"\n\n**Why it matters.** A route template is a list of literal and parameter segments; constraints decide whether the route MATCHES at all. Seeing that in code makes the 404-versus-400 distinction obvious.\n\n**Your task.** Implement the stubbed local function `Dictionary<string, string>? Match(string template, string path)`:\n- split both on `/`, ignoring a leading slash, a single trailing slash on the path, and anything from `?` in the path\n- the number of segments must be equal\n- a literal segment matches case-INSENSITIVELY (ordinal), like ASP.NET Core routing\n- `{name}` matches any non-empty segment and captures it (percent-decoded with `Uri.UnescapeDataString`)\n- `{name:int}` additionally requires the segment to parse as an `int` (invariant culture, no whitespace); otherwise the route does not match\n- return the captured values (keys are the parameter names) or `null` when the route does not match\n\n**Worked example.** `Match(\"/orders/{id:int}\", \"/Orders/42?expand=lines\")` gives `{ id: \"42\" }`; `Match(\"/orders/{id:int}\", \"/orders/abc\")` gives null.",
+      "starterHead": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · route template matching★★☆ core\n//  concepts: route templates · constraints · case-insensitive literals\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Constraints decide whether a route matches, which is why a mismatch is a 404.\n\nusing static Bootcamp.Check;\n\nDictionary<string, string>? Match(string template, string path)\n{\n    // TODO: compare segments; {name} and {name:int} capture; literals ignore case\n    throw new NotImplementedException();\n}\n\n",
+      "solutionHead": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · route template matching★★☆ core\n//  concepts: route templates · constraints · case-insensitive literals\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Constraints decide whether a route matches, which is why a mismatch is a 404.\n\nusing static Bootcamp.Check;\n\nDictionary<string, string>? Match(string template, string path)\n{\n    var cut = path.IndexOf('?');\n    if (cut >= 0) path = path[..cut];\n    if (path.Length > 1 && path.EndsWith('/')) path = path[..^1];\n    var want = template.TrimStart('/').Split('/');\n    var have = path.TrimStart('/').Split('/');\n    if (want.Length != have.Length) return null;\n    var values = new Dictionary<string, string>();\n    for (var i = 0; i < want.Length; i++)\n    {\n        var w = want[i];\n        var h = have[i];\n        if (w.StartsWith('{') && w.EndsWith('}'))\n        {\n            if (h.Length == 0) return null;\n            var inner = w[1..^1];\n            var colon = inner.IndexOf(':');\n            var name = colon < 0 ? inner : inner[..colon];\n            var constraint = colon < 0 ? null : inner[(colon + 1)..];\n            var value = Uri.UnescapeDataString(h);\n            if (constraint == \"int\" && !int.TryParse(value, System.Globalization.NumberStyles.AllowLeadingSign, System.Globalization.CultureInfo.InvariantCulture, out _)) return null;\n            values[name] = value;\n        }\n        else if (!string.Equals(w, h, StringComparison.OrdinalIgnoreCase))\n        {\n            return null;\n        }\n    }\n    return values;\n}\n\n",
+      "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"captures parameters, ignores the query string and literal case\", () =>\n{\n    var m = Match(\"/orders/{id:int}\", \"/Orders/42?expand=lines\");\n    Ok(m is not null, \"should match\");\n    Eq(m![\"id\"], \"42\");\n});\n\nTest(\"an int constraint that fails means no match\", () =>\n{\n    Ok(Match(\"/orders/{id:int}\", \"/orders/abc\") is null, \"abc is not an int\");\n    Ok(Match(\"/orders/{id:int}\", \"/orders/1.5\") is null, \"1.5 is not an int\");\n});\n\nTest(\"several parameters, decoded\", () =>\n{\n    var m = Match(\"/users/{user}/files/{name}\", \"/users/ana/files/caf%C3%A9.txt\");\n    Eq(m![\"user\"], \"ana\");\n    Eq(m[\"name\"], \"café.txt\");\n});\n\nTest(\"segment count and literals must agree\", () =>\n{\n    Ok(Match(\"/orders/{id}\", \"/orders\") is null, \"too few segments\");\n    Ok(Match(\"/orders/{id}\", \"/orders/1/lines\") is null, \"too many segments\");\n    Ok(Match(\"/orders/{id}\", \"/invoices/1\") is null, \"literal differs\");\n});\n\nTest(\"a trailing slash is tolerated, an empty segment is not (boundary)\", () =>\n{\n    Eq(Match(\"/orders/{id:int}\", \"/orders/7/\")![\"id\"], \"7\");\n    Ok(Match(\"/orders/{id}/lines\", \"/orders//lines\") is null, \"empty parameter\");\n});\n\n",
+      "explanation": "Normalise the path, compare segment counts, then treat each template segment as either a literal (case-insensitive compare) or a parameter (capture, decode, apply the constraint):\n\n```csharp\nif (w.StartsWith('{') && w.EndsWith('}'))\n{\n    // name and optional constraint from inside the braces\n    var value = Uri.UnescapeDataString(h);\n    if (constraint == \"int\" && !int.TryParse(value, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out _)) return null;\n    values[name] = value;\n}\nelse if (!string.Equals(w, h, StringComparison.OrdinalIgnoreCase)) return null;\n```\n\nReturning null (no match) for a failed constraint is exactly why ASP.NET Core answers such a request with 404: no endpoint matched.",
+      "hints": [
+        "Clean the path first, then a template is just a list of segments that are either fixed words or placeholders in braces.",
+        "Split both on slash after trimming the query and one trailing slash; compare literals with OrdinalIgnoreCase; for placeholders split the name from an optional constraint, decode the value and int.TryParse it when the constraint is int.",
+        "Line the template and the path up piece by piece, let fixed pieces match regardless of case, capture placeholder pieces after decoding them, and give up immediately when a piece is empty, differs, or fails its number constraint."
+      ]
+    }
+  ]
+}

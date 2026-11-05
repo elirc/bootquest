@@ -1,0 +1,177 @@
+{
+  "format": "fundamentals-authoring@1",
+  "track": "csharp",
+  "topic": "18-validation-and-problem-details",
+  "title": "Model binding, validation & ProblemDetails",
+  "level": "advanced",
+  "summary": "DataAnnotations and automatic 400s with [ApiController] and .NET 10 minimal API validation, ValidationProblemDetails and RFC 9457 problem details, DTOs against over-posting, and where business validation belongs.",
+  "lesson": "## Validate at the edge\n\nEvery request body is untrusted. Validate shape and simple rules where the request enters, before any business logic runs, and answer **400** with field-level errors.\n\n```csharp\npublic class SignupDto\n{\n    [Required, EmailAddress] public string? Email { get; set; }\n    [Required, StringLength(50, MinimumLength = 1)] public string? Name { get; set; }\n    [Range(13, 120)] public int Age { get; set; }\n}\n```\n\n## Automatic validation\n\n- **Controllers** with `[ApiController]`: an invalid model never reaches the action; the framework returns 400 with a **ValidationProblemDetails** body.\n- **Minimal APIs** in .NET 10: call `builder.Services.AddValidation()` and parameters with DataAnnotations are validated the same way. (Earlier versions needed endpoint filters or a library such as FluentValidation.)\n\nThe response body looks like this:\n\n```json\n{\n  \"type\": \"https://tools.ietf.org/html/rfc9110#section-15.5.1\",\n  \"title\": \"One or more validation errors occurred.\",\n  \"status\": 400,\n  \"errors\": { \"Email\": [\"The Email field is required.\"], \"Age\": [\"The field Age must be between 13 and 120.\"] },\n  \"traceId\": \"00-...\"\n}\n```\n\nClients can map `errors` straight onto form fields.\n\n## Problem details (RFC 9457)\n\n`{ type, title, status, detail, instance }` plus extensions is the standard error shape for HTTP APIs. `builder.Services.AddProblemDetails()` makes the framework use it for errors (exceptions, status-code pages), and `Results.Problem(...)` / `Results.ValidationProblem(errors)` produce it from your own code. One consistent error shape for the whole API is worth more than clever per-endpoint messages.\n\n## DTOs against over-posting\n\nNever bind request bodies straight to entities:\n\n```csharp\napp.MapPut(\"/users/{id:int}\", async (int id, UpdateUserDto dto, AppDb db) => {\n    var user = await db.Users.FindAsync(id);\n    if (user is null) return Results.NotFound();\n    user.Name = dto.Name;        // copy ONLY what the client may change\n    user.Bio = dto.Bio;\n    await db.SaveChangesAsync();\n    return Results.NoContent();\n});\n```\n\nBinding to the entity would let a client send `\"isAdmin\": true` or `\"balance\": 1000000` (**over-posting** / mass assignment). Separate input DTOs, output DTOs (no password hashes) and entities.\n\n## Shape validation versus business rules\n\nDataAnnotations check a request in isolation: required, lengths, ranges, formats. Rules that need data (the email is already taken, the product is out of stock, the order is already shipped) belong in the service, and usually map to **409 Conflict** or **422 Unprocessable Content** rather than 400. Keep both kinds returning problem details.\n\n## Normalise as you validate\n\nTrim strings, normalise case for emails and codes, treat empty strings as missing where the field is optional. Doing it once at the boundary keeps the rest of the code simple and the database clean.",
+  "quiz": [
+    {
+      "prompt": "With `[ApiController]`, what happens when the bound model fails DataAnnotations validation?",
+      "choices": [
+        "The action runs with ModelState invalid",
+        "The framework returns 400 with ValidationProblemDetails before the action runs",
+        "A 500",
+        "The invalid fields are set to null"
+      ],
+      "answer": 1,
+      "explanation": "Automatic 400 responses are part of the ApiController conventions."
+    },
+    {
+      "prompt": "In .NET 10 minimal APIs, what turns on DataAnnotations validation of parameters?",
+      "choices": [
+        "Nothing: it is not supported",
+        "[ApiController]",
+        "app.UseValidation()",
+        "builder.Services.AddValidation()"
+      ],
+      "answer": 3,
+      "explanation": ".NET 10 added built-in minimal API validation; earlier versions needed filters or a library."
+    },
+    {
+      "prompt": "Which property of a ValidationProblemDetails body holds the per-field messages?",
+      "choices": [
+        "errors",
+        "detail",
+        "title",
+        "instance"
+      ],
+      "answer": 0,
+      "explanation": "errors maps field names to arrays of messages, ready to display next to form inputs."
+    },
+    {
+      "prompt": "Why bind request bodies to DTOs instead of EF entities?",
+      "choices": [
+        "Entities cannot be deserialised",
+        "For performance",
+        "To prevent over-posting: clients setting fields like IsAdmin they must not control",
+        "DTOs are required by EF Core"
+      ],
+      "answer": 2,
+      "explanation": "Copy only the allowed fields from the DTO onto the entity."
+    },
+    {
+      "prompt": "Signup with an email that is already registered. Which response fits best?",
+      "choices": [
+        "400 from DataAnnotations",
+        "409 Conflict (or 422) with a problem details body",
+        "500",
+        "404"
+      ],
+      "answer": 1,
+      "explanation": "It is a business rule that needs data, not a shape error; report it from the service as a conflict."
+    },
+    {
+      "prompt": "What is RFC 9457 problem details?",
+      "choices": [
+        "A standard JSON shape for HTTP API errors: type, title, status, detail, instance",
+        "A logging format",
+        "A validation library",
+        "A status code"
+      ],
+      "answer": 0,
+      "explanation": "Using it everywhere gives clients one error format to handle."
+    },
+    {
+      "prompt": "What does `[Range(13, 120)] public int Age` reject?",
+      "choices": [
+        "Only negative ages",
+        "Missing ages only",
+        "Nothing at runtime",
+        "Ages below 13 or above 120"
+      ],
+      "answer": 3,
+      "explanation": "Range validates both bounds inclusively."
+    },
+    {
+      "prompt": "Where should trimming and case normalisation of an email happen?",
+      "choices": [
+        "In the database",
+        "In every service method",
+        "At the boundary, once, while validating input",
+        "In the UI only"
+      ],
+      "answer": 2,
+      "explanation": "Normalising at the edge keeps business code and stored data consistent."
+    },
+    {
+      "prompt": "Which kind of rule belongs in DataAnnotations?",
+      "choices": [
+        "Email is required and at most 254 characters",
+        "The product is in stock",
+        "The user may edit this order",
+        "The coupon is not expired"
+      ],
+      "answer": 0,
+      "explanation": "Attributes check a request on its own; rules that need data or state live in services."
+    },
+    {
+      "prompt": "What does `builder.Services.AddProblemDetails()` change?",
+      "choices": [
+        "It validates DTOs",
+        "Framework-generated errors (exceptions, status pages) use the problem details format",
+        "It logs requests",
+        "It disables 500s"
+      ],
+      "answer": 1,
+      "explanation": "Combined with UseExceptionHandler, unhandled exceptions become 500 problem responses."
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "What does [ApiController] do with an invalid model?",
+      "back": "Returns 400 with a ValidationProblemDetails body before the action method runs."
+    },
+    {
+      "front": "Minimal API validation in .NET 10",
+      "back": "AddValidation registers built-in validation of DataAnnotations on endpoint parameters, with the same 400 response."
+    },
+    {
+      "front": "Shape of a validation problem response",
+      "back": "A problem details object whose errors property maps each field name to a list of messages."
+    },
+    {
+      "front": "What is over-posting?",
+      "back": "A client setting fields it should not control, such as IsAdmin, because the body was bound straight onto an entity."
+    },
+    {
+      "front": "Input DTO, output DTO, entity",
+      "back": "Separate types for what clients may send, what they may see, and what is stored."
+    },
+    {
+      "front": "Shape validation versus business rules",
+      "back": "Attributes check a request in isolation (400); rules needing data or state live in services and map to 409 or 422."
+    },
+    {
+      "front": "The RFC 9457 problem details fields",
+      "back": "type, title, status, detail and instance, plus custom extension members."
+    },
+    {
+      "front": "Why normalise input at the boundary?",
+      "back": "Trimming and normalising once means services, comparisons and stored data never see untidy variants."
+    }
+  ],
+  "drills": [
+    {
+      "slug": "01-validate-signup",
+      "title": "Validate a signup into problem-details errors",
+      "difficulty": 2,
+      "skills": [
+        "input validation",
+        "ValidationProblemDetails"
+      ],
+      "instructions": "**Interview prompt.** \"Our signup endpoint returns one error at a time, and the frontend cannot tell which field is wrong. Return every problem, keyed by field, in the ValidationProblemDetails shape.\"\n\n**Why it matters.** The `errors` dictionary of a validation problem lists EVERY failed rule per field. Clients render it directly, and users fix all fields in one go.\n\n**Your task.** Implement the stubbed local function `Dictionary<string, string[]> Validate(SignupDto dto)` (empty dictionary = valid):\n- `Email`: required (null or blank is \"Email is required.\"); otherwise, after trimming it must contain exactly one `@` with text on both sides (\"Email is not a valid address.\")\n- `Name`: required (\"Name is required.\"); after trimming at most 50 characters (\"Name must be at most 50 characters.\")\n- `Age`: when present (not null) it must be 13 to 120 (\"Age must be between 13 and 120.\")\n- `Roles`: every role must be one of `reader`, `writer` (exact, lower-case); each offending role adds \"Unknown role '<role>'.\" to the `Roles` entry\n- a field with no problems has no key; messages for one field keep the order above\n\n**Worked example.** `new SignupDto(\" \", \"Ana\", 9, new[] { \"admin\" })` gives Email: required, Age: range, Roles: unknown role 'admin'.",
+      "starterHead": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · validate a signup★★☆ core\n//  concepts: validation · ValidationProblemDetails errors\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Every failed rule, keyed by field, in one response.\n\nusing static Bootcamp.Check;\n\nDictionary<string, string[]> Validate(SignupDto dto)\n{\n    // TODO: collect every problem per field; no key for a valid field\n    throw new NotImplementedException();\n}\n\n",
+      "solutionHead": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · validate a signup★★☆ core\n//  concepts: validation · ValidationProblemDetails errors\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Every failed rule, keyed by field, in one response.\n\nusing static Bootcamp.Check;\n\nDictionary<string, string[]> Validate(SignupDto dto)\n{\n    var errors = new Dictionary<string, List<string>>();\n    void Add(string field, string message)\n    {\n        if (!errors.TryGetValue(field, out var list)) errors[field] = list = new List<string>();\n        list.Add(message);\n    }\n    if (string.IsNullOrWhiteSpace(dto.Email)) Add(\"Email\", \"Email is required.\");\n    else\n    {\n        var parts = dto.Email.Trim().Split('@');\n        if (parts.Length != 2 || parts[0].Length == 0 || parts[1].Length == 0) Add(\"Email\", \"Email is not a valid address.\");\n    }\n    if (string.IsNullOrWhiteSpace(dto.Name)) Add(\"Name\", \"Name is required.\");\n    else if (dto.Name.Trim().Length > 50) Add(\"Name\", \"Name must be at most 50 characters.\");\n    if (dto.Age is { } age && (age < 13 || age > 120)) Add(\"Age\", \"Age must be between 13 and 120.\");\n    foreach (var role in dto.Roles ?? Array.Empty<string>())\n        if (role is not (\"reader\" or \"writer\")) Add(\"Roles\", $\"Unknown role '{role}'.\");\n    return errors.ToDictionary(e => e.Key, e => e.Value.ToArray());\n}\n\n",
+      "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"a valid signup has no errors\", () =>\n    Eq(Validate(new SignupDto(\"ana@example.com\", \"Ana\", 30, new[] { \"reader\" })).Count, 0));\n\nTest(\"every problem is reported, keyed by field\", () =>\n{\n    var errors = Validate(new SignupDto(\" \", \"Ana\", 9, new[] { \"admin\" }));\n    Eq(errors.Keys.OrderBy(k => k, StringComparer.Ordinal).ToList(), new[] { \"Age\", \"Email\", \"Roles\" });\n    Eq(errors[\"Email\"], new[] { \"Email is required.\" });\n    Eq(errors[\"Age\"], new[] { \"Age must be between 13 and 120.\" });\n    Eq(errors[\"Roles\"], new[] { \"Unknown role 'admin'.\" });\n});\n\nTest(\"email format and name length\", () =>\n{\n    var errors = Validate(new SignupDto(\"ana@@x\", new string('n', 51), null, null));\n    Eq(errors[\"Email\"], new[] { \"Email is not a valid address.\" });\n    Eq(errors[\"Name\"], new[] { \"Name must be at most 50 characters.\" });\n});\n\nTest(\"several bad roles add several messages\", () =>\n    Eq(Validate(new SignupDto(\"a@b.io\", \"Ana\", null, new[] { \"writer\", \"root\", \"Reader\" }))[\"Roles\"], new[] { \"Unknown role 'root'.\", \"Unknown role 'Reader'.\" }));\n\nTest(\"optional fields may be missing; edges are inclusive (boundary)\", () =>\n{\n    Eq(Validate(new SignupDto(\"a@b.io\", \"Ana\", null, null)).Count, 0);\n    Eq(Validate(new SignupDto(\"a@b.io\", \"Ana\", 13, null)).Count, 0);\n    Eq(Validate(new SignupDto(\"a@b.io\", new string('n', 50), 120, null)).Count, 0);\n    Ok(Validate(new SignupDto(null, null, null, null)).ContainsKey(\"Name\"), \"a null name is required\");\n});\n\n",
+      "tail": "// ──────────────────────────── types ──────────────────────────────────────\n\nrecord SignupDto(string? Email, string? Name, int? Age, string[]? Roles);\n",
+      "explanation": "Collect messages into a per-field list instead of returning at the first failure, then convert to the `string[]` shape of `ValidationProblemDetails.Errors`:\n\n```csharp\nvoid Add(string field, string message)\n{\n    if (!errors.TryGetValue(field, out var list)) errors[field] = list = new List<string>();\n    list.Add(message);\n}\n// ... each rule calls Add ...\nreturn errors.ToDictionary(e => e.Key, e => e.Value.ToArray());\n```\n\nIn a minimal API the result plugs straight into `Results.ValidationProblem(errors)`. Returning early after the first error passes the first test and fails \"every problem is reported\".",
+      "hints": [
+        "Do not stop at the first problem: every rule runs, and messages pile up under their field name.",
+        "Keep a Dictionary<string, List<string>> with a small Add helper, check each field in turn (IsNullOrWhiteSpace, a split on @, lengths, the nullable age, a loop over roles), and convert to string arrays at the end.",
+        "Check every field independently, record each failed rule under that field's name in the order the rules are listed, add one message per unknown role, and give back only the fields that actually had problems."
+      ]
+    }
+  ]
+}

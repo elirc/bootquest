@@ -1,0 +1,178 @@
+{
+  "format": "fundamentals-authoring@1",
+  "track": "csharp",
+  "topic": "10-delegates-lambdas-and-events",
+  "title": "Delegates, lambdas & events",
+  "level": "intermediate",
+  "summary": "Func and Action, lambdas and what they capture, the for-loop capture trap, multicast delegates, events with += and -=, unsubscribing to avoid leaks, and returning an IDisposable subscription.",
+  "lesson": "## Delegates are typed function values\n\n```csharp\nFunc<int, int> square = x => x * x;        // takes an int, returns an int\nAction<string> log = msg => Console.WriteLine(msg);  // returns nothing\nPredicate<Order> isPaid = o => o.Status == \"paid\";   // same as Func<Order, bool>\nsquare(4)   // 16\n```\n\nLINQ, `List.RemoveAll`, `Task.Run`, minimal API handlers and middleware are all delegates. `Func<..., TResult>` returns a value; `Action<...>` does not.\n\n## Closures and the capture trap\n\nA lambda captures **variables**, not values. In a `for` loop there is ONE loop variable:\n\n```csharp\nvar fs = new List<Func<int>>();\nfor (int i = 0; i < 3; i++) fs.Add(() => i);\nfs.Select(f => f())          // 3, 3, 3\n\nforeach (var x in new[] { 0, 1, 2 }) fs2.Add(() => x);   // 0, 1, 2: foreach gets a fresh variable per iteration (since C# 5)\n```\n\nFix the `for` case by copying into a local inside the loop: `var copy = i; fs.Add(() => copy);`. Captured variables also keep objects alive as long as the delegate lives.\n\n## Multicast delegates\n\n`+=` combines delegates; invoking runs them all, in order:\n\n```csharp\nAction<string> a = s => log.Add(\"A\" + s);\na += s => log.Add(\"B\" + s);\na(\"x\");                       // A then B\nFunc<int> f = () => 1; f += () => 2;\nf()                           // 2: only the LAST return value comes back\n```\n\n## Events\n\n```csharp\npublic class Publisher\n{\n    public event EventHandler<int>? Changed;\n    public void Raise(int n) => Changed?.Invoke(this, n);   // ?. : safe with no subscribers\n}\npub.Changed += OnChanged;\npub.Changed -= OnChanged;\n```\n\nAn `event` is a delegate field that outsiders can only `+=` and `-=`: they cannot invoke it or overwrite the list. Handlers run **synchronously** on the raising thread, in subscription order; an exception in one stops the rest.\n\n## Unsubscribe, or leak\n\nThe publisher's delegate list holds a reference to every subscriber. A long-lived publisher (a static cache, a singleton service) keeps short-lived subscribers (pages, view models, per-request objects) alive forever unless they unsubscribe.\n\n`-=` only removes a handler that is **the same delegate**: `p.Changed -= (_, x) => n += x;` creates a NEW lambda and removes nothing. Keep a reference to the handler, or return a subscription object:\n\n```csharp\npublic IDisposable Subscribe(Action<decimal> handler)\n{\n    EventHandler<decimal> h = (_, p) => handler(p);\n    PriceChanged += h;\n    return new Subscription(() => PriceChanged -= h);\n}\nusing var sub = feed.Subscribe(p => Console.WriteLine(p));   // disposed: unsubscribed\n```\n\nThis is the pattern behind `IObservable`, `IOptionsMonitor.OnChange` and many client libraries.",
+  "quiz": [
+    {
+      "prompt": "What is the difference between `Func<int, string>` and `Action<int>`?",
+      "choices": [
+        "Func runs asynchronously",
+        "Func returns a string; Action returns nothing",
+        "Action takes no parameters",
+        "There is none"
+      ],
+      "answer": 1,
+      "explanation": "The last type argument of Func is the return type; Action delegates return void."
+    },
+    {
+      "prompt": "`for (int i = 0; i < 3; i++) fs.Add(() => i);` What do the three functions return?",
+      "choices": [
+        "0, 1, 2",
+        "2, 2, 2",
+        "3, 3, 3",
+        "They throw"
+      ],
+      "answer": 2,
+      "explanation": "All three capture the single loop variable, which is 3 when the loop ends."
+    },
+    {
+      "prompt": "The same with `foreach (var x in new[] { 0, 1, 2 }) fs.Add(() => x);` returns...",
+      "choices": [
+        "0, 1, 2",
+        "2, 2, 2",
+        "3, 3, 3",
+        "null"
+      ],
+      "answer": 0,
+      "explanation": "Since C# 5, each foreach iteration declares a fresh variable."
+    },
+    {
+      "prompt": "A multicast `Func<int>` combines `() => 1` and `() => 2`. What does invoking it return?",
+      "choices": [
+        "1",
+        "3",
+        "An array [1, 2]",
+        "2"
+      ],
+      "answer": 3,
+      "explanation": "Every target runs, but only the last return value is returned."
+    },
+    {
+      "prompt": "What can code OUTSIDE the declaring class do with an `event`?",
+      "choices": [
+        "Only += and -=",
+        "Invoke it",
+        "Assign a new delegate with =",
+        "All of these"
+      ],
+      "answer": 0,
+      "explanation": "The event keyword restricts outsiders to subscribing and unsubscribing."
+    },
+    {
+      "prompt": "`p.Changed += (_, x) => n += x; p.Changed -= (_, x) => n += x;` Is the handler removed?",
+      "choices": [
+        "Yes",
+        "No: the second lambda is a different delegate instance, so nothing is removed",
+        "Only in Release builds",
+        "It does not compile"
+      ],
+      "answer": 1,
+      "explanation": "Keep a reference to the handler you subscribed and unsubscribe that same delegate."
+    },
+    {
+      "prompt": "Why can a page that subscribes to a singleton's event leak memory?",
+      "choices": [
+        "Events copy the page",
+        "Events run on another thread",
+        "The singleton's delegate list keeps a reference to the page, so it is never collected",
+        "It cannot leak"
+      ],
+      "answer": 2,
+      "explanation": "Publishers reference their subscribers; unsubscribe when the subscriber's lifetime ends."
+    },
+    {
+      "prompt": "How do event handlers run when an event is raised?",
+      "choices": [
+        "In parallel on the thread pool",
+        "Synchronously on the raising thread, in subscription order",
+        "In reverse order",
+        "Only the first one runs"
+      ],
+      "answer": 1,
+      "explanation": "Raising an event is a synchronous multicast delegate call."
+    },
+    {
+      "prompt": "Why write `Changed?.Invoke(this, n)`?",
+      "choices": [
+        "To make it async",
+        "To catch exceptions",
+        "Because Invoke is required",
+        "So raising with no subscribers does not throw NullReferenceException"
+      ],
+      "answer": 3,
+      "explanation": "An event with no handlers is null; the ?. makes raising it a no-op."
+    },
+    {
+      "prompt": "What is a clean way for a Subscribe method to support unsubscribing?",
+      "choices": [
+        "Return an IDisposable whose Dispose removes the stored handler",
+        "Return the delegate count",
+        "Use a static flag",
+        "Clear all handlers"
+      ],
+      "answer": 0,
+      "explanation": "Callers dispose the subscription (often with using), and the publisher removes exactly that handler."
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "Func versus Action versus Predicate",
+      "back": "Func returns its last type argument, Action returns nothing, Predicate<T> is a function from T to bool."
+    },
+    {
+      "front": "The for-loop capture trap",
+      "back": "Lambdas created in a for loop share one loop variable and see its final value; copy it into a local inside the loop."
+    },
+    {
+      "front": "What do lambdas capture?",
+      "back": "Variables themselves, not their values at creation, and they keep the referenced objects alive."
+    },
+    {
+      "front": "What does invoking a multicast Func return?",
+      "back": "Every target runs, and the value returned by the last one is the result."
+    },
+    {
+      "front": "What does the event keyword restrict?",
+      "back": "Outside code can only add and remove handlers; it cannot invoke the event or replace its handler list."
+    },
+    {
+      "front": "Why does unsubscribing a lambda written inline do nothing?",
+      "back": "Each lambda expression creates a new delegate; removal needs the same delegate that was added."
+    },
+    {
+      "front": "How do events cause memory leaks?",
+      "back": "A long-lived publisher holds references to short-lived subscribers until they unsubscribe."
+    },
+    {
+      "front": "The disposable-subscription pattern",
+      "back": "Subscribe returns an IDisposable that removes its handler when disposed, so callers can unsubscribe with using."
+    }
+  ],
+  "drills": [
+    {
+      "slug": "01-price-feed-subscriptions",
+      "title": "A price feed with disposable subscriptions",
+      "difficulty": 3,
+      "skills": [
+        "events",
+        "IDisposable subscriptions"
+      ],
+      "instructions": "**Interview prompt.** \"Dashboard widgets subscribe to a shared price feed and are never unsubscribed, so closed widgets keep receiving prices and never get garbage-collected. Fix the feed's API.\"\n\n**Why it matters.** Returning an `IDisposable` from `Subscribe` makes unsubscribing explicit and impossible to get wrong with `-=` and a fresh lambda.\n\n**Your task.** Complete `PriceFeed` in the types section:\n- `IDisposable Subscribe(Action<decimal> handler)` registers the handler and returns a subscription; disposing it unregisters THAT handler only, and disposing twice is harmless\n- `void Publish(decimal price)` notifies every current subscriber with the price, in subscription order, but only when the price differs from the last published price (the very first publish always notifies)\n- `int SubscriberCount` is the number of active subscriptions\n- publishing with no subscribers does nothing\n\nA `Subscription` class that runs an action once on `Dispose` is provided.\n\n**Worked example.** Subscribe, publish 10, publish 10, publish 11: the handler sees 10 and 11.",
+      "starterHead": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · price feed subscriptions★★★ core\n//  concepts: events · IDisposable · change detection\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Subscribe returns the way to unsubscribe.\n\nusing static Bootcamp.Check;\n\n// TODO: complete PriceFeed in the types section\n\n",
+      "solutionHead": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · price feed subscriptions★★★ core\n//  concepts: events · IDisposable · change detection\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Subscribe returns the way to unsubscribe.\n\nusing static Bootcamp.Check;\n\n// PriceFeed is implemented in the types section\n\n",
+      "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"only changed prices are delivered\", () =>\n{\n    var feed = new PriceFeed();\n    var seen = new List<decimal>();\n    using var sub = feed.Subscribe(p => seen.Add(p));\n    feed.Publish(10m);\n    feed.Publish(10m);\n    feed.Publish(11m);\n    Eq(seen, new[] { 10m, 11m });\n});\n\nTest(\"disposing unsubscribes only that handler\", () =>\n{\n    var feed = new PriceFeed();\n    var a = new List<decimal>();\n    var b = new List<decimal>();\n    var subA = feed.Subscribe(p => a.Add(p));\n    feed.Subscribe(p => b.Add(p));\n    feed.Publish(1m);\n    subA.Dispose();\n    feed.Publish(2m);\n    Eq(a, new[] { 1m });\n    Eq(b, new[] { 1m, 2m });\n    Eq(feed.SubscriberCount, 1);\n});\n\nTest(\"disposing twice is harmless\", () =>\n{\n    var feed = new PriceFeed();\n    var sub = feed.Subscribe(_ => { });\n    sub.Dispose();\n    sub.Dispose();\n    Eq(feed.SubscriberCount, 0);\n});\n\nTest(\"subscribers run in subscription order\", () =>\n{\n    var feed = new PriceFeed();\n    var log = new List<string>();\n    feed.Subscribe(_ => log.Add(\"first\"));\n    feed.Subscribe(_ => log.Add(\"second\"));\n    feed.Publish(5m);\n    Eq(log, new[] { \"first\", \"second\" });\n});\n\nTest(\"publishing with no subscribers does nothing (boundary)\", () =>\n{\n    var feed = new PriceFeed();\n    feed.Publish(3m);\n    Eq(feed.SubscriberCount, 0);\n});\n\n",
+      "tail": "// ──────────────────────────── types ──────────────────────────────────────\n\nclass PriceFeed\n{\n    private event EventHandler<decimal>? PriceChanged;\n\n    public int SubscriberCount => throw new NotImplementedException(); // TODO: active subscriptions\n\n    public IDisposable Subscribe(Action<decimal> handler)\n    {\n        // TODO: add a handler and return a Subscription that removes exactly that handler\n        throw new NotImplementedException();\n    }\n\n    public void Publish(decimal price)\n    {\n        // TODO: notify only when the price changed (the first publish always notifies)\n        throw new NotImplementedException();\n    }\n}\n\nsealed class Subscription(Action onDispose) : IDisposable\n{\n    private Action? _onDispose = onDispose;\n    public void Dispose()\n    {\n        _onDispose?.Invoke();\n        _onDispose = null;\n    }\n}\n",
+      "solutionTail": "// ──────────────────────────── types ──────────────────────────────────────\n\nclass PriceFeed\n{\n    private event EventHandler<decimal>? PriceChanged;\n    private decimal? _last;\n\n    public int SubscriberCount => PriceChanged?.GetInvocationList().Length ?? 0;\n\n    public IDisposable Subscribe(Action<decimal> handler)\n    {\n        EventHandler<decimal> h = (_, price) => handler(price);\n        PriceChanged += h;\n        return new Subscription(() => PriceChanged -= h);\n    }\n\n    public void Publish(decimal price)\n    {\n        if (_last == price) return;\n        _last = price;\n        PriceChanged?.Invoke(this, price);\n    }\n}\n\nsealed class Subscription(Action onDispose) : IDisposable\n{\n    private Action? _onDispose = onDispose;\n    public void Dispose()\n    {\n        _onDispose?.Invoke();\n        _onDispose = null;\n    }\n}\n",
+      "explanation": "Wrap the caller's action in ONE handler instance, subscribe it, and capture that same instance in the subscription's unsubscribe action:\n\n```csharp\npublic IDisposable Subscribe(Action<decimal> handler)\n{\n    EventHandler<decimal> h = (_, price) => handler(price);\n    PriceChanged += h;\n    return new Subscription(() => PriceChanged -= h);\n}\n```\n\nBecause `h` is the exact delegate that was added, `-=` removes it (and only it). A nullable `_last` makes the first publish always notify. `GetInvocationList()` counts the subscribed delegates.",
+      "hints": [
+        "Unsubscribing needs the very same delegate instance that was subscribed, so the subscription must hold on to it.",
+        "In Subscribe, create one EventHandler<decimal> wrapping the action, add it, and return a Subscription whose action removes that variable; keep a decimal? of the last price for Publish.",
+        "Create a single handler object per subscriber and remember it inside the disposable you hand back, so disposing removes exactly that handler. Store the last price and skip notifying when a new price equals it."
+      ]
+    }
+  ]
+}

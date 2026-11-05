@@ -1,0 +1,177 @@
+{
+  "format": "fundamentals-authoring@1",
+  "track": "csharp",
+  "topic": "09-linq-and-deferred-execution",
+  "title": "LINQ & deferred execution",
+  "level": "intermediate",
+  "summary": "Where, Select, OrderBy, GroupBy and friends; deferred versus immediate execution, multiple enumeration, First versus Single versus FirstOrDefault, empty-sequence aggregates, and IEnumerable versus IQueryable.",
+  "lesson": "## A pipeline over sequences\n\n```csharp\nvar topCustomers = orders\n    .Where(o => o.Status == \"paid\")\n    .GroupBy(o => o.CustomerId)\n    .Select(g => new { CustomerId = g.Key, Total = g.Sum(o => o.Total) })\n    .OrderByDescending(x => x.Total)\n    .ThenBy(x => x.CustomerId)\n    .Take(10)\n    .ToList();\n```\n\n## Deferred execution\n\nMost LINQ operators do **not** run when you call them. They build a query that runs when you **enumerate** it (`foreach`, `ToList`, `Count`, `First`, ...):\n\n```csharp\nvar nums = new List<int> { 1, 2, 3 };\nvar big = nums.Where(n => n > 1);   // nothing has run yet\nnums.Add(4);\nbig.Count()                          // 3: the query sees the item added later\n```\n\nConsequences:\n- **Multiple enumeration** runs the whole pipeline again each time: calling `Count()` and then `foreach` on the same query evaluates every lambda twice. Against a database query, it runs the SQL twice.\n- Exceptions inside a lambda appear at enumeration time, possibly far from where the query was written.\n- Captured variables are read at enumeration time.\n\n`ToList()` / `ToArray()` / `ToDictionary()` execute immediately and give a **snapshot**. Materialise once when you will use a result several times or return it from a method.\n\n## Picking one element\n\n| call | 0 elements | 1 | 2+ |\n|---|---|---|---|\n| `First()` | throws | first | first |\n| `FirstOrDefault()` | default | first | first |\n| `Single()` | throws | the one | throws |\n| `SingleOrDefault()` | default | the one | throws |\n\nAll the throws are `InvalidOperationException`. Use `Single` when duplicates mean corrupted data (lookup by a unique key); `FirstOrDefault` when \"none\" is a normal outcome.\n\n## Aggregates on empty sequences\n\n`Sum()` of an empty sequence is `0`, but `Average()`, `Min()` and `Max()` of an empty sequence of non-nullable numbers throw `InvalidOperationException`. Over nullable numbers they return `null`. Guard with `Any()` or use `DefaultIfEmpty()`.\n\n## Other operators worth knowing\n\n- `Any()` stops at the first element: prefer it to `Count() > 0`.\n- `OrderBy` is a **stable** sort; chain `ThenBy` for tie-breakers (a second `OrderBy` would discard the first ordering).\n- `SelectMany` flattens; `Distinct`, `DistinctBy`, `MaxBy`, `Chunk`, `Zip`, `Skip` / `Take`.\n- `ToDictionary` throws `ArgumentException` on a duplicate key; use `GroupBy` or `ToLookup` when keys repeat.\n\n## IEnumerable versus IQueryable\n\n`IEnumerable<T>` LINQ runs your lambdas in memory. `IQueryable<T>` (EF Core's `DbSet`) translates the expression tree into SQL. Calling `.AsEnumerable()` or `.ToList()` too early pulls every row into memory and filters there (topic 20). Keep filters, ordering and paging on the `IQueryable` until the final `ToListAsync()`.",
+  "quiz": [
+    {
+      "prompt": "`var big = nums.Where(n => n > 1);` then `nums.Add(4);` with nums initially [1, 2, 3]. What is `big.Count()`?",
+      "choices": [
+        "2",
+        "3",
+        "4",
+        "1"
+      ],
+      "answer": 1,
+      "explanation": "Where is deferred: it runs at Count(), after 4 was added, so it sees 2, 3 and 4."
+    },
+    {
+      "prompt": "What does `new List<int>().First()` do?",
+      "choices": [
+        "Returns 0",
+        "Returns null",
+        "Throws InvalidOperationException",
+        "Returns -1"
+      ],
+      "answer": 2,
+      "explanation": "First requires at least one element; FirstOrDefault returns default instead."
+    },
+    {
+      "prompt": "What does `new List<int> { 1, 2 }.SingleOrDefault()` do?",
+      "choices": [
+        "Returns 1",
+        "Returns 0",
+        "Returns 2",
+        "Throws InvalidOperationException"
+      ],
+      "answer": 3,
+      "explanation": "SingleOrDefault tolerates zero elements but not more than one."
+    },
+    {
+      "prompt": "What is `new List<int>().Sum()` and `new List<int>().Average()`?",
+      "choices": [
+        "0 and an InvalidOperationException",
+        "0 and 0",
+        "Both throw",
+        "null and null"
+      ],
+      "answer": 0,
+      "explanation": "Sum of nothing is 0; the average of nothing is undefined, so it throws for non-nullable numbers."
+    },
+    {
+      "prompt": "A query is enumerated with `Count()` and then with `foreach`. How many times do its lambdas run?",
+      "choices": [
+        "Once",
+        "Twice: each enumeration runs the whole pipeline",
+        "Never",
+        "Once, then cached"
+      ],
+      "answer": 1,
+      "explanation": "Deferred queries are re-evaluated on every enumeration; materialise with ToList() to reuse results."
+    },
+    {
+      "prompt": "Which call takes a snapshot of the results right away?",
+      "choices": [
+        "Where",
+        "Select",
+        "ToList",
+        "OrderBy"
+      ],
+      "answer": 2,
+      "explanation": "ToList, ToArray and ToDictionary execute immediately; the others build deferred queries."
+    },
+    {
+      "prompt": "How do you sort by Total descending, then by Name for ties?",
+      "choices": [
+        ".OrderByDescending(x => x.Total).OrderBy(x => x.Name)",
+        ".OrderBy(x => x.Name).OrderByDescending(x => x.Total)",
+        ".Sort(Total, Name)",
+        ".OrderByDescending(x => x.Total).ThenBy(x => x.Name)"
+      ],
+      "answer": 3,
+      "explanation": "ThenBy adds a tie-breaker; a second OrderBy re-sorts the whole sequence."
+    },
+    {
+      "prompt": "Why prefer `Any()` over `Count() > 0`?",
+      "choices": [
+        "Any stops at the first element; Count may enumerate everything",
+        "Count is obsolete",
+        "Any is thread-safe",
+        "They differ in result"
+      ],
+      "answer": 0,
+      "explanation": "For non-collection sequences and database queries, Any() is much cheaper."
+    },
+    {
+      "prompt": "`orders.ToDictionary(o => o.CustomerId)` when a customer has two orders...",
+      "choices": [
+        "keeps the first",
+        "keeps the last",
+        "throws ArgumentException for the duplicate key",
+        "creates a list"
+      ],
+      "answer": 2,
+      "explanation": "Use GroupBy or ToLookup when keys can repeat."
+    },
+    {
+      "prompt": "Calling `.ToList()` on an EF Core `DbSet` before `.Where(...)`...",
+      "choices": [
+        "has no effect",
+        "loads every row into memory and filters in C#",
+        "is required for Where",
+        "makes the query faster"
+      ],
+      "answer": 1,
+      "explanation": "Keep the IQueryable until the end so the filter is translated to SQL."
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "What is deferred execution?",
+      "back": "A LINQ query does no work when built; it runs each time it is enumerated, reading its source and captured variables at that moment."
+    },
+    {
+      "front": "Why materialise with ToList?",
+      "back": "To run the query once and keep a snapshot, so later reuse neither repeats the work nor sees later changes to the source."
+    },
+    {
+      "front": "First, FirstOrDefault, Single and SingleOrDefault on an empty sequence",
+      "back": "First and Single throw; the OrDefault variants return the default value."
+    },
+    {
+      "front": "When choose Single over First?",
+      "back": "When more than one match would mean bad data, such as a lookup by a unique key."
+    },
+    {
+      "front": "Aggregates on an empty sequence",
+      "back": "Sum gives 0; Average, Min and Max throw for non-nullable numbers and return null for nullable ones."
+    },
+    {
+      "front": "Any versus Count greater than zero",
+      "back": "Any stops as soon as it finds one element; Count may walk the whole sequence or run a counting query."
+    },
+    {
+      "front": "Why ThenBy and not a second OrderBy?",
+      "back": "ThenBy breaks ties within the first ordering; a second OrderBy discards it and re-sorts everything."
+    },
+    {
+      "front": "IEnumerable versus IQueryable LINQ",
+      "back": "IEnumerable runs lambdas in memory; IQueryable translates the query, for example into SQL, so filters belong on it before materialising."
+    }
+  ],
+  "drills": [
+    {
+      "slug": "01-top-customers",
+      "title": "Top customers with GroupBy and a snapshot",
+      "difficulty": 2,
+      "skills": [
+        "GroupBy",
+        "deferred execution"
+      ],
+      "instructions": "**Interview prompt.** \"The dashboard's top-customers widget changes between two renders of the same response, and it double-counts refunded orders.\"\n\n**Why it matters.** A query returned without materialising re-runs whenever it is enumerated, and sees later changes to its source. Grouping, filtering and ordering must also be in the right order.\n\n**Your task.** Implement the stubbed local function `IReadOnlyList<CustomerTotal> TopCustomers(IEnumerable<Order> orders, int n)`:\n- only orders with `Status == \"paid\"` count\n- one `CustomerTotal(Customer, Total)` per customer, `Total` being the sum of that customer's paid order totals\n- sorted by `Total` descending, ties broken by `Customer` ascending (ordinal)\n- at most `n` results\n- the result is a materialised snapshot: changing the source list afterwards does not change it\n\n**Worked example.** Paid orders ana 50, bo 70, ana 30 and a refunded bo 999 give `[ana 80, bo 70]`.",
+      "starterHead": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · top customers★★☆ core\n//  concepts: Where · GroupBy · OrderBy/ThenBy · ToList\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Filter, group, order, take: then materialise once.\n\nusing static Bootcamp.Check;\n\nIReadOnlyList<CustomerTotal> TopCustomers(IEnumerable<Order> orders, int n)\n{\n    // TODO: paid orders only, one total per customer, sorted, top n, materialised\n    throw new NotImplementedException();\n}\n\n",
+      "solutionHead": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · top customers★★☆ core\n//  concepts: Where · GroupBy · OrderBy/ThenBy · ToList\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Filter, group, order, take: then materialise once.\n\nusing static Bootcamp.Check;\n\nIReadOnlyList<CustomerTotal> TopCustomers(IEnumerable<Order> orders, int n) =>\n    orders\n        .Where(o => o.Status == \"paid\")\n        .GroupBy(o => o.Customer)\n        .Select(g => new CustomerTotal(g.Key, g.Sum(o => o.Total)))\n        .OrderByDescending(c => c.Total)\n        .ThenBy(c => c.Customer, StringComparer.Ordinal)\n        .Take(n)\n        .ToList();\n\n",
+      "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"sums paid orders per customer\", () =>\n{\n    var orders = new List<Order> { new(\"ana\", 50m, \"paid\"), new(\"bo\", 70m, \"paid\"), new(\"ana\", 30m, \"paid\"), new(\"bo\", 999m, \"refunded\") };\n    Eq(TopCustomers(orders, 10), new[] { new CustomerTotal(\"ana\", 80m), new CustomerTotal(\"bo\", 70m) });\n});\n\nTest(\"ties are broken by customer name\", () =>\n{\n    var orders = new List<Order> { new(\"cy\", 10m, \"paid\"), new(\"al\", 10m, \"paid\"), new(\"bo\", 20m, \"paid\") };\n    Eq(TopCustomers(orders, 3).Select(c => c.Customer).ToList(), new[] { \"bo\", \"al\", \"cy\" });\n});\n\nTest(\"at most n results\", () =>\n{\n    var orders = new List<Order> { new(\"a\", 1m, \"paid\"), new(\"b\", 2m, \"paid\"), new(\"c\", 3m, \"paid\") };\n    Eq(TopCustomers(orders, 2).Count, 2);\n});\n\nTest(\"the result is a snapshot of the source\", () =>\n{\n    var orders = new List<Order> { new(\"ana\", 50m, \"paid\") };\n    var top = TopCustomers(orders, 5);\n    orders.Add(new Order(\"zed\", 500m, \"paid\"));\n    Eq(top.Count, 1);\n});\n\nTest(\"no paid orders gives an empty list (boundary)\", () =>\n    Eq(TopCustomers(new List<Order> { new(\"ana\", 5m, \"open\") }, 3).Count, 0));\n\n",
+      "tail": "// ──────────────────────────── types ──────────────────────────────────────\n\nrecord Order(string Customer, decimal Total, string Status);\nrecord CustomerTotal(string Customer, decimal Total);\n",
+      "explanation": "Filter before grouping, project each group to its total, order with a tie-breaker, and materialise:\n\n```csharp\norders.Where(o => o.Status == \"paid\")\n      .GroupBy(o => o.Customer)\n      .Select(g => new CustomerTotal(g.Key, g.Sum(o => o.Total)))\n      .OrderByDescending(c => c.Total)\n      .ThenBy(c => c.Customer, StringComparer.Ordinal)\n      .Take(n)\n      .ToList();\n```\n\nWithout the final `ToList()` the snapshot test fails: the returned query would run again when the test counts it, after \"zed\" was added.",
+      "hints": [
+        "Decide the order of operations: which orders count, how they are combined per customer, how the totals are ranked, and when the query actually runs.",
+        "Chain Where on status, GroupBy customer, Select a CustomerTotal with g.Sum, OrderByDescending total, ThenBy customer, Take n, and finish with ToList.",
+        "Keep only the paid orders, combine each customer's orders into one total, rank the totals from highest down with the name as a tie-breaker, keep the first few, and run the query right away into a list."
+      ]
+    }
+  ]
+}

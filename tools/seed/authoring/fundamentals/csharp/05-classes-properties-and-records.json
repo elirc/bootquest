@@ -1,0 +1,178 @@
+{
+  "format": "fundamentals-authoring@1",
+  "track": "csharp",
+  "topic": "05-classes-properties-and-records",
+  "title": "Classes, properties & records",
+  "level": "intermediate",
+  "summary": "Fields versus properties, auto-properties, init and required, constructors and primary constructors, static members, and records: value equality, with-expressions and when to choose class, record or struct.",
+  "lesson": "## Properties, not public fields\n\n```csharp\npublic class Product\n{\n    private decimal _price;                       // a field: storage\n    public decimal Price                          // a property: controlled access\n    {\n        get => _price;\n        set => _price = value >= 0 ? value : throw new ArgumentOutOfRangeException(nameof(value));\n    }\n    public string Name { get; set; } = \"\";        // auto-property with an initialiser\n    public string Sku { get; init; } = \"\";        // settable only during initialisation\n    public required string Category { get; init; } // must be set by the creator (C# 11)\n    public DateTime CreatedAt { get; } = DateTime.UtcNow; // get-only: set here or in the constructor\n}\n```\n\nProperties let you add validation or change the storage later without changing callers. Public fields are only appropriate for small structs and constants.\n\n## Constructors\n\n```csharp\npublic class OrderService\n{\n    private readonly IOrderRepository _repo;\n    public OrderService(IOrderRepository repo) => _repo = repo;\n}\n\n// C# 12 primary constructor: the parameter is in scope for the whole class\npublic class OrderService(IOrderRepository repo)\n{\n    public Task<Order?> Find(int id) => repo.FindAsync(id);\n}\n```\n\n`readonly` fields can be assigned only in the declaration or a constructor. Primary-constructor parameters are captured, mutable variables, not readonly fields; assign them to a `readonly` field if that matters.\n\n## static\n\nStatic members belong to the type, not to instances: `Counter.Count`. Static state is shared by every request in a web app, so mutable statics are a concurrency and test-isolation hazard; keep statics for pure helpers, constants and factory methods.\n\n## Records\n\n```csharp\npublic record Money(decimal Amount, string Currency);\n\nvar a = new Money(1m, \"EUR\");\nvar b = new Money(1m, \"EUR\");\na == b                     // true: value equality over all members\na.ToString()               // \"Money { Amount = 1, Currency = EUR }\"\nvar c = a with { Amount = 2m };   // non-destructive copy with one change\nvar (amount, currency) = a;       // positional records deconstruct\n```\n\nA positional record gets init-only properties, value-based `Equals` / `GetHashCode` / `==`, a readable `ToString`, `Deconstruct` and `with` support. You can add members and validation to a record body.\n\n## class, record or struct?\n\n| type | equality | typical use |\n|---|---|---|\n| `class` | reference | entities with identity and lifecycle (an Order you load and change), services |\n| `record` (class) | value | DTOs, commands, events, value objects (Money, Address), API results |\n| `struct` / `record struct` | value, copied | tiny immutable values (coordinates, ids) where allocation matters |\n\nTwo `Customer` class instances with the same fields are NOT `==`; two equal records are. Do not use records for EF Core entities that are tracked and mutated: their value equality and immutability fight the change tracker (topic 19).\n\n## Encapsulation for domain objects\n\nExpose behaviour, not setters: `order.AddLine(sku, qty)` can enforce \"no more than 50 lines\" and \"cannot change a shipped order\"; a public `List<Line> Lines { get; set; }` cannot. Expose collections as `IReadOnlyList<T>`.",
+  "quiz": [
+    {
+      "prompt": "`record Order(string Status, decimal Total);` What is `new Order(\"a\", 1m) == new Order(\"a\", 1m)`?",
+      "choices": [
+        "false",
+        "true",
+        "It does not compile",
+        "It throws"
+      ],
+      "answer": 1,
+      "explanation": "Records generate value-based equality over their members."
+    },
+    {
+      "prompt": "Two `class Customer` instances with the same Name: what does `==` return?",
+      "choices": [
+        "true",
+        "It compares Name",
+        "false: classes compare references unless == is overloaded",
+        "It throws"
+      ],
+      "answer": 2,
+      "explanation": "Reference types use reference equality by default; records and strings are the exceptions."
+    },
+    {
+      "prompt": "What does `order with { Total = 2m }` do for a record?",
+      "choices": [
+        "Changes order in place",
+        "Throws because records are immutable",
+        "Creates a new record copying every member except Total",
+        "Creates a subclass"
+      ],
+      "answer": 2,
+      "explanation": "with-expressions are non-destructive mutation: a copy with the listed changes."
+    },
+    {
+      "prompt": "Where can a property declared `{ get; init; }` be set?",
+      "choices": [
+        "Anywhere",
+        "Only in object initialisers, constructors and with-expressions",
+        "Only in the declaring class",
+        "Nowhere after declaration"
+      ],
+      "answer": 1,
+      "explanation": "init allows assignment during construction and initialisation, then the property is read-only."
+    },
+    {
+      "prompt": "What is the main risk of a mutable `static` field in an ASP.NET Core app?",
+      "choices": [
+        "It is shared by every request and thread, causing races and cross-request leaks",
+        "It is reset on each request",
+        "It cannot be read",
+        "It uses too much memory"
+      ],
+      "answer": 0,
+      "explanation": "Static state lives for the whole process; concurrent requests read and write it at once."
+    },
+    {
+      "prompt": "In `class OrderService(IOrderRepository repo)`, what is `repo`?",
+      "choices": [
+        "A readonly field",
+        "A public property",
+        "Only usable in a constructor",
+        "A primary-constructor parameter in scope for the whole class (captured, not readonly)"
+      ],
+      "answer": 3,
+      "explanation": "Primary constructor parameters are captured variables; assign them to readonly fields if you need that guarantee."
+    },
+    {
+      "prompt": "Which is the best fit for a record?",
+      "choices": [
+        "A DTO or a value object like Money",
+        "A tracked EF Core entity that is mutated over time",
+        "A DbContext",
+        "A background service"
+      ],
+      "answer": 0,
+      "explanation": "Records suit immutable data with value semantics; entities with identity and changing state suit classes."
+    },
+    {
+      "prompt": "Why prefer properties over public fields on a class?",
+      "choices": [
+        "Fields are slower",
+        "Properties can add validation or change storage later without changing callers",
+        "Fields cannot be serialised",
+        "The compiler forbids public fields"
+      ],
+      "answer": 1,
+      "explanation": "A property is an API: its accessors can evolve; a field exposes the storage directly."
+    },
+    {
+      "prompt": "What does a positional record's generated ToString look like for `new Money(1.5m, \"EUR\")`?",
+      "choices": [
+        "\"Money\"",
+        "\"1.5 EUR\"",
+        "\"Money { Amount = 1.5, Currency = EUR }\"",
+        "\"Money(1.5, EUR)\""
+      ],
+      "answer": 2,
+      "explanation": "Records print their type name and members, which makes logs and test failures readable."
+    },
+    {
+      "prompt": "An Order should never hold more than 50 lines. Which design enforces it?",
+      "choices": [
+        "A public List<Line> Lines { get; set; }",
+        "A comment",
+        "A record with a Lines property",
+        "An AddLine method that checks the rule, with Lines exposed as IReadOnlyList<Line>"
+      ],
+      "answer": 3,
+      "explanation": "Encapsulating mutation behind methods lets the object protect its own invariants."
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "Field versus property",
+      "back": "A field is raw storage; a property is accessor methods over it that can validate, compute or change storage without breaking callers."
+    },
+    {
+      "front": "init versus required",
+      "back": "init limits setting to object creation; required forces the creator to set the member, checked by the compiler."
+    },
+    {
+      "front": "What does a positional record generate?",
+      "back": "Init-only properties, value-based Equals, GetHashCode and ==, a member-listing ToString, Deconstruct, and with-expression support."
+    },
+    {
+      "front": "When choose class, record or struct?",
+      "back": "Class for entities and services with identity, record for DTOs and value objects, struct for tiny immutable values where allocation matters."
+    },
+    {
+      "front": "What does a with-expression do?",
+      "back": "It copies a record and changes only the named members, leaving the original untouched."
+    },
+    {
+      "front": "Why are mutable static fields dangerous in web apps?",
+      "back": "One instance is shared across all requests and threads, so concurrent writes race and data leaks between users."
+    },
+    {
+      "front": "Primary constructor parameters versus readonly fields",
+      "back": "Primary constructor parameters are captured and can be reassigned; copy them into readonly fields to guarantee immutability."
+    },
+    {
+      "front": "How should a domain object expose its collection?",
+      "back": "As an IReadOnlyList, with methods that change it and enforce the business rules."
+    }
+  ],
+  "drills": [
+    {
+      "slug": "01-money-value-object",
+      "title": "A Money value object as a record",
+      "difficulty": 2,
+      "skills": [
+        "records",
+        "value objects"
+      ],
+      "instructions": "**Interview prompt.** \"Prices are passed around as bare decimals, and someone added euros to dollars. Introduce a Money type.\"\n\n**Why it matters.** A value object bundles a value with its unit and its rules. A record gives you value equality and immutability for free; you add the domain behaviour.\n\n**Your task.** Complete `record Money(long Cents, string Currency)` in the types section:\n- `Money Add(Money other)` returns the sum as a NEW Money; adding a different currency throws `InvalidOperationException`\n- `Money Times(int factor)` returns a NEW Money with the cents multiplied\n- `ToString()` returns the amount with exactly two decimals, a space and the currency, using a dot as the decimal separator on every machine: 1234 cents of EUR is `\"12.34 EUR\"`, and -5 cents is `\"-0.05 EUR\"`\n\nEquality must stay value-based: two Money values with the same cents and currency are `==`.\n\n**Worked example.** `new Money(1250, \"EUR\").Add(new Money(250, \"EUR\"))` equals `new Money(1500, \"EUR\")` and prints `\"15.00 EUR\"`.",
+      "starterHead": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · a Money value object★★☆ core\n//  concepts: records · value equality · invariant formatting\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  The record gives equality and immutability; the domain rules are yours.\n\nusing static Bootcamp.Check;\n\n// TODO: complete record Money in the types section\n\n",
+      "solutionHead": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · a Money value object★★☆ core\n//  concepts: records · value equality · invariant formatting\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  The record gives equality and immutability; the domain rules are yours.\n\nusing static Bootcamp.Check;\n\n// Money is implemented in the types section\n\n",
+      "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"Add returns the sum and leaves the operands alone\", () =>\n{\n    var a = new Money(1250, \"EUR\");\n    var sum = a.Add(new Money(250, \"EUR\"));\n    Eq(sum == new Money(1500, \"EUR\"), true);\n    Eq(a == new Money(1250, \"EUR\"), true);\n});\n\nTest(\"adding another currency throws\", () =>\n    Throws<InvalidOperationException>(() => new Money(100, \"EUR\").Add(new Money(100, \"USD\"))));\n\nTest(\"Times multiplies the cents\", () =>\n    Eq(new Money(199, \"USD\").Times(3) == new Money(597, \"USD\"), true));\n\nTest(\"ToString uses two decimals and the currency\", () =>\n{\n    Eq(new Money(1234, \"EUR\").ToString(), \"12.34 EUR\");\n    Eq(new Money(1500, \"EUR\").ToString(), \"15.00 EUR\");\n});\n\nTest(\"small and negative amounts format correctly (boundary)\", () =>\n{\n    Eq(new Money(-5, \"EUR\").ToString(), \"-0.05 EUR\");\n    Eq(new Money(0, \"GBP\").ToString(), \"0.00 GBP\");\n});\n\nTest(\"equality is value-based\", () =>\n{\n    Eq(new Money(1, \"EUR\") == new Money(1, \"EUR\"), true);\n    Eq(new Money(1, \"EUR\") == new Money(1, \"USD\"), false);\n});\n\n",
+      "tail": "// ──────────────────────────── types ──────────────────────────────────────\n\nrecord Money(long Cents, string Currency)\n{\n    public Money Add(Money other)\n    {\n        // TODO: same currency only; a new Money with the summed cents\n        throw new NotImplementedException();\n    }\n\n    public Money Times(int factor)\n    {\n        // TODO: a new Money with the cents multiplied\n        throw new NotImplementedException();\n    }\n\n    public override string ToString()\n    {\n        // TODO: \"12.34 EUR\" on every machine\n        throw new NotImplementedException();\n    }\n}\n",
+      "solutionTail": "// ──────────────────────────── types ──────────────────────────────────────\n\nrecord Money(long Cents, string Currency)\n{\n    public Money Add(Money other)\n    {\n        if (other.Currency != Currency) throw new InvalidOperationException($\"cannot add {other.Currency} to {Currency}\");\n        return this with { Cents = Cents + other.Cents };\n    }\n\n    public Money Times(int factor) => this with { Cents = Cents * factor };\n\n    public override string ToString() =>\n        (Cents / 100m).ToString(\"0.00\", System.Globalization.CultureInfo.InvariantCulture) + \" \" + Currency;\n}\n",
+      "explanation": "`with` builds the new values without restating every member, and the invariant culture pins the decimal separator:\n\n```csharp\npublic Money Add(Money other)\n{\n    if (other.Currency != Currency) throw new InvalidOperationException($\"cannot add {other.Currency} to {Currency}\");\n    return this with { Cents = Cents + other.Cents };\n}\n\npublic override string ToString() =>\n    (Cents / 100m).ToString(\"0.00\", CultureInfo.InvariantCulture) + \" \" + Currency;\n```\n\nDividing by `100m` (a decimal) keeps the cents exact; `Cents / 100` would be integer division and drop them. Overriding `ToString` does not affect the generated equality.",
+      "hints": [
+        "A record already gives you value equality; you only need the arithmetic rules and the text format.",
+        "Use this with { Cents = ... } for Add and Times, throw InvalidOperationException on a currency mismatch, and format Cents / 100m with \"0.00\" and CultureInfo.InvariantCulture.",
+        "Refuse to combine different currencies, build every result as a modified copy of the current value, and print the cents as a decimal amount with two places and a dot whatever the server culture is."
+      ]
+    }
+  ]
+}

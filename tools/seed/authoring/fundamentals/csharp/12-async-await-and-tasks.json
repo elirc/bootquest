@@ -1,0 +1,177 @@
+{
+  "format": "fundamentals-authoring@1",
+  "track": "csharp",
+  "topic": "12-async-await-and-tasks",
+  "title": "async/await & Task",
+  "level": "advanced",
+  "summary": "What await really does, sequential versus concurrent awaits with Task.WhenAll, async void, blocking with .Result, CancellationToken flow, exceptions from WhenAll, and async all the way down.",
+  "lesson": "## What await does\n\n```csharp\npublic async Task<Order> GetOrderAsync(int id, CancellationToken ct)\n{\n    var row = await _db.Orders.FindAsync(new object[] { id }, ct);   // the thread is RELEASED while the database works\n    return Map(row);\n}\n```\n\nAn `async` method runs **synchronously until its first await** of an incomplete task, then returns a `Task` to its caller. When the awaited operation finishes, the rest of the method continues (on a thread-pool thread in ASP.NET Core). No thread is blocked while waiting for I/O: that is why async lets a server handle thousands of concurrent requests with a few threads.\n\n## Sequential versus concurrent\n\n```csharp\nvar user  = await GetUserAsync(id);       // ~100 ms\nvar prefs = await GetPrefsAsync(id);      // + ~100 ms = 200 ms\n\nvar userTask  = GetUserAsync(id);         // both start now\nvar prefsTask = GetPrefsAsync(id);\nawait Task.WhenAll(userTask, prefsTask);  // ~100 ms\nvar (user2, prefs2) = (userTask.Result, prefsTask.Result);   // safe: both completed\n```\n\nIndependent calls should start before you await them. Note: one `DbContext` does not support concurrent operations (topic 19); run independent database queries sequentially or use separate contexts.\n\n## Exceptions and WhenAll\n\n`await Task.WhenAll(a, b)` throws the **first** exception. The others are still recorded on the returned task's `Exception.InnerExceptions` (an AggregateError-like list). If you need every failure, keep the WhenAll task and inspect it after the await fails.\n\n## Never block on async code\n\n`task.Result` and `task.Wait()` block a thread until the task finishes. In ASP.NET Core this wastes threads and can starve the pool under load; in UI apps and old ASP.NET it deadlocks. Go **async all the way**: if a method awaits, its callers should be async too, up to the controller or handler.\n\n## async void\n\n`async void` methods cannot be awaited and their exceptions crash the process (there is no Task to put them in). Use `async Task`; the only legitimate `async void` is an event handler.\n\n## Cancellation\n\nAccept a `CancellationToken` in async methods and pass it to everything you await. ASP.NET Core gives you `HttpContext.RequestAborted` (bind a `CancellationToken` parameter in a minimal API or action), which is cancelled when the client disconnects, so a slow query stops instead of finishing for nobody. A cancelled operation throws `OperationCanceledException` (or its subclass `TaskCanceledException`); let it propagate.\n\n```csharp\nusing var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);\ncts.CancelAfter(TimeSpan.FromSeconds(2));       // a timeout on top of the caller's token\nawait client.GetAsync(url, cts.Token);\n```\n\n## Other tools\n\n- `Task.Run(() => Cpu())` moves CPU-bound work to the thread pool; do not wrap I/O in it.\n- `Task.WhenAny` returns the first task to complete (racing, timeouts).\n- `ValueTask` avoids an allocation for methods that usually complete synchronously; await it once only.\n- `SemaphoreSlim(4)` with `WaitAsync` / `Release` limits concurrency (at most four calls in flight).",
+  "quiz": [
+    {
+      "prompt": "Where does an async method run until its first `await` of an incomplete task?",
+      "choices": [
+        "On a new thread",
+        "Synchronously on the caller's thread",
+        "Nowhere until awaited",
+        "On the UI thread only"
+      ],
+      "answer": 1,
+      "explanation": "Async methods start synchronously; they return a Task to the caller at the first real await."
+    },
+    {
+      "prompt": "Two independent 100 ms calls awaited one after another take about...",
+      "choices": [
+        "100 ms",
+        "50 ms",
+        "It depends on the thread count",
+        "200 ms"
+      ],
+      "answer": 3,
+      "explanation": "The second call starts only after the first finished. Start both, then await Task.WhenAll."
+    },
+    {
+      "prompt": "`await Task.WhenAll(FailA(), FailB())` where both fail. What does the await throw?",
+      "choices": [
+        "The first exception; all of them stay on the WhenAll task's Exception.InnerExceptions",
+        "An AggregateException with both",
+        "Nothing",
+        "The last exception only"
+      ],
+      "answer": 0,
+      "explanation": "await unwraps to the first exception; inspect the task to see every failure."
+    },
+    {
+      "prompt": "Why is `async void` dangerous outside event handlers?",
+      "choices": [
+        "It is slower",
+        "It runs synchronously",
+        "It cannot be awaited and its exceptions crash the process",
+        "It leaks threads"
+      ],
+      "answer": 2,
+      "explanation": "Without a Task there is nothing to observe the exception or completion."
+    },
+    {
+      "prompt": "What is the problem with calling `GetOrderAsync(id).Result` in an ASP.NET Core controller?",
+      "choices": [
+        "It returns null",
+        "It blocks a thread while waiting, wasting pool threads and risking starvation under load",
+        "It does not compile",
+        "It runs the query twice"
+      ],
+      "answer": 1,
+      "explanation": "Go async all the way: make the action async and await."
+    },
+    {
+      "prompt": "Which token tells your code that the HTTP client disconnected?",
+      "choices": [
+        "HttpContext.RequestAborted (or a bound CancellationToken parameter)",
+        "CancellationToken.None",
+        "A new CancellationTokenSource",
+        "Environment.ExitCode"
+      ],
+      "answer": 0,
+      "explanation": "Pass it down to database and HTTP calls so abandoned requests stop working."
+    },
+    {
+      "prompt": "What does awaiting a cancelled `Task.Delay(1000, token)` throw?",
+      "choices": [
+        "TimeoutException",
+        "Nothing: it returns early",
+        "InvalidOperationException",
+        "OperationCanceledException (TaskCanceledException)"
+      ],
+      "answer": 3,
+      "explanation": "Cancellation surfaces as OperationCanceledException; let it propagate."
+    },
+    {
+      "prompt": "When is `Task.Run` appropriate in a web app?",
+      "choices": [
+        "Around every database call",
+        "To make sync code async for free",
+        "For CPU-bound work you want off the request thread",
+        "Never"
+      ],
+      "answer": 2,
+      "explanation": "Wrapping I/O in Task.Run only adds a thread hop; use the real async API instead."
+    },
+    {
+      "prompt": "Can one EF Core DbContext run two queries concurrently with Task.WhenAll?",
+      "choices": [
+        "No: a DbContext does not support concurrent operations",
+        "Yes",
+        "Only with AsNoTracking",
+        "Only in SQL Server"
+      ],
+      "answer": 0,
+      "explanation": "Await queries on one context sequentially, or use separate contexts."
+    },
+    {
+      "prompt": "How do you limit concurrent calls to an external API to four at a time?",
+      "choices": [
+        "Task.WhenAll on all of them",
+        "A SemaphoreSlim(4) with WaitAsync and Release around each call",
+        "Thread.Sleep between calls",
+        "ConfigureAwait(false)"
+      ],
+      "answer": 1,
+      "explanation": "The semaphore lets four callers in and makes the rest wait asynchronously."
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "What does await free up while waiting for I/O?",
+      "back": "The thread: it returns to the pool and the method resumes when the operation completes."
+    },
+    {
+      "front": "How do you run independent async calls concurrently?",
+      "back": "Start every task first, then await Task.WhenAll on them."
+    },
+    {
+      "front": "Which exception does await Task.WhenAll throw?",
+      "back": "The first one; the full list stays on the returned task's Exception property."
+    },
+    {
+      "front": "Why avoid .Result and .Wait()?",
+      "back": "They block a thread on async work, which starves the pool in servers and can deadlock in UI or legacy contexts."
+    },
+    {
+      "front": "Rule for async void",
+      "back": "Use it only for event handlers; everywhere else return Task so callers can await and observe failures."
+    },
+    {
+      "front": "Where does a request's cancellation token come from in ASP.NET Core?",
+      "back": "HttpContext.RequestAborted, or a CancellationToken parameter on the action or minimal API handler."
+    },
+    {
+      "front": "Task.Run in a web app",
+      "back": "Only for CPU-bound work; wrapping I/O in it adds overhead without freeing anything."
+    },
+    {
+      "front": "How do you cap concurrency in async code?",
+      "back": "A SemaphoreSlim with the allowed count, awaited before and released after each call."
+    }
+  ],
+  "drills": [
+    {
+      "slug": "01-concurrent-quotes",
+      "title": "Fetch quotes concurrently, in order, cancellably",
+      "difficulty": 3,
+      "skills": [
+        "Task.WhenAll",
+        "CancellationToken"
+      ],
+      "instructions": "**Interview prompt.** \"The portfolio page awaits one stock quote after another; with 20 symbols it takes 4 seconds. Make it concurrent without losing the order, and stop when the user leaves.\"\n\n**Why it matters.** Starting all tasks first and awaiting `Task.WhenAll` turns N sequential latencies into one. The results must still line up with the input, and the cancellation token must reach every call.\n\n**Your task.** Implement the stubbed local function\n`async Task<IReadOnlyList<Quote>> GetQuotesAsync(IReadOnlyList<string> symbols, Func<string, CancellationToken, Task<decimal>> fetch, CancellationToken ct)`:\n- calls `fetch(symbol, ct)` for every symbol, all started before any is awaited\n- returns one `Quote(Symbol, Price)` per symbol, in the INPUT order\n- passes `ct` to every fetch; if it is cancelled, the returned task ends with an `OperationCanceledException`\n- an empty symbol list returns an empty list without calling `fetch`\n\n**Worked example.** With three fetches of 100 ms each, the whole call takes about 100 ms, not 300 ms.",
+      "starterHead": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · concurrent quotes★★★ core\n//  concepts: Task.WhenAll · ordering · CancellationToken\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Start everything, then await once; the token goes to every call.\n\nusing static Bootcamp.Check;\n\nasync Task<IReadOnlyList<Quote>> GetQuotesAsync(IReadOnlyList<string> symbols, Func<string, CancellationToken, Task<decimal>> fetch, CancellationToken ct)\n{\n    // TODO: start every fetch, await them together, keep the input order\n    await Task.CompletedTask;\n    throw new NotImplementedException();\n}\n\n",
+      "solutionHead": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · concurrent quotes★★★ core\n//  concepts: Task.WhenAll · ordering · CancellationToken\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Start everything, then await once; the token goes to every call.\n\nusing static Bootcamp.Check;\n\nasync Task<IReadOnlyList<Quote>> GetQuotesAsync(IReadOnlyList<string> symbols, Func<string, CancellationToken, Task<decimal>> fetch, CancellationToken ct)\n{\n    var tasks = symbols.Select(s => fetch(s, ct)).ToList();\n    var prices = await Task.WhenAll(tasks);\n    return symbols.Select((s, i) => new Quote(s, prices[i])).ToList();\n}\n\n",
+      "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"quotes come back in input order\", async () =>\n{\n    async Task<decimal> Fetch(string s, CancellationToken ct) { await Task.Delay(s == \"AAA\" ? 60 : 10, ct); return s.Length * 10m; }\n    var quotes = await GetQuotesAsync(new[] { \"AAA\", \"B\", \"CC\" }, Fetch, CancellationToken.None);\n    Eq(quotes.Select(q => q.Symbol).ToList(), new[] { \"AAA\", \"B\", \"CC\" });\n    Eq(quotes.Select(q => q.Price).ToList(), new[] { 30m, 10m, 20m });\n});\n\nTest(\"the fetches run concurrently\", async () =>\n{\n    var active = 0;\n    var peak = 0;\n    async Task<decimal> Fetch(string s, CancellationToken ct)\n    {\n        var now = Interlocked.Increment(ref active);\n        lock (typeof(Quote)) peak = Math.Max(peak, now);\n        await Task.Delay(50, ct);\n        Interlocked.Decrement(ref active);\n        return 1m;\n    }\n    await GetQuotesAsync(new[] { \"A\", \"B\", \"C\", \"D\" }, Fetch, CancellationToken.None);\n    Eq(peak, 4);\n});\n\nTest(\"the token reaches every fetch\", async () =>\n{\n    using var cts = new CancellationTokenSource();\n    var seen = new List<CancellationToken>();\n    Task<decimal> Fetch(string s, CancellationToken ct) { lock (seen) seen.Add(ct); return Task.FromResult(1m); }\n    await GetQuotesAsync(new[] { \"A\", \"B\" }, Fetch, cts.Token);\n    Ok(seen.Count == 2 && seen.All(t => t == cts.Token), \"every fetch must receive the caller's token\");\n});\n\nTest(\"cancellation ends the call with OperationCanceledException\", async () =>\n{\n    using var cts = new CancellationTokenSource(30);\n    async Task<decimal> Slow(string s, CancellationToken ct) { await Task.Delay(5000, ct); return 1m; }\n    await ThrowsAsync<OperationCanceledException>(() => GetQuotesAsync(new[] { \"A\", \"B\" }, Slow, cts.Token));\n});\n\nTest(\"no symbols, no calls (boundary)\", async () =>\n{\n    var calls = 0;\n    Task<decimal> Fetch(string s, CancellationToken ct) { calls++; return Task.FromResult(1m); }\n    var quotes = await GetQuotesAsync(Array.Empty<string>(), Fetch, CancellationToken.None);\n    Eq(quotes.Count, 0);\n    Eq(calls, 0);\n});\n\n",
+      "tail": "// ──────────────────────────── types ──────────────────────────────────────\n\nrecord Quote(string Symbol, decimal Price);\n",
+      "explanation": "Materialise the tasks with `ToList()` so every fetch starts immediately, then await them together; `Task.WhenAll` returns results in the order of the tasks you passed:\n\n```csharp\nvar tasks = symbols.Select(s => fetch(s, ct)).ToList();\nvar prices = await Task.WhenAll(tasks);\nreturn symbols.Select((s, i) => new Quote(s, prices[i])).ToList();\n```\n\nA `foreach` with `await fetch(...)` inside passes the order and token tests but fails the concurrency test (peak 1). Forgetting `ToList()` and enumerating the deferred `Select` twice would start every fetch twice.",
+      "hints": [
+        "Concurrency comes from starting every task before awaiting any of them.",
+        "Build the list of tasks with Select and ToList, passing ct to each fetch, await Task.WhenAll, then zip the prices back with the symbols by index.",
+        "Kick off one lookup per symbol straight away, wait for all of them together, and pair each result with its symbol by position, handing the caller's token to every lookup."
+      ]
+    }
+  ]
+}

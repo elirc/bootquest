@@ -1,0 +1,177 @@
+{
+  "format": "fundamentals-authoring@1",
+  "track": "csharp",
+  "topic": "17-middleware-pipeline",
+  "title": "The middleware pipeline",
+  "level": "advanced",
+  "summary": "How app.Use builds a nested pipeline, why registration order matters, short-circuiting, terminal middleware, the order of exception handling, routing, authentication and authorization, and writing after the response started.",
+  "lesson": "## A pipeline of nested delegates\n\nEach middleware receives the `HttpContext` and a `next` delegate. Code before `await next(context)` runs on the way IN, code after it runs on the way OUT:\n\n```csharp\napp.Use(async (ctx, next) =>\n{\n    var sw = Stopwatch.StartNew();          // in\n    await next(ctx);\n    log.LogInformation(\"{Path} took {Ms} ms\", ctx.Request.Path, sw.ElapsedMilliseconds);  // out\n});\n```\n\nWith middleware A registered before B, a request flows **A in → B in → endpoint → B out → A out**. The pipeline is built once at startup, in registration order: the first registered is the OUTERMOST.\n\n## Short-circuiting and terminal middleware\n\nA middleware that does not call `next` ends the request there: a health check, a rate limiter answering 429, an auth check answering 401, static files that served a file. `app.Run(...)` registers a terminal middleware that never calls next.\n\n## Order matters\n\nThe template order is not arbitrary:\n\n```csharp\napp.UseExceptionHandler();      // 1. outermost: catches exceptions from everything after it\napp.UseHsts(); app.UseHttpsRedirection();\napp.UseStaticFiles();           // serve files early, skipping auth for them\napp.UseRouting();               // pick the endpoint\napp.UseCors();\napp.UseAuthentication();        // who are you? (sets HttpContext.User)\napp.UseAuthorization();         // may you call THIS endpoint? (needs both routing and the user)\napp.MapControllers(); app.MapGet(...);   // endpoints\n```\n\n- The exception handler must come first, or exceptions thrown by middleware registered before it are not caught.\n- Authorization needs the endpoint (from routing) and the user (from authentication), so it comes after both.\n- Middleware that should see only matched endpoints goes after routing.\n\n## Exception handling\n\n`app.UseExceptionHandler()` together with `builder.Services.AddProblemDetails()` turns any unhandled exception into a **500 problem-details** response without the exception message, and logs the exception. In .NET 8+ you can register `IExceptionHandler` implementations to map specific exceptions (a `NotFoundException` to 404) in one place. The developer exception page (with stack traces) is for Development only.\n\n## Writing a middleware class\n\n```csharp\npublic class CorrelationIdMiddleware(RequestDelegate next)\n{\n    public async Task InvokeAsync(HttpContext ctx)\n    {\n        var id = ctx.Request.Headers[\"X-Correlation-Id\"].FirstOrDefault() ?? Guid.NewGuid().ToString();\n        ctx.Response.Headers[\"X-Correlation-Id\"] = id;\n        await next(ctx);\n    }\n}\napp.UseMiddleware<CorrelationIdMiddleware>();\n```\n\nConventional middleware is created ONCE (a singleton): inject scoped services into `InvokeAsync` parameters, not into the constructor.\n\n## The response has started\n\nHeaders and the status code are sent when the body starts. After that, changing `StatusCode` or headers throws (`Response.HasStarted` tells you). Set headers before calling next, or register `ctx.Response.OnStarting(...)` callbacks.",
+  "quiz": [
+    {
+      "prompt": "Middleware A is registered before B. In what order do their \"after next\" parts run?",
+      "choices": [
+        "A then B",
+        "B then A: the pipeline unwinds in reverse",
+        "In parallel",
+        "Only A runs"
+      ],
+      "answer": 1,
+      "explanation": "The first registered middleware is outermost: A in, B in, endpoint, B out, A out."
+    },
+    {
+      "prompt": "What does a middleware that never calls `next` do?",
+      "choices": [
+        "Throws",
+        "Runs next automatically",
+        "Delays the request",
+        "Short-circuits: later middleware and the endpoint never run"
+      ],
+      "answer": 3,
+      "explanation": "Health checks, rate limiters and static files end requests early this way."
+    },
+    {
+      "prompt": "Why must `UseExceptionHandler` be registered first?",
+      "choices": [
+        "It only catches exceptions thrown by middleware registered after it (inside it)",
+        "It is faster",
+        "It sets the culture",
+        "It is required for routing"
+      ],
+      "answer": 0,
+      "explanation": "Middleware only wraps what comes after it in the pipeline."
+    },
+    {
+      "prompt": "Why does `UseAuthorization` come after `UseRouting` and `UseAuthentication`?",
+      "choices": [
+        "Convention only",
+        "It must be last",
+        "It needs the selected endpoint (its policies) and the authenticated user",
+        "Authentication depends on authorization"
+      ],
+      "answer": 2,
+      "explanation": "Authorization evaluates the endpoint's requirements against HttpContext.User."
+    },
+    {
+      "prompt": "With `UseExceptionHandler()` and `AddProblemDetails()`, what does a client get when a handler throws \"secret detail\"?",
+      "choices": [
+        "The exception message",
+        "A 500 problem-details body without the exception message",
+        "A stack trace",
+        "An empty 200"
+      ],
+      "answer": 1,
+      "explanation": "The details are logged server-side; the client gets a generic problem response."
+    },
+    {
+      "prompt": "What does `app.Run(handler)` register?",
+      "choices": [
+        "A terminal middleware that ends the pipeline",
+        "A middleware that must call next",
+        "A background job",
+        "A route group"
+      ],
+      "answer": 0,
+      "explanation": "Run delegates never receive a next delegate."
+    },
+    {
+      "prompt": "A conventional middleware class needs a scoped DbContext. Where should it receive it?",
+      "choices": [
+        "Its constructor",
+        "A static field",
+        "It cannot use one",
+        "As a parameter of InvokeAsync"
+      ],
+      "answer": 3,
+      "explanation": "Middleware instances are created once; constructor injection of scoped services would capture one instance forever."
+    },
+    {
+      "prompt": "What happens if a middleware sets `ctx.Response.StatusCode` after the body has started streaming?",
+      "choices": [
+        "The status changes",
+        "It is ignored silently in all cases",
+        "It throws: headers and status are already sent",
+        "The body restarts"
+      ],
+      "answer": 2,
+      "explanation": "Check Response.HasStarted, or set headers before writing or with OnStarting."
+    },
+    {
+      "prompt": "Where should static file middleware usually go?",
+      "choices": [
+        "Early, before routing and auth, so files are served cheaply",
+        "After authorization",
+        "Last",
+        "It cannot be combined with endpoints"
+      ],
+      "answer": 0,
+      "explanation": "Serving a file short-circuits the rest of the pipeline."
+    },
+    {
+      "prompt": "How is the pipeline order determined?",
+      "choices": [
+        "Alphabetically",
+        "By the order of app.Use / UseXxx calls at startup",
+        "By attribute priority",
+        "Randomly"
+      ],
+      "answer": 1,
+      "explanation": "Registration order is the execution order; that is why the template order matters."
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "Execution order for middleware A registered before B",
+      "back": "A before next, B before next, the endpoint, B after next, A after next."
+    },
+    {
+      "front": "What is short-circuiting?",
+      "back": "A middleware answers the request itself without calling next, so nothing later in the pipeline runs."
+    },
+    {
+      "front": "Why register the exception handler first?",
+      "back": "It can only catch exceptions thrown by components that run inside it, so it must wrap everything."
+    },
+    {
+      "front": "Order of routing, authentication and authorization",
+      "back": "Routing selects the endpoint, authentication establishes the user, then authorization checks that user against the endpoint."
+    },
+    {
+      "front": "What does UseExceptionHandler with ProblemDetails produce?",
+      "back": "A logged exception and a generic 500 problem-details response with no internal message for the client."
+    },
+    {
+      "front": "app.Use versus app.Run",
+      "back": "Use adds middleware that may call next; Run adds terminal middleware that never does."
+    },
+    {
+      "front": "Injecting scoped services into middleware classes",
+      "back": "Take them as InvokeAsync parameters, because the middleware instance itself lives for the whole application."
+    },
+    {
+      "front": "What does Response.HasStarted mean?",
+      "back": "Headers and status have been sent with the first bytes of the body, so they can no longer be changed."
+    }
+  ],
+  "drills": [
+    {
+      "slug": "01-build-a-pipeline",
+      "title": "Compose a middleware pipeline",
+      "difficulty": 3,
+      "skills": [
+        "delegate composition",
+        "middleware order"
+      ],
+      "instructions": "**Interview prompt.** \"How does `app.Use` turn a list of middleware into one request handler, and why does the first one registered run first? Build it.\"\n\n**Why it matters.** A pipeline is function composition: each middleware wraps the next. Building it backwards from the terminal handler is what makes the first registration the outermost layer.\n\n**Your task.** Implement the stubbed local function\n`RequestDelegate Build(IReadOnlyList<Func<RequestDelegate, RequestDelegate>> middleware, RequestDelegate terminal)`\n(`RequestDelegate` and `Context` are in the types section):\n- the returned delegate runs `middleware[0]` first; each middleware's `next` is the rest of the pipeline; the last middleware's `next` is `terminal`\n- a middleware that does not call `next` short-circuits everything after it\n- with no middleware, the result behaves exactly like `terminal`\n- exceptions propagate to the caller unchanged\n\n**Worked example.** With A and B each logging \"in\" before and \"out\" after calling next, and a terminal logging \"endpoint\", the log is A in, B in, endpoint, B out, A out.",
+      "starterHead": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · compose a middleware pipeline★★★ core\n//  concepts: delegates · composition · ordering\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Build from the terminal backwards: the first registered ends up outermost.\n\nusing static Bootcamp.Check;\n\nRequestDelegate Build(IReadOnlyList<Func<RequestDelegate, RequestDelegate>> middleware, RequestDelegate terminal)\n{\n    // TODO: wrap the terminal handler, last middleware first\n    throw new NotImplementedException();\n}\n\nFunc<RequestDelegate, RequestDelegate> Logger(string name) => next => async ctx =>\n{\n    ctx.Log.Add(name + \" in\");\n    await next(ctx);\n    ctx.Log.Add(name + \" out\");\n};\n\n",
+      "solutionHead": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · compose a middleware pipeline★★★ core\n//  concepts: delegates · composition · ordering\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Build from the terminal backwards: the first registered ends up outermost.\n\nusing static Bootcamp.Check;\n\nRequestDelegate Build(IReadOnlyList<Func<RequestDelegate, RequestDelegate>> middleware, RequestDelegate terminal)\n{\n    var app = terminal;\n    for (var i = middleware.Count - 1; i >= 0; i--) app = middleware[i](app);\n    return app;\n}\n\nFunc<RequestDelegate, RequestDelegate> Logger(string name) => next => async ctx =>\n{\n    ctx.Log.Add(name + \" in\");\n    await next(ctx);\n    ctx.Log.Add(name + \" out\");\n};\n\n",
+      "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"the first registered middleware is outermost\", async () =>\n{\n    var app = Build(new[] { Logger(\"A\"), Logger(\"B\") }, ctx => { ctx.Log.Add(\"endpoint\"); return Task.CompletedTask; });\n    var ctx = new Context(\"/x\");\n    await app(ctx);\n    Eq(ctx.Log, new[] { \"A in\", \"B in\", \"endpoint\", \"B out\", \"A out\" });\n});\n\nTest(\"a middleware can short-circuit\", async () =>\n{\n    Func<RequestDelegate, RequestDelegate> limiter = next => ctx => { ctx.Status = 429; return Task.CompletedTask; };\n    var app = Build(new[] { Logger(\"A\"), limiter, Logger(\"B\") }, ctx => { ctx.Log.Add(\"endpoint\"); return Task.CompletedTask; });\n    var ctx = new Context(\"/x\");\n    await app(ctx);\n    Eq(ctx.Status, 429);\n    Eq(ctx.Log, new[] { \"A in\", \"A out\" });\n});\n\nTest(\"middleware can branch on the request\", async () =>\n{\n    Func<RequestDelegate, RequestDelegate> health = next => ctx => ctx.Path == \"/health\" ? Task.Run(() => ctx.Status = 204) : next(ctx);\n    var app = Build(new[] { health }, ctx => { ctx.Status = 200; return Task.CompletedTask; });\n    var h = new Context(\"/health\");\n    var o = new Context(\"/orders\");\n    await app(h);\n    await app(o);\n    Eq((h.Status, o.Status), (204, 200));\n});\n\nTest(\"no middleware means the terminal handler alone (boundary)\", async () =>\n{\n    var app = Build(Array.Empty<Func<RequestDelegate, RequestDelegate>>(), ctx => { ctx.Log.Add(\"endpoint\"); return Task.CompletedTask; });\n    var ctx = new Context(\"/\");\n    await app(ctx);\n    Eq(ctx.Log, new[] { \"endpoint\" });\n});\n\nTest(\"exceptions propagate to the caller\", async () =>\n{\n    var app = Build(new[] { Logger(\"A\") }, _ => throw new InvalidOperationException(\"boom\"));\n    await ThrowsAsync<InvalidOperationException>(() => app(new Context(\"/\")));\n});\n\n",
+      "tail": "// ──────────────────────────── types ──────────────────────────────────────\n\ndelegate Task RequestDelegate(Context ctx);\n\nclass Context(string path)\n{\n    public string Path { get; } = path;\n    public int Status { get; set; } = 200;\n    public List<string> Log { get; } = new();\n}\n",
+      "explanation": "Start from the terminal handler and wrap it with each middleware from LAST to FIRST, so the first middleware ends up on the outside:\n\n```csharp\nvar app = terminal;\nfor (var i = middleware.Count - 1; i >= 0; i--) app = middleware[i](app);\nreturn app;\n```\n\nThis is the same fold ASP.NET Core's `ApplicationBuilder.Build()` performs. Looping forwards instead would make the LAST registered middleware outermost and reverse the log.",
+      "hints": [
+        "Each middleware is a function that takes the next handler and returns a new handler wrapping it.",
+        "Start with the terminal delegate and loop over the middleware from the last index down to 0, replacing the current handler with middleware[i] applied to it.",
+        "Begin with the final handler, wrap it in the last middleware, wrap that in the one before, and so on until the first middleware is the outermost layer."
+      ]
+    }
+  ]
+}

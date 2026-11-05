@@ -1,0 +1,176 @@
+{
+  "format": "fundamentals-authoring@1",
+  "track": "csharp",
+  "topic": "19-ef-core-basics",
+  "title": "EF Core basics: DbContext & change tracking",
+  "level": "advanced",
+  "summary": "DbContext and DbSet, entity states and the change tracker, SaveChanges as one transaction, identity resolution and Find, AsNoTracking, Update on detached entities, migrations, and DbContext lifetime.",
+  "lesson": "## The unit of work\n\n```csharp\npublic class AppDb(DbContextOptions<AppDb> options) : DbContext(options)\n{\n    public DbSet<Order> Orders => Set<Order>();\n    public DbSet<Customer> Customers => Set<Customer>();\n}\nbuilder.Services.AddDbContext<AppDb>(o => o.UseSqlServer(cs));   // registered as SCOPED\n```\n\nA `DbContext` is a **unit of work**: it loads entities, tracks what you change, and writes everything in one `SaveChanges()`. It is registered **scoped** (one per request), is not thread-safe, and should be short-lived.\n\n## Entity states and the change tracker\n\nEvery tracked entity has a state:\n\n| state | how you get there | SaveChanges does |\n|---|---|---|\n| Added | `db.Orders.Add(o)` | INSERT |\n| Unchanged | loaded by a query | nothing |\n| Modified | change a property of a tracked entity | UPDATE (changed columns) |\n| Deleted | `db.Orders.Remove(o)` | DELETE |\n| Detached | not tracked (`AsNoTracking`, a new object) | nothing |\n\n```csharp\nvar order = await db.Orders.FirstAsync(o => o.Id == id);  // tracked, Unchanged\norder.Status = \"shipped\";                                  // detected as Modified\nawait db.SaveChangesAsync();                               // UPDATE Orders SET Status = ... WHERE Id = ...\n```\n\nThe change tracker keeps a **snapshot** of each loaded entity's original values and compares it with the current values in `DetectChanges` (called automatically by `SaveChanges`). Only modified columns are written.\n\n## SaveChanges is a transaction\n\nAll inserts, updates and deletes of one `SaveChanges` call run in one database transaction: if any statement fails, none of them is applied and a `DbUpdateException` is thrown. For work spanning several `SaveChanges` calls, use `db.Database.BeginTransaction()` and commit (or roll back) explicitly.\n\n## Identity resolution and Find\n\nWithin one context, a given row is represented by ONE object: querying the same id twice returns the same instance. `db.Orders.Find(id)` first looks in the tracker and only queries the database if the entity is not already tracked.\n\n## AsNoTracking for reads\n\n`db.Orders.AsNoTracking().Where(...).ToListAsync()` skips snapshots and identity resolution: faster and lighter for read-only queries (lists, reports, API GETs). Changes to no-tracking entities are NOT saved: they are Detached.\n\n## Updating from a request\n\n- Load, change, save (above) is the simplest and only writes what changed.\n- `db.Update(entity)` on a DETACHED object marks it Modified and writes EVERY column, overwriting values you did not intend to touch. Prefer load-and-copy from a DTO (topic 18).\n\n## Migrations\n\n`dotnet ef migrations add AddOrderStatus` generates a C# migration from model changes; `dotnet ef database update` (or a migration bundle in CI) applies it. Review generated migrations: renames can appear as drop-and-add and lose data.\n\n## Navigations are not loaded automatically\n\n`order.Customer` is null and `customer.Orders` is empty unless you load them (`Include`, projection, or explicit loading). Lazy loading exists but is off by default and causes N+1 queries (topic 20).",
+  "quiz": [
+    {
+      "prompt": "What is the state of an entity right after `db.Orders.Add(order)`?",
+      "choices": [
+        "Unchanged",
+        "Added",
+        "Modified",
+        "Detached"
+      ],
+      "answer": 1,
+      "explanation": "Added entities are inserted on the next SaveChanges."
+    },
+    {
+      "prompt": "You load an order with tracking and change its Status. What does SaveChanges do?",
+      "choices": [
+        "Nothing until you call Update",
+        "An INSERT",
+        "It throws",
+        "An UPDATE of the changed column(s)"
+      ],
+      "answer": 3,
+      "explanation": "The change tracker compares the snapshot with current values and updates what changed."
+    },
+    {
+      "prompt": "You load an order with `AsNoTracking()`, change it, and call SaveChanges. How many rows are saved?",
+      "choices": [
+        "0: the entity is detached",
+        "1",
+        "All rows",
+        "It throws"
+      ],
+      "answer": 0,
+      "explanation": "No-tracking entities are not watched, so their changes are never written."
+    },
+    {
+      "prompt": "SaveChanges inserts two rows; the second violates a NOT NULL constraint. What is stored?",
+      "choices": [
+        "The first row",
+        "Both, with a default value",
+        "Neither: SaveChanges runs in one transaction and throws DbUpdateException",
+        "It depends on the provider's autocommit"
+      ],
+      "answer": 2,
+      "explanation": "Each SaveChanges call is atomic."
+    },
+    {
+      "prompt": "Within one DbContext, you query the order with Id 1 twice. What do you get?",
+      "choices": [
+        "Two separate objects",
+        "The same object instance both times (identity resolution)",
+        "A copy and the original",
+        "An exception"
+      ],
+      "answer": 1,
+      "explanation": "A tracking context keeps one instance per row."
+    },
+    {
+      "prompt": "What does `db.Orders.Find(1)` do when order 1 is already tracked?",
+      "choices": [
+        "Returns the tracked instance without a query",
+        "Queries the database again",
+        "Throws",
+        "Returns a detached copy"
+      ],
+      "answer": 0,
+      "explanation": "Find checks the change tracker first."
+    },
+    {
+      "prompt": "Why is `db.Update(detachedEntity)` from a request body risky?",
+      "choices": [
+        "It deletes the row",
+        "It does nothing",
+        "It creates a duplicate",
+        "It marks every property Modified and overwrites all columns"
+      ],
+      "answer": 3,
+      "explanation": "Load the entity and copy the allowed DTO fields instead."
+    },
+    {
+      "prompt": "With which lifetime does AddDbContext register the context?",
+      "choices": [
+        "Singleton",
+        "Transient",
+        "Scoped: one per request",
+        "Static"
+      ],
+      "answer": 2,
+      "explanation": "Contexts are units of work and not thread-safe, so one per request."
+    },
+    {
+      "prompt": "Without Include, what is `order.Customer` after `db.Orders.First()` in a default setup?",
+      "choices": [
+        "null: navigations are not loaded automatically",
+        "The customer",
+        "A proxy that loads on access",
+        "An exception"
+      ],
+      "answer": 0,
+      "explanation": "Lazy loading is off by default; load related data explicitly."
+    },
+    {
+      "prompt": "Which command creates a migration from your model changes?",
+      "choices": [
+        "dotnet ef database update",
+        "dotnet ef migrations add <Name>",
+        "dotnet build",
+        "dotnet ef dbcontext scaffold"
+      ],
+      "answer": 1,
+      "explanation": "database update applies migrations; migrations add generates one."
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "The five entity states",
+      "back": "Added (insert), Unchanged (no-op), Modified (update), Deleted (delete) and Detached (not tracked at all)."
+    },
+    {
+      "front": "How does EF Core know what changed?",
+      "back": "It stores a snapshot of original values for tracked entities and compares them with current values in DetectChanges, run by SaveChanges."
+    },
+    {
+      "front": "Is SaveChanges transactional?",
+      "back": "Yes. Every statement in one SaveChanges call commits together or not at all."
+    },
+    {
+      "front": "What is identity resolution?",
+      "back": "A tracking context keeps exactly one instance per database row, so repeated queries return the same object."
+    },
+    {
+      "front": "When use AsNoTracking?",
+      "back": "For read-only queries: it skips snapshots and identity tracking, and its results are never saved."
+    },
+    {
+      "front": "Why prefer load-and-copy over Update on a detached entity?",
+      "back": "Update marks every column modified and overwrites fields the request never meant to change."
+    },
+    {
+      "front": "DbContext lifetime",
+      "back": "Scoped and short-lived: one per request or unit of work, never shared between threads."
+    },
+    {
+      "front": "Are navigation properties loaded automatically?",
+      "back": "No. Use Include, a projection, or explicit loading; lazy loading is off by default."
+    }
+  ],
+  "drills": [
+    {
+      "slug": "01-detect-changes",
+      "title": "Detect changes like the change tracker",
+      "difficulty": 2,
+      "skills": [
+        "snapshots",
+        "entity states"
+      ],
+      "instructions": "**Interview prompt.** \"Why does EF Core write only the changed columns, and why can you not change a primary key? Implement the comparison the change tracker does.\"\n\n**Why it matters.** The change tracker compares an original snapshot with current values. Getting equality right (null versus value, decimals, keys) is what decides which UPDATE runs.\n\n**Your task.** Implement the stubbed local function\n`IReadOnlyList<string> ModifiedProperties(IReadOnlyDictionary<string, object?> original, IReadOnlyDictionary<string, object?> current, string keyProperty)`:\n- both dictionaries hold the same property names (snapshot and current values)\n- a property is modified when its two values are not equal by `object.Equals` (so `1.0m` and `1.00m` are equal, and null versus a value is a change)\n- the result lists modified property names in the ORIGINAL dictionary's order\n- if the key property changed, throw `InvalidOperationException` (EF Core refuses to modify a key)\n\n**Worked example.** Original `{ Id: 1, Name: \"Ana\", Total: 10.0m }`, current `{ Id: 1, Name: \"Ana L.\", Total: 10.00m }` gives `[\"Name\"]`.",
+      "starterHead": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · detect changes★★☆ core\n//  concepts: snapshots · Equals · key properties\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Compare the snapshot with the current values, exactly like DetectChanges.\n\nusing static Bootcamp.Check;\n\nIReadOnlyList<string> ModifiedProperties(IReadOnlyDictionary<string, object?> original, IReadOnlyDictionary<string, object?> current, string keyProperty)\n{\n    // TODO: names whose values differ by object.Equals; a changed key throws\n    throw new NotImplementedException();\n}\n\nDictionary<string, object?> Row(params (string Name, object? Value)[] cols)\n{\n    var d = new Dictionary<string, object?>();\n    foreach (var (n, v) in cols) d[n] = v;\n    return d;\n}\n\n",
+      "solutionHead": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · detect changes★★☆ core\n//  concepts: snapshots · Equals · key properties\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Compare the snapshot with the current values, exactly like DetectChanges.\n\nusing static Bootcamp.Check;\n\nIReadOnlyList<string> ModifiedProperties(IReadOnlyDictionary<string, object?> original, IReadOnlyDictionary<string, object?> current, string keyProperty)\n{\n    var changed = new List<string>();\n    foreach (var (name, before) in original)\n    {\n        if (Equals(before, current[name])) continue;\n        if (name == keyProperty) throw new InvalidOperationException($\"The property '{name}' is part of a key and cannot be modified.\");\n        changed.Add(name);\n    }\n    return changed;\n}\n\nDictionary<string, object?> Row(params (string Name, object? Value)[] cols)\n{\n    var d = new Dictionary<string, object?>();\n    foreach (var (n, v) in cols) d[n] = v;\n    return d;\n}\n\n",
+      "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"only the changed column is reported\", () =>\n    Eq(ModifiedProperties(Row((\"Id\", 1), (\"Name\", \"Ana\"), (\"Total\", 10.0m)), Row((\"Id\", 1), (\"Name\", \"Ana L.\"), (\"Total\", 10.00m)), \"Id\"), new[] { \"Name\" }));\n\nTest(\"null versus a value is a change, both ways\", () =>\n    Eq(ModifiedProperties(Row((\"Id\", 1), (\"Bio\", null), (\"Phone\", \"123\")), Row((\"Id\", 1), (\"Bio\", \"hi\"), (\"Phone\", null)), \"Id\"), new[] { \"Bio\", \"Phone\" }));\n\nTest(\"results follow the snapshot's property order\", () =>\n    Eq(ModifiedProperties(Row((\"Id\", 7), (\"A\", 1), (\"B\", 2), (\"C\", 3)), Row((\"Id\", 7), (\"C\", 30), (\"B\", 2), (\"A\", 10)), \"Id\"), new[] { \"A\", \"C\" }));\n\nTest(\"changing the key throws\", () =>\n    Throws<InvalidOperationException>(() => ModifiedProperties(Row((\"Id\", 1), (\"Name\", \"a\")), Row((\"Id\", 2), (\"Name\", \"a\")), \"Id\")));\n\nTest(\"an unchanged entity has no modified properties (boundary)\", () =>\n    Eq(ModifiedProperties(Row((\"Id\", 1), (\"Name\", \"a\"), (\"When\", new DateTime(2026, 1, 1))), Row((\"Id\", 1), (\"Name\", \"a\"), (\"When\", new DateTime(2026, 1, 1))), \"Id\").Count, 0));\n\n",
+      "explanation": "Walk the snapshot in order and compare each value with `object.Equals`, which unboxes and uses each type's own equality (decimal ignores trailing zeros; two nulls are equal):\n\n```csharp\nforeach (var (name, before) in original)\n{\n    if (Equals(before, current[name])) continue;\n    if (name == keyProperty) throw new InvalidOperationException(...);\n    changed.Add(name);\n}\n```\n\nComparing with `==` on the `object?` values would compare references of the boxed values and report every value-type column as modified.",
+      "hints": [
+        "The values are boxed in object slots, so the comparison must use each type's own Equals, not reference equality.",
+        "Loop over the original dictionary, use the static object.Equals(before, current[name]), throw InvalidOperationException when the key differs, and collect the other names.",
+        "Visit the snapshot's properties in order, compare each before and after value by value rather than by reference, refuse a change to the key column, and list every other column whose value differs."
+      ]
+    }
+  ]
+}

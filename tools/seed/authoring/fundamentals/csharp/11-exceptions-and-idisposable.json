@@ -1,0 +1,177 @@
+{
+  "format": "fundamentals-authoring@1",
+  "track": "csharp",
+  "topic": "11-exceptions-and-idisposable",
+  "title": "Exceptions & IDisposable",
+  "level": "intermediate",
+  "summary": "try, catch and finally; throw versus throw ex; exception filters, inner exceptions and custom exception types; using declarations, Dispose order, and translating low-level failures without losing them.",
+  "lesson": "## Throwing and catching\n\n```csharp\ntry\n{\n    var order = repo.Load(id);\n}\ncatch (TimeoutException ex)                     // most specific first\n{\n    throw new RepositoryUnavailableException(\"orders store unavailable\", ex);   // wrap, keep the cause\n}\ncatch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.NotFound)  // exception filter\n{\n    return null;\n}\nfinally\n{\n    metrics.Stop();                              // runs on success, on exception and on return\n}\n```\n\n- Catch clauses are tried top to bottom; putting a base type (`Exception`) before a derived one is a compile error (CS0160).\n- An **exception filter** (`when (...)`) decides whether to catch at all; if it is false, the exception keeps propagating with its stack untouched.\n- `finally` always runs (except for process-killing failures): use it, or `using`, for cleanup.\n\n## throw versus throw ex\n\n```csharp\ncatch (Exception ex) { log.Error(ex); throw; }      // rethrows, keeping the ORIGINAL stack trace\ncatch (Exception ex) { log.Error(ex); throw ex; }   // resets the stack trace to this line: the origin is lost\n```\n\nAlways `throw;` to rethrow. To add context, wrap: `throw new XException(\"context\", ex)`; the original is kept as `InnerException` and logged with it.\n\n## Custom exceptions\n\n```csharp\npublic class NotFoundException(string entity, object id)\n    : Exception($\"{entity} {id} was not found\");\n```\n\nCreate them for failures callers want to handle differently (not found, conflict, domain rule violated). Do not use exceptions for normal control flow (a missing optional value, a failed validation in a loop): they are expensive and hide the happy path. `TryParse`-style methods and result types are cheaper for expected outcomes.\n\n## IDisposable and using\n\nObjects holding non-memory resources (files, sockets, database connections, timers) implement `IDisposable`. `using` guarantees `Dispose` even when an exception is thrown:\n\n```csharp\nusing var conn = new SqlConnection(cs);      // using DECLARATION: disposed at the end of the enclosing scope\nusing var cmd = conn.CreateCommand();\n// ...\n// at scope exit: cmd is disposed first, then conn (reverse order of declaration)\n```\n\nThe block form `using (var r = ...) { }` disposes at the closing brace. Async resources implement `IAsyncDisposable`: `await using`.\n\nWhat the garbage collector does NOT do: close files or return connections to the pool at a predictable time. Forgetting `Dispose` on HttpClient-like or connection-like objects exhausts sockets or the connection pool under load. (Classes owned by the DI container, topic 15, are disposed by the container: do not dispose injected services yourself.)\n\n## Where to catch\n\nCatch where you can **do something**: retry, translate to a domain error, return a fallback, or add context. Everywhere else, let exceptions propagate to one global handler (ASP.NET Core's exception handler middleware, topic 17) that logs them and returns a 500 problem response. Never write `catch (Exception) { }`: a swallowed exception turns a crash into silent data corruption.",
+  "quiz": [
+    {
+      "prompt": "What is the difference between `throw;` and `throw ex;` inside a catch block?",
+      "choices": [
+        "None",
+        "`throw;` keeps the original stack trace; `throw ex;` resets it to the current line",
+        "`throw ex;` keeps the stack; `throw;` resets it",
+        "`throw;` swallows the exception"
+      ],
+      "answer": 1,
+      "explanation": "Always rethrow with throw; so logs still show where the failure really happened."
+    },
+    {
+      "prompt": "What does an exception filter `catch (X e) when (cond)` do when cond is false?",
+      "choices": [
+        "Catches it anyway",
+        "Throws a new exception",
+        "Does not catch: the exception keeps propagating with its stack intact",
+        "Returns default"
+      ],
+      "answer": 2,
+      "explanation": "Filters run before the catch is chosen, so a false filter leaves the exception untouched."
+    },
+    {
+      "prompt": "With `using var a = ...; using var b = ...;` in a method, in which order are they disposed at the end?",
+      "choices": [
+        "a then b",
+        "In parallel",
+        "Only b",
+        "b then a (reverse declaration order)"
+      ],
+      "answer": 3,
+      "explanation": "Resources are released in the opposite order they were acquired, like nested using blocks."
+    },
+    {
+      "prompt": "Is Dispose called when an exception is thrown inside a using block?",
+      "choices": [
+        "Yes: using compiles to try/finally",
+        "No",
+        "Only in Debug builds",
+        "Only for async disposables"
+      ],
+      "answer": 0,
+      "explanation": "That guarantee is the whole point of using."
+    },
+    {
+      "prompt": "How do you add context to a low-level failure without losing it?",
+      "choices": [
+        "Log it and return null",
+        "throw new RepositoryException(\"context\", ex) so the original becomes InnerException",
+        "throw ex;",
+        "Catch Exception and ignore it"
+      ],
+      "answer": 1,
+      "explanation": "Wrapping preserves the original as InnerException for logging and debugging."
+    },
+    {
+      "prompt": "What does the compiler say about `catch (Exception) {}` placed before `catch (IOException) {}`?",
+      "choices": [
+        "Nothing",
+        "A warning",
+        "Error CS0160: a previous catch clause already catches all exceptions of this type",
+        "It reorders them"
+      ],
+      "answer": 2,
+      "explanation": "The derived catch would be unreachable, so the compiler rejects it."
+    },
+    {
+      "prompt": "Why is `catch (Exception) { }` dangerous?",
+      "choices": [
+        "It is slow",
+        "It swallows every failure, so bugs turn into silent wrong behaviour",
+        "It does not compile",
+        "It rethrows"
+      ],
+      "answer": 1,
+      "explanation": "Catch only what you can handle; let the rest reach a global handler that logs and responds."
+    },
+    {
+      "prompt": "When should you NOT use exceptions?",
+      "choices": [
+        "For a missing database row in a GetById endpoint",
+        "For an unexpected network failure",
+        "For expected, frequent outcomes like a failed TryParse in a loop",
+        "For a violated business rule"
+      ],
+      "answer": 2,
+      "explanation": "Exceptions are expensive and obscure control flow; use Try-patterns or result types for expected outcomes."
+    },
+    {
+      "prompt": "Does the garbage collector dispose of a FileStream you forgot to close at a predictable time?",
+      "choices": [
+        "Yes, immediately",
+        "Yes, at the end of the method",
+        "Only on Windows",
+        "No: finalisation timing is not deterministic, so the file can stay open"
+      ],
+      "answer": 3,
+      "explanation": "Deterministic cleanup is the job of Dispose and using."
+    },
+    {
+      "prompt": "Who should dispose a service injected into your class by the DI container?",
+      "choices": [
+        "The container that created it",
+        "Your class, in its Dispose method",
+        "Nobody",
+        "The caller of your class"
+      ],
+      "answer": 0,
+      "explanation": "The container owns the lifetime of what it creates and disposes it at the end of the scope or app."
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "throw; versus throw ex;",
+      "back": "The bare form rethrows with the original stack trace; throwing the variable again restarts the trace at that line."
+    },
+    {
+      "front": "What is an exception filter for?",
+      "back": "Catching only when a condition holds, such as a specific status code, without unwinding the stack when it does not."
+    },
+    {
+      "front": "How do you add context to an exception?",
+      "back": "Throw a new, more meaningful exception and pass the caught one as its inner exception."
+    },
+    {
+      "front": "What does using guarantee?",
+      "back": "Dispose runs when the scope ends, even if an exception is thrown, because it compiles to try and finally."
+    },
+    {
+      "front": "Dispose order of using declarations",
+      "back": "Reverse order of declaration at the end of the enclosing scope."
+    },
+    {
+      "front": "When are exceptions the wrong tool?",
+      "back": "For expected, frequent outcomes such as invalid user input in a loop; use Try methods or result types."
+    },
+    {
+      "front": "Where should most exceptions be caught?",
+      "back": "Where something useful can be done, and otherwise in one global handler that logs and returns a generic error."
+    },
+    {
+      "front": "Should you dispose services injected by DI?",
+      "back": "No. The container that created them disposes them at the end of their scope or of the application."
+    }
+  ],
+  "drills": [
+    {
+      "slug": "01-translate-and-dispose",
+      "title": "Translate failures and always dispose",
+      "difficulty": 2,
+      "skills": [
+        "custom exceptions",
+        "using"
+      ],
+      "instructions": "**Interview prompt.** \"The order endpoint returns raw TimeoutExceptions to callers, missing orders surface as NullReferenceExceptions, and the line counter leaks file handles when a read fails.\"\n\n**Why it matters.** Low-level failures should be translated into domain exceptions callers can handle, without losing the original; everything else must propagate unchanged. Resources must be released on every path.\n\n**Your task.** Implement the two stubbed local functions (the exception types are in the types section):\n- `Order LoadOrder(int id, Func<int, Order?> fetch)`:\n  - `fetch` returns null: throw `NotFoundException` with the message `Order <id> was not found`\n  - `fetch` throws a `TimeoutException`: throw `StoreUnavailableException` whose `InnerException` is that timeout\n  - any other exception from `fetch`: let it propagate unchanged (the very same exception object)\n- `int CountLines(Func<TextReader> open)` opens a reader, counts its lines, and disposes the reader on EVERY path, including when reading throws\n\n**Worked example.** `LoadOrder(42, _ => null)` throws a NotFoundException saying \"Order 42 was not found\".",
+      "starterHead": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · translate failures and always dispose★★☆ core\n//  concepts: custom exceptions · inner exceptions · using\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Translate what callers can act on, propagate the rest, release resources on every path.\n\nusing static Bootcamp.Check;\n\nOrder LoadOrder(int id, Func<int, Order?> fetch)\n{\n    // TODO: null -> NotFoundException; TimeoutException -> StoreUnavailableException(inner); others unchanged\n    throw new NotImplementedException();\n}\n\nint CountLines(Func<TextReader> open)\n{\n    // TODO: count lines; the reader must be disposed even when reading throws\n    throw new NotImplementedException();\n}\n\n",
+      "solutionHead": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · translate failures and always dispose★★☆ core\n//  concepts: custom exceptions · inner exceptions · using\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Translate what callers can act on, propagate the rest, release resources on every path.\n\nusing static Bootcamp.Check;\n\nOrder LoadOrder(int id, Func<int, Order?> fetch)\n{\n    Order? order;\n    try\n    {\n        order = fetch(id);\n    }\n    catch (TimeoutException ex)\n    {\n        throw new StoreUnavailableException(\"orders store unavailable\", ex);\n    }\n    return order ?? throw new NotFoundException($\"Order {id} was not found\");\n}\n\nint CountLines(Func<TextReader> open)\n{\n    using var reader = open();\n    var count = 0;\n    while (reader.ReadLine() is not null) count++;\n    return count;\n}\n\n",
+      "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"a missing order is a NotFoundException\", () =>\n{\n    var ex = Throws<NotFoundException>(() => LoadOrder(42, _ => null));\n    Eq(ex.Message, \"Order 42 was not found\");\n});\n\nTest(\"a timeout is translated and kept as the inner exception\", () =>\n{\n    var timeout = new TimeoutException(\"db timeout\");\n    var ex = Throws<StoreUnavailableException>(() => LoadOrder(1, _ => throw timeout));\n    Ok(ReferenceEquals(ex.InnerException, timeout), \"InnerException must be the original timeout\");\n});\n\nTest(\"other exceptions propagate unchanged\", () =>\n{\n    var boom = new InvalidOperationException(\"bug\");\n    var ex = Throws<InvalidOperationException>(() => LoadOrder(1, _ => throw boom));\n    Ok(ReferenceEquals(ex, boom), \"the same exception object\");\n});\n\nTest(\"CountLines counts and disposes\", () =>\n{\n    var reader = new TrackingReader(\"a\\nb\\nc\");\n    Eq(CountLines(() => reader), 3);\n    Ok(reader.Disposed, \"the reader was not disposed\");\n});\n\nTest(\"the reader is disposed when reading throws\", () =>\n{\n    var reader = new TrackingReader(\"a\\nb\", failAfter: 1);\n    Throws<IOException>(() => CountLines(() => reader));\n    Ok(reader.Disposed, \"the reader was not disposed after the failure\");\n});\n\nTest(\"an empty reader has zero lines (boundary)\", () =>\n    Eq(CountLines(() => new TrackingReader(\"\")), 0));\n\n",
+      "tail": "// ──────────────────────────── types ──────────────────────────────────────\n\nrecord Order(int Id, decimal Total);\n\nclass NotFoundException(string message) : Exception(message);\n\nclass StoreUnavailableException(string message, Exception inner) : Exception(message, inner);\n\nclass TrackingReader(string text, int failAfter = int.MaxValue) : StringReader(text)\n{\n    private int _reads;\n    public bool Disposed { get; private set; }\n    public override string? ReadLine()\n    {\n        if (_reads++ >= failAfter) throw new IOException(\"disk read failed\");\n        return base.ReadLine();\n    }\n    protected override void Dispose(bool disposing)\n    {\n        Disposed = true;\n        base.Dispose(disposing);\n    }\n}\n",
+      "explanation": "Catch only the exception you translate, and keep the rest of the method outside the try so nothing else is accidentally caught:\n\n```csharp\ntry { order = fetch(id); }\ncatch (TimeoutException ex) { throw new StoreUnavailableException(\"orders store unavailable\", ex); }\nreturn order ?? throw new NotFoundException($\"Order {id} was not found\");\n```\n\n`using var reader = open();` disposes on success and on the IOException alike. A `catch (Exception ex) { throw new StoreUnavailableException(..., ex); }` would fail the \"propagate unchanged\" test.",
+      "hints": [
+        "Only the timeout is translated; every other exception must leave the method exactly as it came in.",
+        "Wrap only the fetch call in try with a single catch (TimeoutException ex) that throws the new exception with ex as inner; use ?? throw for null, and a using declaration for the reader.",
+        "Guard just the lookup, convert the timeout into the store-unavailable failure while keeping the original attached, turn a missing result into the not-found failure, and let the reader be released automatically however the counting ends."
+      ]
+    }
+  ]
+}
