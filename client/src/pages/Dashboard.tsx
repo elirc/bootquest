@@ -81,13 +81,18 @@ export function DashboardPage() {
 const FUND_TRACKS: readonly TrackId[] = ['js', 'csharp', 'java'];
 
 /**
- * The first language track on today's slate (slate settings), the only ladder the dashboard reads.
+ * The language tracks on today's slate (slate settings), in the order the hero tries their ladders.
  * A failed settings read counts as every track on (JS first); no language track on is no ladder.
  */
-export function firstFundTrack(s: SlateSettingsResponse | undefined): TrackId | null {
-  if (!s) return FUND_TRACKS[0]!;
+export function enabledFundTracks(s: SlateSettingsResponse | undefined): TrackId[] {
+  if (!s) return [...FUND_TRACKS];
   const on = new Set<string>(s.todayTracks.filter((t) => t.enabled).map((t) => t.trackId));
-  return FUND_TRACKS.find((t) => on.has(t)) ?? null;
+  return FUND_TRACKS.filter((t) => on.has(t));
+}
+
+/** The first language track on today's slate: the one ladder a normal dashboard mount reads. */
+export function firstFundTrack(s: SlateSettingsResponse | undefined): TrackId | null {
+  return enabledFundTracks(s)[0] ?? null;
 }
 
 /** Where the learner is on one Fundamentals ladder (dashboard-local). */
@@ -134,25 +139,46 @@ export function fundamentalsStep(r: FundamentalsResponse): FundStep | null {
   return null;
 }
 
+/** Every topic's gate is passed and no drill is open: nothing is left on this ladder. An empty ladder is not a finished one. */
+export function ladderFinished(r: FundamentalsResponse): boolean {
+  return r.topics.length > 0 && r.topics.every((t) => t.unit.state === 'done') && fundamentalsStep(r) === null;
+}
+
+/**
+ * Council ruling: the hero uses the first ENABLED language track whose ladder is UNFINISHED. The
+ * ladders are read one at a time, in order, and the next one is read only when the one before it is
+ * finished, so an unfinished first ladder is still ONE read (at most one per language track). A
+ * failed read, or a ladder whose next topic is locked, is no step and ends the walk.
+ */
+export async function firstUnfinishedStep(tracks: readonly TrackId[], read: (t: TrackId) => Promise<FundamentalsResponse>): Promise<FundStep | null> {
+  for (const t of tracks) {
+    let r: FundamentalsResponse;
+    try {
+      r = await read(t);
+    } catch {
+      return null;
+    }
+    const step = fundamentalsStep(r);
+    if (step || !ladderFinished(r)) return step;
+  }
+  return null;
+}
+
 type FundState = { settled: false } | { settled: true; step: FundStep | null };
 
 /**
- * One GET /tracks/:id/fundamentals, for the first language track on the slate, once the settings
- * read has settled. A failed ladder read is no step (the hero moves on); it never blocks the page.
+ * GET /tracks/:id/fundamentals for the first language track on the slate (and, only when that
+ * ladder is finished, the next enabled one), once the settings read has settled. A failed ladder
+ * read is no step (the hero moves on); it never blocks the page.
  */
 function useFundamentalsStep(slate: AsyncState<SlateSettingsResponse>): FundState {
   const api = useApi();
   // fixed by the first settled settings read, so a settings Retry never refetches the ladder
-  const track = useRef<TrackId | null | undefined>(undefined);
-  if (track.current === undefined && slate.status !== 'loading') track.current = firstFundTrack(slate.data);
-  const t = track.current;
+  const tracks = useRef<TrackId[] | undefined>(undefined);
+  if (tracks.current === undefined && slate.status !== 'loading') tracks.current = enabledFundTracks(slate.data);
+  const t = tracks.current;
   const q = useAsync<FundStep | null>(
-    () =>
-      t === undefined
-        ? new Promise<never>(() => {})
-        : t === null
-          ? Promise.resolve(null)
-          : api.getFundamentals(t).then(fundamentalsStep, () => null),
+    () => (t === undefined ? new Promise<never>(() => {}) : firstUnfinishedStep(t, (id) => api.getFundamentals(id))),
     [api, t],
   );
   return q.status === 'ready' ? { settled: true, step: q.data } : { settled: false };
