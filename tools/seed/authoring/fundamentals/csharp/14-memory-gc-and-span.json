@@ -21,21 +21,21 @@
     {
       "prompt": "Where is a `new byte[100_000]` allocated?",
       "choices": [
-        "Gen 0",
-        "The stack",
-        "The large object heap (collected with gen 2)",
+        "Gen 0 of the small object heap",
+        "The current thread's stack",
+        "The large object heap",
         "Unmanaged memory"
       ],
       "answer": 2,
-      "explanation": "Objects of 85,000 bytes or more go to the LOH."
+      "explanation": "Objects of 85,000 bytes or more go to the LOH. The large object heap is collected with gen 2."
     },
     {
       "prompt": "Which of these allocates on the heap?",
       "choices": [
-        "int x = 5;",
-        "object o = 5;",
-        "Span<int> s = stackalloc int[3];",
-        "var t = (1, 2);"
+        "`int x = 5;`",
+        "`object o = 5;`",
+        "`Span<int> s = stackalloc int[3];`",
+        "`var t = (1, 2);`"
       ],
       "answer": 1,
       "explanation": "Assigning a value type to object boxes it into a new heap object."
@@ -44,9 +44,9 @@
       "prompt": "`int.Parse(\"2026-11-04\".AsSpan()[..4])` versus `int.Parse(s.Substring(0, 4))`: what is the difference?",
       "choices": [
         "The span version parses without allocating a new string",
-        "They are identical",
-        "The span version is slower",
-        "Substring does not allocate"
+        "They compile to the same code after JIT inlining",
+        "The span version copies the four chars to the stack",
+        "Substring shares memory with the original, so neither allocates"
       ],
       "answer": 0,
       "explanation": "Slicing a span is a view over the original string; Substring copies characters into a new string."
@@ -54,9 +54,9 @@
     {
       "prompt": "`var arr = new[] { 1, 2, 3 }; var t = arr.AsSpan(1); t[0] = 9;` What is arr now?",
       "choices": [
-        "[1, 2, 3]",
-        "[9, 2, 3]",
-        "[1, 9, 3]",
+        "`[1, 2, 3]`",
+        "`[9, 2, 3]`",
+        "`[1, 9, 3]`",
         "It throws"
       ],
       "answer": 2,
@@ -65,10 +65,10 @@
     {
       "prompt": "Why can a `Span<T>` not be a field of a class or survive an `await`?",
       "choices": [
-        "It is too large",
+        "It is too large to copy into a heap object",
         "It is a ref struct that must live on the stack",
-        "It is not thread-safe",
-        "It is immutable"
+        "It is not thread-safe, so the compiler forbids sharing",
+        "It pins its array, and pins cannot outlive a method"
       ],
       "answer": 1,
       "explanation": "Use Memory<T> when the slice must be stored or cross an await."
@@ -76,21 +76,21 @@
     {
       "prompt": "Which statement about ArrayPool<T>.Shared.Rent(10) is true?",
       "choices": [
-        "It returns an array of exactly 10",
-        "It returns an array of at least 10 that you must Return and not use afterwards",
-        "It allocates on the stack",
-        "It never reuses arrays"
+        "It returns an array of exactly 10, freshly zeroed",
+        "It returns an array of at least 10 that you must Return",
+        "It allocates the array on the stack, like stackalloc",
+        "It returns a pooled array that the GC returns for you"
       ],
       "answer": 1,
-      "explanation": "Pooled arrays may be larger than requested; track the length you actually use."
+      "explanation": "Pooled arrays may be larger than requested; track the length you actually use. Do not use the array after returning it."
     },
     {
       "prompt": "A lambda captures a local variable. What extra allocations can that cause?",
       "choices": [
-        "None",
-        "A closure object holding the captured variables, plus the delegate",
-        "A new thread",
-        "A boxed copy of every local in the method"
+        "None: captured locals stay on the stack frame",
+        "A closure object for captured locals, plus a delegate",
+        "A new thread-local copy of each captured variable",
+        "A boxed copy of every local in the method, captured or not"
       ],
       "answer": 1,
       "explanation": "Captured locals move into a compiler-generated class instance."
@@ -98,10 +98,10 @@
     {
       "prompt": "Your CRUD endpoint is slow. Where should you look first?",
       "choices": [
-        "Replacing strings with spans",
+        "String allocations that spans could replace",
         "Database round-trips, missing indexes and N+1 queries",
-        "Tuning the GC",
-        "Using stackalloc"
+        "GC settings, such as server or workstation mode",
+        "Boxing in LINQ pipelines and captured lambdas"
       ],
       "answer": 1,
       "explanation": "In typical APIs, I/O dominates; allocation tuning matters in measured hot paths."
@@ -110,9 +110,9 @@
       "prompt": "Which tool reports allocated bytes per benchmark?",
       "choices": [
         "BenchmarkDotNet with [MemoryDiagnoser]",
-        "Console.WriteLine",
+        "A Stopwatch wrapped around the benchmarked code",
         "The debugger's locals window",
-        "dotnet format"
+        "dotnet test with code coverage on"
       ],
       "answer": 0,
       "explanation": "Measure allocations before and after an optimisation instead of guessing."
