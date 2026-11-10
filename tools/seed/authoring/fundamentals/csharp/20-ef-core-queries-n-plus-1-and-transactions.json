@@ -10,10 +10,10 @@
     {
       "prompt": "Listing 500 authors and then counting each author's posts with a separate query in a loop causes how many queries?",
       "choices": [
-        "1",
-        "501",
-        "2",
-        "500"
+        "`1`",
+        "`501`",
+        "`2`",
+        "`500`"
       ],
       "answer": 1,
       "explanation": "One query for the authors plus one per author: the N+1 problem."
@@ -21,10 +21,10 @@
     {
       "prompt": "Which query computes each author's post count in ONE round-trip?",
       "choices": [
-        "A loop with CountAsync per author",
-        "db.Authors.ToList() then a.Posts.Count",
-        "Lazy loading",
-        "db.Authors.Select(a => new { a.Name, Count = a.Posts.Count }).ToListAsync()"
+        "`authors.Select(a => db.Posts.Count(p => p.AuthorId == a.Id))`",
+        "`db.Authors.AsEnumerable().Select(a => new { a.Name, Count = a.Posts.Count }).ToList()`",
+        "`db.Authors.Where(a => a.Posts.Any()).CountAsync()`",
+        "`db.Authors.Select(a => new { a.Name, Count = a.Posts.Count }).ToListAsync()`"
       ],
       "answer": 3,
       "explanation": "A projection is translated into a single SQL statement with a subquery or join."
@@ -33,9 +33,9 @@
       "prompt": "What happens to `db.Authors.ToList().Where(a => a.Name.StartsWith(\"a\"))`?",
       "choices": [
         "Every author row is loaded, then filtered in memory",
-        "The filter becomes a SQL WHERE",
-        "It throws",
-        "It is cached"
+        "The filter is translated into a SQL WHERE clause",
+        "It throws: StartsWith cannot be translated",
+        "The rows load lazily, one by one, as Where enumerates them"
       ],
       "answer": 0,
       "explanation": "ToList materialises; anything after it is LINQ to Objects."
@@ -43,21 +43,21 @@
     {
       "prompt": "A Where clause calls your own C# helper method that EF Core cannot translate. What happens?",
       "choices": [
-        "EF Core runs it in SQL anyway",
-        "It silently loads the whole table",
-        "It throws InvalidOperationException: the expression could not be translated",
-        "It returns no rows"
+        "EF Core compiles the helper into a SQL function",
+        "It silently loads the whole table and filters in C#",
+        "It throws: the expression could not be translated",
+        "It returns no rows and logs a translation warning"
       ],
       "answer": 2,
-      "explanation": "EF Core refuses client evaluation in the final filter rather than quietly loading everything."
+      "explanation": "EF Core refuses client evaluation in the final filter rather than quietly loading everything. The exception is InvalidOperationException."
     },
     {
       "prompt": "Is `db.Users.FromSql($\"... WHERE Email = {email}\")` safe against SQL injection?",
       "choices": [
-        "No, never",
+        "No: interpolation pastes the value into the SQL",
         "Yes: the interpolation holes become SQL parameters",
-        "Only for numbers",
-        "Only with AsNoTracking"
+        "Yes for numbers, but strings still need escaping",
+        "No, unless email is wrapped in a SqlParameter first"
       ],
       "answer": 1,
       "explanation": "FromSql and ExecuteSql parameterise interpolated values. Concatenating into FromSqlRaw is the unsafe pattern."
@@ -67,7 +67,7 @@
       "choices": [
         "throws DbUpdateConcurrencyException",
         "silently overwrites the first change",
-        "merges both changes",
+        "merges both changes column by column",
         "creates a new row"
       ],
       "answer": 0,
@@ -76,10 +76,10 @@
     {
       "prompt": "How should an API respond to a DbUpdateConcurrencyException on an update?",
       "choices": [
-        "500",
-        "404",
-        "200 with the stale data",
-        "409 Conflict, asking the client to reload and retry"
+        "500 Internal Server Error, after logging it",
+        "404 Not Found: no row matched the WHERE clause",
+        "200 OK, after retrying the save automatically",
+        "409 Conflict: the client should reload and retry"
       ],
       "answer": 3,
       "explanation": "It is a conflict with a newer version, not a server failure."
@@ -87,32 +87,32 @@
     {
       "prompt": "When do you need an explicit transaction with BeginTransaction?",
       "choices": [
-        "For every SaveChanges",
-        "Never",
-        "When several SaveChanges calls (or SQL commands) must succeed or fail together",
-        "Only for reads"
+        "For every SaveChanges, which is not atomic",
+        "When a request touches more than one table",
+        "When several saves must succeed or fail together",
+        "When a single SaveChanges inserts several rows"
       ],
       "answer": 2,
-      "explanation": "A single SaveChanges is already atomic."
+      "explanation": "A single SaveChanges is already atomic. That includes raw SQL commands combined with SaveChanges."
     },
     {
       "prompt": "What does `Include(a => a.Posts)` do?",
       "choices": [
-        "Loads the related posts as part of the query instead of one query per author",
-        "Enables lazy loading",
-        "Filters authors with posts",
-        "Counts posts"
+        "Loads the related posts in the same query",
+        "Enables lazy loading for the Posts navigation",
+        "Filters out the authors who have no posts",
+        "Adds a post count column to each author"
       ],
       "answer": 0,
-      "explanation": "Include eager-loads navigations in the same query (or a few split queries)."
+      "explanation": "Include eager-loads navigations in the same query (or a few split queries). That avoids one query per author."
     },
     {
       "prompt": "How do you delete all expired sessions without loading them?",
       "choices": [
-        "Load them and call RemoveRange",
-        "db.Sessions.Where(s => s.ExpiresAt < now).ExecuteDeleteAsync()",
-        "Delete them one by one",
-        "Truncate the table"
+        "`db.Sessions.RemoveRange(db.Sessions.Where(s => s.ExpiresAt < now))`",
+        "`db.Sessions.Where(s => s.ExpiresAt < now).ExecuteDeleteAsync()`",
+        "`foreach (var s in db.Sessions.Where(s => s.ExpiresAt < now)) db.Remove(s);`",
+        "`db.Database.ExecuteSql($\"TRUNCATE TABLE Sessions\")`"
       ],
       "answer": 1,
       "explanation": "ExecuteDelete and ExecuteUpdate run set-based statements directly."

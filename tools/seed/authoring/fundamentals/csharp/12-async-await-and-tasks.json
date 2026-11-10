@@ -10,10 +10,10 @@
     {
       "prompt": "Where does an async method run until its first `await` of an incomplete task?",
       "choices": [
-        "On a new thread",
-        "Synchronously on the caller's thread",
-        "Nowhere until awaited",
-        "On the UI thread only"
+        "On a new thread-pool thread",
+        "Synchronously, on the caller's own thread",
+        "Nowhere: it starts when the caller awaits it",
+        "Queued until the caller's own method returns"
       ],
       "answer": 1,
       "explanation": "Async methods start synchronously; they return a Task to the caller at the first real await."
@@ -32,21 +32,21 @@
     {
       "prompt": "`await Task.WhenAll(FailA(), FailB())` where both fail. What does the await throw?",
       "choices": [
-        "The first exception; all of them stay on the WhenAll task's Exception.InnerExceptions",
-        "An AggregateException with both",
-        "Nothing",
-        "The last exception only"
+        "The first one; the rest stay on the WhenAll task",
+        "An AggregateException holding both exceptions",
+        "Nothing; the failures stay on the WhenAll task",
+        "The exception from whichever task failed last"
       ],
       "answer": 0,
-      "explanation": "await unwraps to the first exception; inspect the task to see every failure."
+      "explanation": "await unwraps to the first exception; inspect the task to see every failure. Every failure is in that task's Exception.InnerExceptions."
     },
     {
       "prompt": "Why is `async void` dangerous outside event handlers?",
       "choices": [
-        "It is slower",
-        "It runs synchronously",
-        "It cannot be awaited and its exceptions crash the process",
-        "It leaks threads"
+        "It allocates a Task on every call, so it is slower",
+        "It runs synchronously, blocking its caller until it finishes",
+        "It cannot be awaited, and its exceptions crash the app",
+        "It swallows exceptions, so failures go unnoticed"
       ],
       "answer": 2,
       "explanation": "Without a Task there is nothing to observe the exception or completion."
@@ -54,43 +54,43 @@
     {
       "prompt": "What is the problem with calling `GetOrderAsync(id).Result` in an ASP.NET Core controller?",
       "choices": [
-        "It returns null",
-        "It blocks a thread while waiting, wasting pool threads and risking starvation under load",
-        "It does not compile",
-        "It runs the query twice"
+        "It returns null if the query has not completed yet",
+        "It blocks a thread while waiting, risking starvation",
+        "It does not compile: Result needs an async caller",
+        "It runs the query twice: once now and once on dispose"
       ],
       "answer": 1,
-      "explanation": "Go async all the way: make the action async and await."
+      "explanation": "Go async all the way: make the action async and await. Under load, blocked threads waste the pool and can starve it."
     },
     {
       "prompt": "Which token tells your code that the HTTP client disconnected?",
       "choices": [
-        "HttpContext.RequestAborted (or a bound CancellationToken parameter)",
-        "CancellationToken.None",
-        "A new CancellationTokenSource",
-        "Environment.ExitCode"
+        "`HttpContext.RequestAborted`",
+        "`CancellationToken.None`",
+        "`new CancellationTokenSource().Token`",
+        "`IHostApplicationLifetime.ApplicationStopping`"
       ],
       "answer": 0,
-      "explanation": "Pass it down to database and HTTP calls so abandoned requests stop working."
+      "explanation": "Pass it down to database and HTTP calls so abandoned requests stop working. A bound CancellationToken parameter gives you the same token."
     },
     {
       "prompt": "What does awaiting a cancelled `Task.Delay(1000, token)` throw?",
       "choices": [
-        "TimeoutException",
-        "Nothing: it returns early",
-        "InvalidOperationException",
-        "OperationCanceledException (TaskCanceledException)"
+        "`TimeoutException`",
+        "`AggregateException`",
+        "`InvalidOperationException`",
+        "`TaskCanceledException`"
       ],
       "answer": 3,
-      "explanation": "Cancellation surfaces as OperationCanceledException; let it propagate."
+      "explanation": "Cancellation surfaces as OperationCanceledException; let it propagate. Task.Delay throws TaskCanceledException, a subclass of OperationCanceledException."
     },
     {
       "prompt": "When is `Task.Run` appropriate in a web app?",
       "choices": [
-        "Around every database call",
-        "To make sync code async for free",
+        "Around database calls, so they do not block the request",
+        "To turn blocking I/O code into scalable async code",
         "For CPU-bound work you want off the request thread",
-        "Never"
+        "To run each request's handler on its own dedicated thread"
       ],
       "answer": 2,
       "explanation": "Wrapping I/O in Task.Run only adds a thread hop; use the real async API instead."
@@ -98,10 +98,10 @@
     {
       "prompt": "Can one EF Core DbContext run two queries concurrently with Task.WhenAll?",
       "choices": [
-        "No: a DbContext does not support concurrent operations",
-        "Yes",
-        "Only with AsNoTracking",
-        "Only in SQL Server"
+        "No: one DbContext does not support concurrent use",
+        "Yes: each query gets its own connection from the pool",
+        "No: the second query waits until the first ends",
+        "Yes, if MultipleActiveResultSets is on in SQL Server"
       ],
       "answer": 0,
       "explanation": "Await queries on one context sequentially, or use separate contexts."
@@ -109,10 +109,10 @@
     {
       "prompt": "How do you limit concurrent calls to an external API to four at a time?",
       "choices": [
-        "Task.WhenAll on all of them",
-        "A SemaphoreSlim(4) with WaitAsync and Release around each call",
-        "Thread.Sleep between calls",
-        "ConfigureAwait(false)"
+        "Task.WhenAll over the calls, which runs four at a time",
+        "A SemaphoreSlim(4), with WaitAsync and Release per call",
+        "Thread.Sleep(250) between calls to space them out",
+        "ThreadPool.SetMaxThreads(4, 4) before making the calls"
       ],
       "answer": 1,
       "explanation": "The semaphore lets four callers in and makes the rest wait asynchronously."

@@ -13,7 +13,7 @@
         "100 ms",
         "200 ms",
         "50 ms",
-        "0 ms"
+        "150 ms"
       ],
       "answer": 1,
       "explanation": "The second call does not start until the first finished. Start both and await Promise.all to take about 100 ms."
@@ -22,9 +22,9 @@
       "prompt": "What does `Promise.all([ok(1), fail(\"boom\"), slowOk(3)])` do?",
       "choices": [
         "Rejects with \"boom\" as soon as it rejects",
-        "Waits for all, then rejects",
-        "Fulfils with [1, undefined, 3]",
-        "Fulfils with [1, 3]"
+        "Waits for all three, then rejects with \"boom\"",
+        "Fulfils with [1, undefined, 3] once all settle",
+        "Fulfils with [1, 3], skipping the failure"
       ],
       "answer": 0,
       "explanation": "Promise.all is fail-fast. The other operations still run; their results are just ignored."
@@ -32,10 +32,10 @@
     {
       "prompt": "Which combinator ALWAYS fulfils and reports each outcome?",
       "choices": [
-        "Promise.all",
-        "Promise.race",
-        "Promise.allSettled",
-        "Promise.any"
+        "`Promise.all`",
+        "`Promise.race`",
+        "`Promise.allSettled`",
+        "`Promise.any`"
       ],
       "answer": 2,
       "explanation": "allSettled gives { status, value } or { status, reason } for every input."
@@ -43,9 +43,9 @@
     {
       "prompt": "What does `Promise.any` reject with when every input rejects?",
       "choices": [
-        "The first error",
-        "The last error",
-        "undefined",
+        "The first error, as soon as it arrives",
+        "The last error, after every input settles",
+        "A TypeError saying no promise fulfilled",
         "An AggregateError holding all the errors"
       ],
       "answer": 3,
@@ -54,21 +54,21 @@
     {
       "prompt": "`items.forEach(async (i) => { await save(i); }); console.log(\"done\");` When does \"done\" print?",
       "choices": [
-        "After every save finished",
-        "Before the saves finish: forEach does not wait for async callbacks",
-        "Never",
+        "After every save has finished",
+        "Before the saves finish",
+        "When the forEach promise resolves",
         "After the first save"
       ],
       "answer": 1,
-      "explanation": "forEach ignores returned promises. Use for...of with await, or Promise.all over map."
+      "explanation": "forEach ignores returned promises. Use for...of with await, or Promise.all over map. forEach does not wait for async callbacks."
     },
     {
       "prompt": "Which failures should an automatic retry handle?",
       "choices": [
-        "Transient ones like timeouts, 503s and connection resets",
-        "Every error",
-        "Validation errors (400)",
-        "Authentication failures (401)"
+        "Transient ones: timeouts, 503s, connection resets",
+        "Validation failures like 400s and 422s from the API",
+        "Authorization failures like 401s and 403s",
+        "Business-rule rejections like insufficient funds"
       ],
       "answer": 0,
       "explanation": "Retrying a request that will deterministically fail again only adds load. Retry transient failures, with backoff and a cap."
@@ -76,21 +76,21 @@
     {
       "prompt": "Why add random jitter to retry delays?",
       "choices": [
-        "To make retries faster",
-        "To satisfy HTTP specs",
-        "So many clients that failed together do not all retry at the same instant",
-        "To avoid timeouts"
+        "To keep the overall retry time under the timeout",
+        "Because HTTP requires clients to randomise retry delays",
+        "So clients that failed together do not retry in lockstep",
+        "To hide retries from the server's rate limiter"
       ],
       "answer": 2,
-      "explanation": "Synchronised retries create thundering herds that knock the recovering service down again."
+      "explanation": "Synchronised retries create thundering herds that knock the recovering service down again. Without it, many clients that failed together all retry at the same instant."
     },
     {
       "prompt": "What makes a retried POST /payments safe?",
       "choices": [
-        "A longer timeout",
-        "Using PUT instead",
-        "An idempotency key the server uses to deduplicate the request",
-        "Retrying at most twice"
+        "A longer client timeout, so the first attempt completes",
+        "A unique request id generated on every retry",
+        "An idempotency key the server deduplicates on",
+        "Limiting the client to at most two retries"
       ],
       "answer": 2,
       "explanation": "Without idempotency a retry after a lost response can charge the customer twice."
@@ -98,21 +98,21 @@
     {
       "prompt": "Which API cancels an in-flight fetch?",
       "choices": [
-        "clearTimeout",
-        "An AbortController signal passed in the fetch options, then controller.abort()",
-        "Promise.race",
-        "Deleting the promise variable"
+        "clearTimeout on the timer id that fetch returns",
+        "An AbortController signal, then controller.abort()",
+        "Promise.race against a promise that rejects on timeout",
+        "Deleting the promise variable so it is collected"
       ],
       "answer": 1,
-      "explanation": "Promises themselves cannot be cancelled; AbortSignal is the standard cancellation channel."
+      "explanation": "Promises themselves cannot be cancelled; AbortSignal is the standard cancellation channel. Pass the signal in the fetch options."
     },
     {
       "prompt": "Fetching 10,000 URLs with `Promise.all(urls.map(fetch))` is risky because...",
       "choices": [
-        "Promise.all has a size limit",
-        "Results come back out of order",
-        "It is always slower",
-        "Every request starts at once: you exhaust sockets and hit rate limits"
+        "Promise.all rejects arrays with more than 2^16 entries",
+        "Promise.all returns results in completion order, not input order",
+        "fetch runs the requests one at a time, so the batch is slow",
+        "Every request starts at once and floods sockets and rate limits"
       ],
       "answer": 3,
       "explanation": "Bound the concurrency: a small pool of workers pulling from the list keeps throughput high without flooding the server."
