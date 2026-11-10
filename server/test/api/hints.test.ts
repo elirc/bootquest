@@ -20,7 +20,7 @@ import { mapContentStore } from '../../src/api/content-store.ts';
 import type { Db } from '../../src/db/database.ts';
 import { fixedClock } from '../../src/engines/clock.ts';
 import { evaluatePromotion, recordEvidence } from '../../src/engines/evidence.ts';
-import { HINT_XP_FLOOR, hintXpMultiplier, recordHint, servableHints } from '../../src/engines/hints.ts';
+import { HINT_XP_FLOOR, hintXpMultiplier, recordHint, servableHints, UNASSISTED_PASS_SQL } from '../../src/engines/hints.ts';
 import { artifactsAwaitingSoloPass } from '../../src/engines/ladder.ts';
 import { fakeDrillJs } from './harness.ts';
 import { localNoon, makeTempDb, makeUnit, submit, type TempDb } from '../helpers.ts';
@@ -211,6 +211,23 @@ describe('a hinted pass is not unassisted ladder evidence', () => {
     recordEvidence(db, { competency: 'feature-delivery', kind: 'artifact', intention: 'i', observation: 'o', attemptId: pass.id }, clock);
     return unitId;
   }
+
+  it('UNASSISTED_PASS_SQL is the one unassisted-pass predicate: solo + verified + hint-free', () => {
+    const unassisted = (attemptId: number) => db.get(`SELECT 1 AS x FROM attempt a WHERE a.id = ? AND ${UNASSISTED_PASS_SQL}`, attemptId) !== undefined;
+    const plain = makeUnit(db, clock);
+    const ok = submit(db, clock, plain, { pass: true });
+    const flagged = submit(db, clock, makeUnit(db, clock), { pass: true, selfAssisted: true });
+    const failed = submit(db, clock, makeUnit(db, clock), { pass: false });
+    const hintedUnit = makeUnit(db, clock);
+    const before = submit(db, clock, hintedUnit, { pass: false });
+    clock.advance(1000);
+    recordHint(db, hintedUnit, clock);
+    const hinted = submit(db, clock, hintedUnit, { pass: true }); // same millisecond as the hint: hinted
+    // a hinted pass is stored as an ordinary solo pass (Assistance has no 'hint'); only the predicate tells it apart
+    expect(hinted.mode).toBe('solo');
+    expect(hinted.assistance_source).toBe('none');
+    expect([ok, flagged, failed, before, hinted].map((a) => unassisted(a.id))).toEqual([true, false, false, false, false]);
+  });
 
   it('leg (a): an unhinted solo pass counts, a hinted one does not', () => {
     artifact(true);
