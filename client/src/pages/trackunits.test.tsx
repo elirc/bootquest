@@ -89,8 +89,8 @@ describe('track units: campaign-less track (primary)', () => {
   it('/campaign/sysdesign keeps campaign-empty and lists the alt-set units under their repo', async () => {
     const { user } = renderApp('/campaign/sysdesign');
     const empty = await screen.findByTestId('campaign-empty');
-    expect(empty).toHaveTextContent('No campaign acts are seeded for this track yet.');
-    expect(empty).toHaveTextContent('Every practice unit on this track is browsable below.');
+    expect(empty).toHaveTextContent('This track has no campaign yet.');
+    expect(empty).toHaveTextContent('Every unit on it is listed below.');
     const sec = await section();
     expect(within(sec).getByRole('heading', { level: 2, name: 'Practice units' })).toBeInTheDocument();
     expect(await within(sec).findByRole('heading', { level: 3, name: 'opusorganize 0/2 done' })).toBeInTheDocument();

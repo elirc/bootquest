@@ -273,3 +273,19 @@ describe('layout widths (f52 U19 + U20)', () => {
     expect(css('trackunits.css')).not.toContain('820px');
   });
 });
+
+describe('copy (f52 U18): short text, the full rule in a tooltip', () => {
+  it('Competencies says "rated 1–5"; the promotion rule is its tooltip', async () => {
+    renderApp('/');
+    const rule = await screen.findByTestId('comp-rule', {}, { timeout: 15_000 });
+    expect(rule).toHaveTextContent(/^rated 1–5$/);
+    expect(rule).toHaveAttribute('title', expect.stringContaining('an explain-back with at least 80% coverage, and a retest at least 2 days later'));
+  });
+
+  it('an empty slate is one short sentence with the reason in its tooltip', async () => {
+    renderApp('/', api({ dash: (d) => ({ ...d, slate: { ...d.slate, items: [] } }) }));
+    const note = await screen.findByTestId('slate-empty', {}, { timeout: 15_000 });
+    expect(note).toHaveTextContent(/^Nothing on today's slate\. Earn 20 XP to keep the streak\.$/);
+    expect(note).toHaveAttribute('title', expect.stringContaining('could be scheduled'));
+  });
+});

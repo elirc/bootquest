@@ -111,7 +111,7 @@ describe('campaign map (bound to GET /tracks/:id/campaign)', () => {
 
   it('a track with no seeded acts shows a clear empty state', async () => {
     renderApp('/campaign/agentic');
-    expect(await screen.findByTestId('campaign-empty')).toHaveTextContent('No campaign acts are seeded');
+    expect(await screen.findByTestId('campaign-empty')).toHaveTextContent('This track has no campaign yet.');
   });
 
   it('arrow keys switch track tabs; a locked Java renders locked', async () => {

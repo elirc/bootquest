@@ -322,7 +322,7 @@ function ActNode({
       </div>
       {box.expanded && n === 0 && (
         <p className="tree-act-empty" style={{ left: GEOM.left, top: box.y + headH }}>
-          No quests seeded in this act yet.
+          No quests in this act yet.
         </p>
       )}
     </>

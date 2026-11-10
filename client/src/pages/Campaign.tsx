@@ -100,8 +100,8 @@ function CampaignView({ trackId }: { trackId: TrackId }) {
           campaign.data.acts.length === 0 ? (
             <>
               <div className="act-empty" data-testid="campaign-empty">
-                <p>No campaign acts are seeded for this track yet.</p>
-                <p className="muted small">Every practice unit on this track is browsable below.</p>
+                <p>This track has no campaign yet.</p>
+                <p className="muted small">Every unit on it is listed below.</p>
               </div>
               {!locked && <TrackUnitsSection trackId={trackId} variant="primary" />}
             </>
@@ -230,7 +230,7 @@ function ActCard({ act, level, targetQuestId }: { act: CampaignActDto; level: nu
         </p>
       )}
       {act.quests.length === 0 ? (
-        <p className="act-gate">No quests seeded in this act yet.</p>
+        <p className="act-gate">No quests in this act yet.</p>
       ) : (
         <ol className="path">
           {act.quests.map((q) => (

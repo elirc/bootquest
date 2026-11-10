@@ -133,7 +133,7 @@ function UnitBrowser({ units, tiers }: { units: UnitSummary[]; tiers?: Record<Gr
   };
 
   if (units.length === 0) {
-    return <p data-testid="track-units-empty">No practice units are seeded on this track yet.</p>;
+    return <p data-testid="track-units-empty">No practice units on this track yet.</p>;
   }
 
   return (

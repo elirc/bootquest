@@ -106,7 +106,7 @@ function FocusForm({
         </h2>
       </header>
       <p className="small muted">
-        Pick the tracks you are preparing for and how many new drills each one asks for a day.
+        Pick your tracks and how many new drills each gives a day.
         {first && ` Until you choose, every track gives ${s.defaultSize} drill${s.defaultSize === 1 ? '' : 's'} a day.`}
       </p>
       <ul className="slate-focus-tracks">

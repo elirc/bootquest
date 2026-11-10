@@ -443,13 +443,17 @@ function Slate({ d }: { d: DashboardData }) {
         )}
       </ul>
       {emptySlate && (
-        <p className="slate-note muted small" data-testid="slate-empty">
-          Nothing on today&apos;s slate: no drill set, campaign step or review can be scheduled. Earn 20 XP to keep the streak.
+        <p className="slate-note muted small" data-testid="slate-empty" title="No drill set, campaign step or review could be scheduled today.">
+          Nothing on today&apos;s slate. Earn 20 XP to keep the streak.
         </p>
       )}
       {reviewOnly && (
-        <p className="slate-note muted small" data-testid="slate-review-only">
-          Review-only day: no drill set and no campaign step can be taken. Clearing the queue counts only after at least one review today; with nothing due, earn 20 XP to keep the streak.
+        <p
+          className="slate-note muted small"
+          data-testid="slate-review-only"
+          title="No drill set and no campaign step can be taken today. Clearing the queue counts only after at least one review today; with nothing due, earn 20 XP to keep the streak."
+        >
+          Review-only day: do at least one review, or earn 20 XP, to keep the streak.
         </p>
       )}
       <MixedDrills tracks={mixedTracks(items, SLATE_DRILL_TRACKS.filter(unlocked))} />
@@ -570,6 +574,9 @@ function PromotionLegs({ p, dueRetestUnits }: { p: PromotionProgress; dueRetestU
   );
 }
 
+/** f52 U18: the promotion rule, in full, for the panel's tooltip. */
+export const COMP_RULE = 'Rated 1–5 and never averaged. A promotion needs an artifact, an explain-back with at least 80% coverage, and a retest at least 2 days later.';
+
 /** Nothing to show yet: every competency at rating 1 (or unrated) with no evidence at all. */
 export const competenciesUntouched = (rows: readonly CompetencyRow[]): boolean => rows.every((r) => (r.rating ?? 1) <= 1 && !r.lastEvidence);
 
@@ -586,7 +593,11 @@ function CompetencyPanel({ rows, today, dueRetestUnits }: { rows: CompetencyRow[
       title="Competencies"
       labelledBy="p-comp"
       className={open ? undefined : 'comp-quiet'}
-      aside={<span className="muted">rated 1–5 · never averaged · promotion = artifact + explain-back ≥80% + retest ≥2 days later</span>}
+      aside={
+        <span className="muted" title={COMP_RULE} data-testid="comp-rule">
+          rated 1–5
+        </span>
+      }
     >
       {untouched && (
         <p className="comp-summary small" data-testid="comp-summary">

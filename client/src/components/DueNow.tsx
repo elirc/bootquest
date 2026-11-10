@@ -85,9 +85,9 @@ function RetestRow({ r }: { r: RetestListItemDto }) {
         {r.due ? 'Take the retest: ' : 'Retest: '}
         {r.title}
       </Link>
-      <span className="due-meta muted small">
+      <span className="due-meta muted small" title="A changed example of an artifact you explained. Answer it solo, with no help.">
         {r.due ? `opened ${fmtWhen(r.dueAt)}` : `opens ${fmtWhen(r.dueAt)}`} · changed example of{' '}
-        <Link to={`/play/${r.artifactUnitId}`}>artifact unit #{r.artifactUnitId}</Link> · solo, no help
+        <Link to={`/play/${r.artifactUnitId}`}>artifact unit #{r.artifactUnitId}</Link> · solo
       </span>
     </li>
   );
@@ -100,8 +100,8 @@ function AltSetRow({ a }: { a: AltSetDueDto }) {
       <Link to={`/play/${a.unitId}`} className="due-title">
         Alternate set: {a.title}
       </Link>
-      <span className="due-meta muted small">
-        set {a.label} · opened {fmtWhen(a.openedAt)} · fresh questions on material you explained at least 2 days ago · answer before you look
+      <span className="due-meta muted small" title="Fresh questions on material you explained at least 2 days ago. Answer before you look.">
+        set {a.label} · opened {fmtWhen(a.openedAt)} · fresh questions
       </span>
     </li>
   );
