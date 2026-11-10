@@ -55,7 +55,16 @@ export function splitExplanation(body: string): { answer: string | null; rest: s
   const end = body.indexOf('\n');
   return end === -1 ? { answer: body.slice(ANSWER_PREFIX.length), rest: '' } : { answer: body.slice(ANSWER_PREFIX.length, end), rest: body.slice(end + 1).trim() };
 }
-export function StudyQuestPane({ detail, lesson = null }: { detail: UnitDetail; lesson?: ReactNode }) {
+export function StudyQuestPane({
+  detail,
+  lesson = null,
+  onGateOpenChange,
+}: {
+  detail: UnitDetail;
+  lesson?: ReactNode;
+  /** fix pass 2: told when a Fundamentals (closed-book) gate opens and closes, so the page can lock "Learn more" */
+  onGateOpenChange?: (open: boolean) => void;
+}) {
   const sq = detail.studyQuest ?? null;
   if (!sq) {
     return (
@@ -66,7 +75,7 @@ export function StudyQuestPane({ detail, lesson = null }: { detail: UnitDetail; 
       </section>
     );
   }
-  return <StudyQuest detail={detail} sq={sq} lesson={lesson} />;
+  return <StudyQuest detail={detail} sq={sq} lesson={lesson} onGateOpenChange={onGateOpenChange} />;
 }
 
 /**
@@ -91,7 +100,17 @@ function LessonHidden({ onShow }: { onShow: () => void }) {
   );
 }
 
-function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuestPublic; lesson: ReactNode }) {
+function StudyQuest({
+  detail,
+  sq,
+  lesson,
+  onGateOpenChange,
+}: {
+  detail: UnitDetail;
+  sq: StudyQuestPublic;
+  lesson: ReactNode;
+  onGateOpenChange?: (open: boolean) => void;
+}) {
   const api = useApi();
   const unitId = detail.unit.id;
   const [started, setStarted] = useState(false);
@@ -205,6 +224,14 @@ function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuest
 
   // the gate is open from "Start quiz" until the submit is recorded
   const gateOpen = started && submit === null;
+  // fix pass 2: a Fundamentals gate is closed-book for as long as it is open, a retake after a pass
+  // included: the explanations an earlier pass released must not be readable mid-gate
+  const closedBook = fund && gateOpen;
+  useEffect(() => {
+    onGateOpenChange?.(closedBook);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [closedBook]);
+  useEffect(() => () => onGateOpenChange?.(false), []); // eslint-disable-line react-hooks/exhaustive-deps
   const showLesson = () => {
     setLessonShown(true);
     setAssisted(true);
@@ -417,7 +444,7 @@ function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuest
                     </span>
                   )}
                   {/* inside the legend: a disabled fieldset (after submit) never disables its first legend's controls */}
-                  {hasNotes(q.itemKey) && (
+                  {hasNotes(q.itemKey) && !closedBook && (
                     <span className="question-learn-more" data-testid={`learn-more-q${num}`}>
                       <LearnMoreButton unitId={unitId} target={q.itemKey} subject={`Q${num}`} compact />
                     </span>
