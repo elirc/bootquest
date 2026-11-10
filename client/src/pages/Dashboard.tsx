@@ -26,6 +26,9 @@ import { FREEZE_TOKENS_MAX, SLATE_DRILL_TRACKS, TRACK_LABEL, TRACK_PLACEHOLDER, 
 
 type Loaded<T> = AsyncState<T> & { reload: () => void };
 
+/** The partial-day rule (server engines/streak.ts): this much XP in a day keeps the streak. */
+const STREAK_XP = 20;
+
 export function DashboardPage() {
   const api = useApi();
   const q = useAsync(() => api.getDashboard(), [api]);
@@ -225,6 +228,7 @@ function DashboardBody({
   // No xpToday on the wire (W-7): today's heatmap row is the server's own number for it.
   const xpToday = d.heatmap.find((h) => h.day === d.today)?.xp ?? 0;
   const tokens = Math.min(d.streak.tokens, FREEZE_TOKENS_MAX);
+  const streakSafe = xpToday >= STREAK_XP || d.streak.todayComplete;
   const retests = comp.data?.retests ?? [];
   const dueRetestUnits = new Set(retests.filter((r) => r.due).map((r) => r.unitId));
   return (
@@ -246,6 +250,12 @@ function DashboardBody({
             {d.streak.current}
             <span className="tile-unit">days</span>
           </div>
+          {/* f52 U16 (display only): 20 XP today, or a complete slate, already keeps the streak */}
+          {streakSafe && (
+            <p className="tile-safe pos" data-testid="streak-safe" title="20 XP today or a cleared slate keeps the streak">
+              Streak safe for today ✓
+            </p>
+          )}
           <div className="tile-meta">
             <span
               className="freeze"

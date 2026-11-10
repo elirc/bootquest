@@ -216,3 +216,27 @@ describe('competencies on day one (f52 U8)', () => {
     expect(screen.queryByTestId('comp-summary')).toBeNull();
   });
 });
+
+describe('streak tile (f52 U16)', () => {
+  const streakTile = () => document.querySelector<HTMLElement>('section[aria-labelledby="t-streak"]')!;
+  const today = (xp: number, complete = false) =>
+    api({
+      dash: (d) => ({ ...d, streak: { ...d.streak, todayComplete: complete }, heatmap: d.heatmap.map((h) => (h.day === d.today ? { ...h, xp } : h)) }),
+    });
+
+  it('20 XP today: "Streak safe for today"', async () => {
+    renderApp('/', today(20));
+    await screen.findByTestId('hero-go', {}, { timeout: 15_000 });
+    expect(within(streakTile()).getByTestId('streak-safe')).toHaveTextContent('Streak safe for today ✓');
+  });
+
+  it('19 XP and an open slate: not yet; a complete slate with 0 XP: safe', async () => {
+    const r = renderApp('/', today(19));
+    await screen.findByTestId('hero-go', {}, { timeout: 15_000 });
+    expect(within(streakTile()).queryByTestId('streak-safe')).toBeNull();
+    r.unmount();
+    renderApp('/', today(0, true));
+    await screen.findByTestId('hero-go', {}, { timeout: 15_000 });
+    expect(within(streakTile()).getByTestId('streak-safe')).toBeInTheDocument();
+  });
+});
