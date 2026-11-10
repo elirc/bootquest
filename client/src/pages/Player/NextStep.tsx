@@ -7,11 +7,15 @@
 // "Topic 3 of 20 complete", the XP counted up, the flashcards enrolled, and the focused primary
 // button. After a gate pass the primary is "Practise: <drill>" and the next topic is a muted
 // "Skip to next topic" link.
+//
+// App ruling 5: once the topic's own drills are done (the step is no longer this topic's gate or
+// one of its drills), the topic's "More practice" list follows the links.
 import { useEffect, useRef, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { useApi } from '../../api/context';
 import type { SubmitResponse, TrackId, UnitSummary } from '../../api/types';
 import { Icon } from '../../components/Icon';
+import { MorePractice } from '../../components/MorePractice';
 import { useCountUp } from '../../lib/countup';
 import { fundPlace } from '../../lib/fundamentals';
 import { InlineProse } from '../../lib/prose';
@@ -130,7 +134,17 @@ export function NextStep({ unit, submit }: { unit: Unit; submit?: SubmitResponse
       )}
     </p>
   );
-  if (!showPanel || place === null) return links;
+  // wave B (ruling 5): related drills of the track's other banks, once the topic's own are done
+  const ownDone = place !== null && gateDone && fund?.primary?.kind !== 'drill' && fund?.primary?.kind !== 'gate';
+  const more = ownDone && place !== null ? <MorePractice related={place.topic.related} as="block" /> : null;
+  if (!showPanel || place === null) {
+    return (
+      <>
+        {links}
+        {more}
+      </>
+    );
+  }
 
   const xp = submit?.xp?.amount ?? 0;
   const enrolled = submit?.studyQuiz?.flashcardsEnrolled ?? 0;
@@ -152,6 +166,7 @@ export function NextStep({ unit, submit }: { unit: Unit; submit?: SubmitResponse
         </p>
       )}
       {links}
+      {more}
     </section>
   );
 }

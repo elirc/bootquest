@@ -10,8 +10,9 @@
 import { useId, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useApi } from '../api/context';
-import type { FundTopicDto, TrackId, UnitSummary } from '../api/types';
+import type { FundTopicDtoExt as FundTopicDto, TrackId, UnitSummary } from '../api/types';
 import { Icon } from '../components/Icon';
+import { MorePractice } from '../components/MorePractice';
 import { Chip, LoadState, ProgressBar } from '../components/ui';
 import { FUND_LEVEL_LABEL, fundProgress, fundProgressText, topicComplete } from '../lib/fundamentals';
 import { useAsync } from '../lib/useAsync';
@@ -170,6 +171,8 @@ function TopicRow({ topic: t }: { topic: FundTopicDto }) {
           ))}
         </ul>
       )}
+      {/* wave B (ruling 5): existing drills of the track's other banks on this topic; closed by default */}
+      <MorePractice related={t.related} as="details" />
     </div>
   );
 }
