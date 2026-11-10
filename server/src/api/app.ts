@@ -61,8 +61,8 @@ import { defaultRunners, type RunnerRegistry } from './runners.ts';
 import { emptySeedItemStore, type SeedItemStore } from '../store/seed-items.ts';
 import { ladderUnits } from '../store/ladder.ts';
 import { registerSettingsRoutes } from './settings-routes.ts';
-import { FundamentalsResponseExt, HintsResponse, HintTakenResponse } from '@bootquest/shared/api-ext';
-import { getFundamentals } from './fundamentals-service.ts';
+import { FundamentalsResponseExt, HintsResponse, HintTakenResponse, LessonAidsResponse } from '@bootquest/shared/api-ext';
+import { getFundamentals, getLessonAids } from './fundamentals-service.ts';
 import { getHints, takeHint } from './hints-service.ts';
 import {
   answerExplainBack,
@@ -230,6 +230,13 @@ export function createApp(opts: AppOptions): Express {
     const { id } = validate(UnitIdParams, req.params, 'params');
     validate(EmptyQuery, req.query, 'query');
     sendJson(res, 200, UnitNotesResponse.parse(getUnitNotes(deps, id)));
+  }));
+
+  // f52 lesson aids: gate map (question -> lesson heading, never answers) + open-book checks; read-only
+  router.get('/units/:id/lesson-aids', asyncRoute((req, res) => {
+    const { id } = validate(UnitIdParams, req.params, 'params');
+    validate(EmptyQuery, req.query, 'query');
+    sendJson(res, 200, LessonAidsResponse.parse(getLessonAids(deps, id)));
   }));
 
   router.post('/units/:id/run', asyncRoute(async (req, res) => {

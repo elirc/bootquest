@@ -330,3 +330,29 @@ export type FundTopicDtoExt = z.infer<typeof FundTopicDtoExt>;
 
 export const FundamentalsResponseExt = FundamentalsResponse.extend({ topics: z.array(FundTopicDtoExt) }).strict();
 export type FundamentalsResponseExt = z.infer<typeof FundamentalsResponseExt>;
+
+// ---- f52 S: Fundamentals lesson aids (wave B, app ruling 7) -----------------------------------------------
+// GET /units/:id/lesson-aids (read-only): for a Fundamentals topic (study) unit, `gate` maps each 1-based
+// quiz question number to the `##`/`###` lesson heading that teaches it (headings only, never an answer:
+// the client names the sections to re-read after a failed gate) and `checks` are ungraded, open-book
+// reveal cards shown after their heading (content/fundamentals/sections.json; invalid entries are skipped
+// at load). Any other unit: { gate: {}, checks: [] }.
+
+export const LessonCheckDto = z
+  .object({
+    /** the lesson heading the check follows (exact `##`/`###` text) */
+    heading: z.string(),
+    prompt: z.string(),
+    /** open-book answer, shown on Reveal (no XP, no attempt) */
+    answer: z.string(),
+  })
+  .strict();
+export type LessonCheckDto = z.infer<typeof LessonCheckDto>;
+
+export const LessonAidsResponse = z
+  .object({
+    gate: z.record(z.string().regex(/^[1-9]\d*$/, '1-based question number'), z.string()),
+    checks: z.array(LessonCheckDto),
+  })
+  .strict();
+export type LessonAidsResponse = z.infer<typeof LessonAidsResponse>;
