@@ -1,6 +1,6 @@
 // fund wave: the Campaign page's Fundamentals ladder and a Fundamentals topic in the player
 // (mock fixtures: api/fixtures/fundamentals.ts — JS topics 207 (available) and 208 (locked behind 207)).
-import { screen, within } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { createMockApi } from '../api/mock';
 import { fundStudyFixtures } from '../api/fixtures/fundamentals';
@@ -66,9 +66,16 @@ describe('Fundamentals section (Campaign page)', () => {
 
 type User = ReturnType<typeof renderApp>['user'];
 
-/** Answer every gate question (0-based choice per question) and stop where "Submit answers" is offered. */
+/**
+ * Step through the gate (U15: one question at a time), answering each with a 0-based choice, and
+ * stop on the review screen, where "Submit answers" is offered.
+ */
 async function answerAll(user: User, picks: readonly number[]) {
-  for (const [qi, ci] of picks.entries()) await user.click(screen.getByRole('radio', { name: `Q${qi + 1} choice ${ci + 1}` }));
+  for (const [qi, ci] of picks.entries()) {
+    await user.click(screen.getByRole('radio', { name: `Q${qi + 1} choice ${ci + 1}` }));
+    await user.click(screen.getByRole('button', { name: qi === picks.length - 1 ? /Review answers/ : /^Next/ }));
+  }
+  expect(screen.getByTestId('gate-review')).toBeInTheDocument();
 }
 
 describe('a Fundamentals topic in the player', () => {
@@ -105,7 +112,7 @@ describe('a Fundamentals topic in the player', () => {
     // no lesson text anywhere in the DOM
     expect(screen.queryByRole('heading', { name: 'Lesson' })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'The seven primitives' })).not.toBeInTheDocument();
-    expect(document.body.textContent).not.toContain('Array.isArray(value)`');
+    expect(document.body.textContent).not.toContain('Test arrays with');
     expect(document.body.textContent).not.toContain('seven primitive types');
     expect(screen.getByTestId('lesson-hidden')).toHaveTextContent('Lesson hidden while you answer');
 
@@ -144,5 +151,133 @@ describe('a Fundamentals topic in the player', () => {
     expect(screen.getByTestId('quest-done')).toHaveTextContent('topic passed');
     const ladder = await api.getFundamentals('js');
     expect(ladder.topics.map((t) => t.unit.state)).toEqual(['done', 'available']);
+    // U5: a passed gate is not a dead end (this topic has no drills: the next topic is the step)
+    const next = await screen.findByTestId('next-unit');
+    const primary = within(next).getByTestId('next-primary');
+    expect(primary).toHaveTextContent('Next topic: 02 Functions & closures');
+    expect(primary).toHaveAttribute('href', '/play/208');
+    await waitFor(() => expect(primary).toHaveFocus());
+  });
+
+  it('U5: after a passed gate "Practise: <drill>" is the primary link and "Next topic" the second; neither after a fail', async () => {
+    const base = createMockApi();
+    const api: BootQuestApi = {
+      ...base,
+      getFundamentals: async (t) => {
+        const ladder = await base.getFundamentals(t);
+        const drill = { ...ladder.topics[0]!.unit, id: 950, key: 'fund-js/01-values-types-and-coercion/01-defaults', kind: 'drill' as const, title: 'Defaults that keep `0`', state: 'available' as const };
+        return { ...ladder, topics: ladder.topics.map((x, i) => (i === 0 ? { ...x, drills: [drill] } : x)) };
+      },
+    };
+    const { user } = renderApp(`/play/${T1}`, api);
+    await user.click(await screen.findByRole('button', { name: /Start quiz/ }));
+    await answerAll(user, FX1.keys.map((k) => (k + 1) % 3));
+    await user.click(screen.getByRole('button', { name: /Submit answers/ }));
+    expect(await screen.findByText('Below the pass mark')).toBeInTheDocument();
+    expect(screen.queryByTestId('next-unit')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Try again' }));
+    await answerAll(user, FX1.keys);
+    await user.click(screen.getByRole('button', { name: /Submit answers/ }));
+    const next = await screen.findByTestId('next-unit');
+    expect(within(next).getByTestId('next-primary')).toHaveTextContent('Practise: Defaults that keep 0');
+    expect(within(next).getByTestId('next-primary')).toHaveAttribute('href', '/play/950');
+    expect(within(next).getByTestId('next-topic')).toHaveTextContent('Next topic: 02 Functions & closures');
+    expect(within(next).getByTestId('next-topic')).toHaveAttribute('href', '/play/208');
+  });
+});
+
+// U15 (ruling 3): the Fundamentals gate is stepped and can be taken without the mouse
+describe('the Fundamentals gate stepper', () => {
+  const recorded = () => {
+    const base = createMockApi();
+    const sent: Submission[] = [];
+    const api: BootQuestApi = {
+      ...base,
+      submitUnit: async (id, s) => {
+        sent.push(s);
+        return base.submitUnit(id, s);
+      },
+    };
+    return { api, sent };
+  };
+
+  it('one question at a time with "n / total"; 1-4 picks, Enter goes on, then the review screen; Enter on Submit submits', async () => {
+    const { api, sent } = recorded();
+    const { user } = renderApp(`/play/${T1}`, api);
+    await user.click(await screen.findByRole('button', { name: /Start quiz/ }));
+    expect(screen.getByTestId('gate-progress')).toHaveTextContent('1 / 5');
+    expect(screen.getByTestId('question-1')).toBeInTheDocument();
+    expect(screen.queryByTestId('question-2')).not.toBeInTheDocument();
+    // the first choice has focus, so the keyboard is live at once
+    expect(screen.getByRole('radio', { name: 'Q1 choice 1' })).toHaveFocus();
+
+    // Enter without a pick does nothing; a digit past the choices does nothing
+    await user.keyboard('{Enter}4');
+    expect(screen.getByTestId('gate-progress')).toHaveTextContent('1 / 5');
+    expect(screen.getAllByRole('radio').every((r) => !(r as HTMLInputElement).checked)).toBe(true);
+
+    for (const [qi, ci] of FX1.keys.entries()) {
+      expect(screen.getByTestId('gate-progress')).toHaveTextContent(`${qi + 1} / 5`);
+      await user.keyboard(String(ci + 1));
+      expect(screen.getByRole('radio', { name: `Q${qi + 1} choice ${ci + 1}` })).toBeChecked();
+      // nothing says right or wrong before the submit
+      expect(document.querySelector('.study-mark, .choice-right, .choice-wrong')).toBeNull();
+      await user.keyboard('{Enter}');
+    }
+    // the review screen: every question, no marks, Submit focused
+    expect(screen.getByTestId('gate-review')).toBeInTheDocument();
+    for (let n = 1; n <= 5; n++) {
+      expect(screen.getByTestId(`question-${n}`)).toBeInTheDocument();
+      expect(screen.queryByTestId(`mark-${n}`)).not.toBeInTheDocument();
+    }
+    expect(sent).toHaveLength(0);
+    const submit = screen.getByRole('button', { name: /Submit answers/ });
+    expect(submit).toHaveFocus();
+    await user.keyboard('{Enter}');
+    expect(await screen.findByText('Quiz gate passed')).toBeInTheDocument();
+    expect(sent).toEqual([{ answers: FX1.keys, selfAssisted: false }]);
+    for (let n = 1; n <= 5; n++) expect(screen.getByTestId(`mark-${n}`)).toHaveTextContent('correct');
+  });
+
+  it('Back and Next move freely; the review screen flags an unanswered question and Enter there never submits from a choice', async () => {
+    const { api, sent } = recorded();
+    const { user } = renderApp(`/play/${T1}`, api);
+    await user.click(await screen.findByRole('button', { name: /Start quiz/ }));
+    expect(screen.getByRole('button', { name: 'Back' })).toBeDisabled();
+    await user.keyboard('2{Enter}');
+    expect(screen.getByTestId('gate-progress')).toHaveTextContent('2 / 5');
+    await user.click(screen.getByRole('button', { name: 'Back' }));
+    expect(screen.getByTestId('gate-progress')).toHaveTextContent('1 / 5');
+    expect(screen.getByRole('radio', { name: 'Q1 choice 2' })).toBeChecked();
+    // skip ahead without answering 2..5
+    for (let i = 0; i < 4; i++) await user.click(screen.getByRole('button', { name: /^Next/ }));
+    await user.click(screen.getByRole('button', { name: /Review answers/ }));
+    expect(screen.getByTestId('question-2')).toHaveTextContent('not answered');
+    expect(screen.getByTestId('question-1')).not.toHaveTextContent('not answered');
+    expect(screen.getByRole('button', { name: /Submit answers/ })).toBeDisabled();
+
+    // answer the rest on the review screen itself; Enter on a choice does not submit
+    for (const [qi, ci] of FX1.keys.entries()) await user.click(screen.getByRole('radio', { name: `Q${qi + 1} choice ${ci + 1}` }));
+    expect(screen.getByRole('button', { name: /Submit answers/ })).toBeEnabled();
+    await user.keyboard('{Enter}');
+    await new Promise((r) => setTimeout(r, 0));
+    expect(sent).toHaveLength(0);
+    // "Back to questions" returns to the stepper
+    await user.click(screen.getByRole('button', { name: 'Back to questions' }));
+    expect(screen.getByTestId('gate-progress')).toHaveTextContent('5 / 5');
+    await user.click(screen.getByRole('button', { name: /Review answers/ }));
+    await user.click(screen.getByRole('button', { name: /Submit answers/ }));
+    expect(await screen.findByText('Quiz gate passed')).toBeInTheDocument();
+    expect(sent).toHaveLength(1);
+  });
+
+  it('a campaign study quest keeps the all-at-once form', async () => {
+    const { user } = renderApp('/play/206');
+    await user.click(await screen.findByRole('button', { name: /Start quiz/ }));
+    expect(screen.queryByTestId('gate-step')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('gate-progress')).not.toBeInTheDocument();
+    expect(screen.getByTestId('question-1')).toBeInTheDocument();
+    expect(screen.getByTestId('question-5')).toBeInTheDocument();
   });
 });

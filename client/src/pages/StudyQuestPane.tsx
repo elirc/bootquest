@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { useApi } from '../api/context';
 import { errorText } from '../api/errors';
 import type { StudyQuestPublic, SubmitResponse, UnitDetail, UnitNotesResponse } from '../api/types';
 import { LearnMoreButton } from '../components/LearnMore';
 import { Icon } from '../components/Icon';
-import { Chip } from '../components/ui';
+import { Chip, Kbd } from '../components/ui';
+import { hasModifier, isEditableTarget, useKeydown } from '../lib/keys';
 import { InlineProse } from '../lib/prose';
+import { enterActsOnFocus, shortcutBlocked } from '../lib/shortcuts';
 import { useTracksRefresh } from '../lib/tracks';
 import { readingTitle } from '../lib/view';
 import { isFundTopicKey } from '../lib/fundamentals';
@@ -18,6 +20,11 @@ import { NextStep } from './Player/NextStep';
  * right/wrong per question and NEVER the key of a missed question: misses become review cards
  * (question on the front, keyed answer + source on the back) that arrive in the review queue
  * the next day. Submits are free and repeatable; the 50 XP is paid once.
+ *
+ * f52 U15 (ruling 3): a FUNDAMENTALS topic's gate is stepped instead: one question at a time
+ * ("3 / 10"), 1-4 picks, Enter goes on, Back / Next move freely, then a review screen that lists
+ * every question before the submit. Nothing says right or wrong until the submit is recorded.
+ * Campaign study quests keep the all-at-once form.
  */
 export function StudyQuestPane({ detail, lesson = null }: { detail: UnitDetail; lesson?: ReactNode }) {
   const sq = detail.studyQuest ?? null;
@@ -67,6 +74,11 @@ function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuest
   const [submit, setSubmit] = useState<SubmitResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(detail.unit.state === 'done');
+  // U15 stepper (Fundamentals only): the question on screen, and whether the review screen is up
+  const [step, setStep] = useState(0);
+  const [reviewing, setReviewing] = useState(false);
+  const firstRadio = useRef<HTMLInputElement>(null);
+  const submitButton = useRef<HTMLButtonElement>(null);
   const refreshTracks = useTracksRefresh();
   // "Learn more": which items have a reading, and (after an answer) which have a released explanation
   const [notes, setNotes] = useState<UnitNotesResponse | null>(null);
@@ -99,6 +111,8 @@ function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuest
   const retry = () => {
     setSubmit(null);
     setAnswers(sq.questions.map(() => null));
+    setStep(0);
+    setReviewing(false);
     // a new try is closed-book again
     setLessonShown(false);
     setAssisted(false);
@@ -113,6 +127,47 @@ function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuest
     setLessonShown(true);
     setAssisted(true);
   };
+
+  const total = sq.questions.length;
+  // U15: Fundamentals gates are answered one question at a time, then reviewed
+  const stepping = fund && gateOpen && !reviewing && total > 0;
+  const pick = (qi: number, ci: number) => setAnswers((prev) => prev.map((a, i) => (i === qi ? ci : a)));
+  const goNext = () => {
+    if (step >= total - 1) setReviewing(true);
+    else setStep(step + 1);
+  };
+  const goBack = () => setStep(Math.max(0, step - 1));
+
+  // keyboard focus follows the stepper: the question's first choice, then (on review) Submit, so
+  // the whole gate can be taken without the mouse
+  useEffect(() => {
+    if (stepping) firstRadio.current?.focus({ preventScroll: true });
+  }, [stepping, step]);
+  useEffect(() => {
+    if (fund && reviewing && submit === null) submitButton.current?.focus({ preventScroll: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reviewing]);
+
+  // The same guards as the single-question quiz (Player QuizPane). On the review screen there is
+  // no page-level Enter at all: Submit acts only as the focused button.
+  useKeydown((e) => {
+    if (!stepping || hasModifier(e) || shortcutBlocked(e)) return;
+    if (e.key === 'Enter') {
+      if (e.isComposing) return;
+      // Enter on a focused button / link / checkbox is that control's own Enter
+      if (enterActsOnFocus(e.target) || isEditableTarget(e.target)) return;
+      if (answers[step] === null) return;
+      e.preventDefault();
+      goNext();
+      return;
+    }
+    if (isEditableTarget(e.target)) return;
+    const n = Number(e.key);
+    if (Number.isInteger(n) && n >= 1 && n <= (sq.questions[step]?.choices.length ?? 0)) {
+      e.preventDefault();
+      pick(step, n - 1);
+    }
+  });
 
   return (
     <>
@@ -177,21 +232,81 @@ function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuest
             <Icon name="play" /> Start quiz
           </button>
         </div>
+      ) : stepping ? (
+        <div className="study-quiz gate-step" role="group" aria-label="Quiz gate" data-testid="gate-step">
+          <div className="gate-step-head">
+            <span className="gate-progress" data-testid="gate-progress" aria-label={`Question ${step + 1} of ${total}`}>
+              {step + 1} / {total}
+            </span>
+            <span className="muted small">
+              {answered}/{total} answered
+            </span>
+          </div>
+          <div className="gate-bar" aria-hidden="true">
+            <span style={{ width: `${((step + 1) / total) * 100}%` }} />
+          </div>
+          {(() => {
+            const q = sq.questions[step]!;
+            return (
+              // keyed: each question is a fresh group (its first choice takes focus)
+              <fieldset key={q.itemKey} className="choices" data-testid={`question-${step + 1}`}>
+                <legend>
+                  <strong>Q{step + 1}.</strong> <InlineProse text={q.prompt} />
+                </legend>
+                {q.choices.map((c, ci) => (
+                  <label key={ci} className={`choice${answers[step] === ci ? ' choice-on' : ''}`}>
+                    <input
+                      ref={ci === 0 ? firstRadio : undefined}
+                      type="radio"
+                      name={`q${step + 1}`}
+                      checked={answers[step] === ci}
+                      onChange={() => pick(step, ci)}
+                      aria-label={`Q${step + 1} choice ${ci + 1}`}
+                    />
+                    <Kbd>{ci + 1}</Kbd>
+                    <span className="choice-text">
+                      <InlineProse text={c} />
+                    </span>
+                  </label>
+                ))}
+              </fieldset>
+            );
+          })()}
+          <div className="toolbar">
+            <button type="button" className="btn" onClick={goBack} disabled={step === 0}>
+              Back
+            </button>
+            <span className="toolbar-spacer" />
+            <span className="muted small">
+              Pick with 1–{sq.questions[step]!.choices.length}, then Enter
+            </span>
+            <button type="button" className="btn btn-primary" onClick={goNext}>
+              {step === total - 1 ? 'Review answers' : 'Next'} <Kbd>Enter</Kbd>
+            </button>
+          </div>
+        </div>
       ) : (
         <form
           className="study-quiz"
           aria-label="Quiz gate"
           onSubmit={(e) => {
             e.preventDefault();
-            void send();
+            // U15: a stepped gate submits only from its Submit button (never an implicit Enter)
+            if (!fund) void send();
           }}
         >
+          {fund && submit === null && (
+            <p className="muted small" data-testid="gate-review">
+              Review your answers. You can still change any of them; nothing is marked until you submit.
+            </p>
+          )}
           {sq.questions.map((q, qi) => {
             const outcome = submit?.studyQuiz?.items[qi];
             return (
               <fieldset key={q.itemKey} className="choices" disabled={busy || submit !== null} data-testid={`question-${qi + 1}`}>
                 <legend>
                   <strong>Q{qi + 1}.</strong> <InlineProse text={q.prompt} />
+                  {fund && !submit && answers[qi] === null && <span className="gate-unanswered"> not answered</span>}
                   {outcome && (
                     <span className={`study-mark ${outcome.correct ? 'study-right' : 'study-wrong'}`} data-testid={`mark-${qi + 1}`}>
                       {outcome.correct ? ' correct' : ' incorrect'}
@@ -225,6 +340,20 @@ function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuest
             <label className="check">
               <input type="checkbox" checked={assisted} onChange={(e) => setAssisted(e.target.checked)} disabled={submit !== null || lessonShown} />I had help
             </label>
+            {fund && !submit && (
+              <button
+                type="button"
+                className="btn"
+                disabled={busy}
+                onClick={() => {
+                  const firstOpen = answers.findIndex((a) => a === null);
+                  setStep(firstOpen === -1 ? total - 1 : firstOpen);
+                  setReviewing(false);
+                }}
+              >
+                Back to questions
+              </button>
+            )}
             <span className="toolbar-spacer" />
             <span className="muted small">
               {answered}/{sq.questions.length} answered
@@ -234,7 +363,13 @@ function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuest
                 Try again
               </button>
             ) : (
-              <button type="submit" className="btn btn-primary" disabled={!complete || busy}>
+              <button
+                ref={submitButton}
+                type={fund ? 'button' : 'submit'}
+                className="btn btn-primary"
+                disabled={!complete || busy}
+                onClick={fund ? () => void send() : undefined}
+              >
                 <Icon name="check" /> {busy ? 'Submitting…' : 'Submit answers'}
               </button>
             )}
