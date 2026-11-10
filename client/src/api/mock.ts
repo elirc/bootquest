@@ -45,7 +45,7 @@ import {
   type StudyQuestFixture,
 } from './fixtures/ladder';
 import { writtenFixtures } from './fixtures/written';
-import { fundExplanationFixtures, fundLadderFixtures, fundStudyFixtures } from './fixtures/fundamentals';
+import { fundExplanationFixtures, fundLadderFixtures, fundLessonAidFixtures, fundStudyFixtures } from './fixtures/fundamentals';
 
 // fund wave: the Fundamentals topic units are study-quiz units like the borrowbox quest (lesson = instructions)
 const allStudyFixtures: Record<string, StudyQuestFixture & { instructions?: string }> = { ...studyQuestFixtures, ...fundStudyFixtures };
@@ -91,6 +91,8 @@ import {
   type UnitSearchHit,
   type UnitSearchResponse,
   type HintLockReason,
+  type LessonAids,
+  NO_LESSON_AIDS,
   type HintsResponse,
   type HintTakenResponse,
 } from './types';
@@ -1509,6 +1511,8 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
       }),
 
     // ---- f52 S: progressive hints, mirrors server/src/api/hints-service.ts
+    // ---- f52 wave B: lesson aids (never rejects, like the HTTP client)
+    getLessonAids: (id) => wrap((): LessonAids => clone(fundLessonAidFixtures[String(id)] ?? NO_LESSON_AIDS)),
     getHints: (id) => wrap((): HintsResponse => hintView(id).view),
     takeHint: (id) =>
       wrap((): HintTakenResponse => {

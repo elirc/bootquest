@@ -16,8 +16,8 @@ describe('Fundamentals section (Campaign page)', () => {
     renderApp('/campaign/js');
     const section = await screen.findByTestId('fundamentals');
     expect(within(section).getByRole('heading', { name: 'Fundamentals' })).toBeInTheDocument();
-    expect(within(section).getByTestId('fund-progress')).toHaveTextContent('0/2 topics passed');
-    expect(within(section).getByRole('progressbar', { name: 'Fundamentals topics passed' })).toBeInTheDocument();
+    expect(within(section).getByTestId('fund-progress')).toHaveTextContent('0 complete · 0 gates passed · 2 topics');
+    expect(within(section).getByRole('progressbar', { name: 'Fundamentals topics complete' })).toBeInTheDocument();
     const topics = section.querySelectorAll<HTMLElement>('[data-topic]');
     expect([...topics].map((t) => t.dataset.topic)).toEqual(['01-values-types-and-coercion', '02-functions-and-closures']);
     expect(within(topics[0]!).getByRole('link', { name: /01\s*Values, types & coercion/ })).toHaveAttribute('href', `/play/${T1}`);
@@ -47,7 +47,7 @@ describe('Fundamentals section (Campaign page)', () => {
     const api: BootQuestApi = { ...base, getFundamentals: async () => ({ trackId: 'js', topics }) };
     const first = renderApp('/campaign/js', api);
     let section = await screen.findByTestId('fundamentals');
-    expect(within(section).getByTestId('fund-progress')).toHaveTextContent('3/20 topics passed');
+    expect(within(section).getByTestId('fund-progress')).toHaveTextContent('3 complete · 3 gates passed · 20 topics');
     expect(within(section).getByTestId('fund-continue')).toHaveTextContent('Continue: 04 Topic 4');
     const shown = () => [...section.querySelectorAll<HTMLElement>('[data-topic]')].map((t) => t.dataset.topic);
     expect(shown()).toEqual(['04-topic-4', '05-topic-5', '06-topic-6']);
@@ -123,7 +123,7 @@ describe('Fundamentals section (Campaign page)', () => {
     expect(within(section).getByRole('alert')).toBeInTheDocument();
     fail = false;
     await user.click(within(section).getByRole('button', { name: /retry/i }));
-    expect(await within(await screen.findByTestId('fundamentals')).findByTestId('fund-progress')).toHaveTextContent('0/2');
+    expect(await within(await screen.findByTestId('fundamentals')).findByTestId('fund-progress')).toHaveTextContent('0 complete · 0 gates passed');
   });
 });
 
@@ -211,7 +211,7 @@ describe('a Fundamentals topic in the player', () => {
     await answerAll(user, FX1.keys);
     await user.click(screen.getByRole('button', { name: /Submit answers/ }));
     expect(await screen.findByText('Quiz gate passed')).toBeInTheDocument();
-    expect(screen.getByTestId('quest-done')).toHaveTextContent('topic passed');
+    expect(screen.getByTestId('quest-done')).toHaveTextContent('gate passed');
     const ladder = await api.getFundamentals('js');
     expect(ladder.topics.map((t) => t.unit.state)).toEqual(['done', 'available']);
     // U5: a passed gate is not a dead end (this topic has no drills: the next topic is the step)
@@ -222,7 +222,7 @@ describe('a Fundamentals topic in the player', () => {
     await waitFor(() => expect(primary).toHaveFocus());
   });
 
-  it('U5: after a passed gate "Practise: <drill>" is the primary link and "Next topic" the second; neither after a fail', async () => {
+  it('U5: after a passed gate "Practise: <drill>" is the primary link and "Skip to next topic" the second; neither after a fail', async () => {
     const base = createMockApi();
     const api: BootQuestApi = {
       ...base,
@@ -245,7 +245,9 @@ describe('a Fundamentals topic in the player', () => {
     const next = await screen.findByTestId('next-unit');
     expect(within(next).getByTestId('next-primary')).toHaveTextContent('Practise: Defaults that keep 0');
     expect(within(next).getByTestId('next-primary')).toHaveAttribute('href', '/play/950');
-    expect(within(next).getByTestId('next-topic')).toHaveTextContent('Next topic: 02 Functions & closures');
+    // wave B (ruling 4): after a gate pass the next topic is a muted "Skip" link, never a second button
+    expect(within(next).getByTestId('next-topic')).toHaveTextContent('Skip to next topic');
+    expect(within(next).getByTestId('next-topic')).not.toHaveClass('btn');
     expect(within(next).getByTestId('next-topic')).toHaveAttribute('href', '/play/208');
   });
 });
@@ -380,14 +382,15 @@ describe('the Fundamentals gate result', () => {
     expect(screen.getByTestId('miss-cards-notice')).toHaveTextContent('each one is now a review card');
   });
 
-  it('a fail shows which questions were missed and nothing else: no key, no explanation', async () => {
+  it('a fail shows the score and what to re-read, and nothing else: no per-question mark, no key, no explanation', async () => {
     const { user, api } = renderApp(`/play/${T1}`);
     await user.click(await screen.findByRole('button', { name: /Start quiz/ }));
     await answerAll(user, FX1.keys.map((k, i) => (i < 2 ? (k + 1) % 3 : k))); // 3/5
     await user.click(screen.getByRole('button', { name: /Submit answers/ }));
     expect(await screen.findByText('Below the pass mark')).toBeInTheDocument();
-    expect(screen.getByTestId('mark-1')).toHaveTextContent('incorrect');
-    expect(screen.getByTestId('mark-3')).toHaveTextContent('correct');
+    // wave B (ruling 2): a failed gate marks no question at all
+    expect(document.querySelector('.study-mark, [data-testid^="mark-"]')).toBeNull();
+    expect(screen.getByTestId('study-result')).toHaveTextContent('3/5 correct (60%)');
     // let the notes re-read settle: still nothing
     const notes = await api.getUnitNotes(T1);
     expect(notes.explanations).toMatchObject({ state: 'locked', released: [], withheld: 5 });
@@ -395,7 +398,9 @@ describe('the Fundamentals gate result', () => {
     expect(document.querySelector('.choice-right')).toBeNull();
     expect(document.body.textContent).not.toContain('Every non-empty string is truthy');
     expect(screen.getByTestId('miss-cards-notice')).toHaveTextContent('The answers to the 2 missed questions are not shown here');
-    expect(screen.getByTestId('fail-advice')).toHaveTextContent('Re-read the lesson');
+    // ...and names the lesson sections of the missed questions (Q1, Q2) from the gate map
+    expect(screen.getByTestId('reread')).toHaveTextContent('Re-read: typeof surprises · The seven primitives');
+    expect(screen.getByTestId('fail-advice')).toHaveTextContent('A failed try costs nothing and is saved.');
     // question order is untouched
     expect([...document.querySelectorAll('fieldset[data-testid^="question-"]')].map((f) => f.getAttribute('data-testid'))).toEqual(
       [1, 2, 3, 4, 5].map((n) => `question-${n}`),

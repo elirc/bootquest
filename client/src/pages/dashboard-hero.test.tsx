@@ -98,7 +98,7 @@ describe('pickHero (council ruling 5)', () => {
       kind: 'fundamentals',
       label: 'Continue Fundamentals: Topic 2 title',
       href: '/play/2',
-      context: 'Fundamentals · JS/TS · Topic 2 of 3',
+      context: 'Fundamentals · JS/TS · Topic 2 of 3 · ≈10 min · 1 complete · 1 gate passed',
     });
   });
 
@@ -147,7 +147,7 @@ describe('dashboard hero (rendered)', () => {
     const { go, context } = await hero();
     expect(go).toHaveAttribute('href', '/play/302');
     expect(go).toHaveTextContent('Practise: Drill 302');
-    expect(context).toHaveTextContent('Fundamentals · JS/TS · Topic 1 of 2 · drill 2 of 2');
+    expect(context).toHaveTextContent('Fundamentals · JS/TS · Topic 1 of 2 · drill 2 of 2 · ≈5 min');
   });
 
   it('JS off the slate: only the C# ladder is read; with none there, the first undone slate item', async () => {

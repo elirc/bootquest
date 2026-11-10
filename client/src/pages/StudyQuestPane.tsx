@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom';
 import { useApi } from '../api/context';
 import { errorText } from '../api/errors';
-import type { StudyQuestPublic, SubmitResponse, UnitDetail, UnitNotesResponse } from '../api/types';
+import { NO_LESSON_AIDS, type LessonAids, type StudyQuestPublic, type SubmitResponse, type UnitDetail, type UnitNotesResponse } from '../api/types';
 import { LearnMoreButton } from '../components/LearnMore';
 import { Icon } from '../components/Icon';
 import { Chip, Kbd } from '../components/ui';
@@ -10,8 +10,23 @@ import { hasModifier, isEditableTarget, useKeydown } from '../lib/keys';
 import { InlineProse, Prose } from '../lib/prose';
 import { enterActsOnFocus, shortcutBlocked } from '../lib/shortcuts';
 import { useTracksRefresh } from '../lib/tracks';
+import { useFundLadderRefresh } from '../lib/useFundLadder';
 import { readingTitle } from '../lib/view';
 import { isFundTopicKey } from '../lib/fundamentals';
+import {
+  clearGateFails,
+  cooldownLeft,
+  displayIndexOf,
+  fmtCountdown,
+  identityOrder,
+  makeGateOrder,
+  readGateFails,
+  recordGateFail,
+  servedPick,
+  type GateFails,
+  type GateOrder,
+} from '../lib/gate';
+import { LessonAidsContext } from './Player/LessonAids';
 import { NextStep } from './Player/NextStep';
 
 /**
@@ -94,6 +109,7 @@ function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuest
   const firstRadio = useRef<HTMLInputElement>(null);
   const submitButton = useRef<HTMLButtonElement>(null);
   const refreshTracks = useTracksRefresh();
+  const refreshLadder = useFundLadderRefresh();
   // "Learn more": which items have a reading, and (after an answer) which have a released explanation
   const [notes, setNotes] = useState<UnitNotesResponse | null>(null);
   const loadNotes = useCallback(() => {
@@ -107,11 +123,44 @@ function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuest
   const explained = new Map(passedNow && notes !== null ? notes.explanations.released.map((n) => [n.target, n] as const) : []);
   // ...and the questions in display order: once a passed Fundamentals gate shows its keyed
   // answers, the missed ones come first (a campaign quest's notes are per-question extras: no reorder)
-  const displayOrder = sq.questions.map((_, i) => i);
-  if (isFundTopicKey(detail.unit.key) && passedNow && explained.size > 0 && submit?.studyQuiz) {
+  // fund wave: a Fundamentals topic has no repo and no reading list; its lesson is the Lesson pane
+  const fund = isFundTopicKey(detail.unit.key);
+  // wave B (ruling 2): every try of a Fundamentals gate shows the questions and their choices in a
+  // fresh order. DISPLAY ONLY: `answers` stays in served terms (answers[served question] = served
+  // choice index), so the submit posts exactly what an unshuffled gate would. A campaign quest keeps
+  // the served order.
+  const choiceCounts = sq.questions.map((q) => q.choices.length);
+  const [order, setOrder] = useState<GateOrder>(() => (fund ? makeGateOrder(choiceCounts) : identityOrder(choiceCounts)));
+  /** the on-screen number of a served question (stable for the whole try, also in its result) */
+  const numOf = (qi: number) => displayIndexOf(order, qi) + 1;
+  const displayOrder = [...order.questions];
+  if (fund && passedNow && explained.size > 0 && submit?.studyQuiz) {
     const items = submit.studyQuiz.items;
-    displayOrder.sort((a, b) => Number(items[a]?.correct ?? true) - Number(items[b]?.correct ?? true) || a - b);
+    displayOrder.sort((a, b) => Number(items[a]?.correct ?? true) - Number(items[b]?.correct ?? true) || numOf(a) - numOf(b));
   }
+  // wave B (ruling 2): from the second consecutive failed try the next one opens 3 minutes later
+  // (client-side; per unit in localStorage; a blocked store keeps it for this page only)
+  const [fails, setFails] = useState<GateFails>(() => (fund ? readGateFails(unitId) : { fails: 0, until: 0 }));
+  const [now, setNow] = useState(() => Date.now());
+  const coolingMs = fund ? cooldownLeft(fails, now) : 0;
+  useEffect(() => {
+    if (coolingMs <= 0) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [coolingMs > 0]); // eslint-disable-line react-hooks/exhaustive-deps
+  // wave B (ruling 7): the topic's lesson aids ("check yourself" cards, and the gate's heading map)
+  const [aids, setAids] = useState<LessonAids>(NO_LESSON_AIDS);
+  useEffect(() => {
+    if (!fund) return;
+    let live = true;
+    api.getLessonAids(unitId).then(
+      (a) => live && setAids(a),
+      () => undefined, // aids are an extra: without them the lesson and the gate are unchanged
+    );
+    return () => {
+      live = false;
+    };
+  }, [api, unitId, fund]);
   const complete = answers.every((a) => a !== null);
   const answered = answers.filter((a) => a !== null).length;
 
@@ -123,8 +172,17 @@ function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuest
       const r = await api.submitUnit(unitId, { answers: answers as number[], selfAssisted: assisted });
       setSubmit(r);
       if (r.verdict === 'pass') setDone(true);
+      if (fund) {
+        const at = Date.now();
+        setNow(at);
+        if (r.verdict === 'pass') {
+          clearGateFails(unitId);
+          setFails({ fails: 0, until: 0 });
+        } else setFails(recordGateFail(unitId, at, fails));
+      }
       loadNotes(); // explanations may have been released by this answer
       refreshTracks(); // W10: a pass changes campaign / track progress (and may unlock an act)
+      refreshLadder(); // wave B: the course rail and the next step read the ladder after the pass
     } catch (e) {
       setError(errorText(e));
     } finally {
@@ -133,17 +191,17 @@ function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuest
   };
 
   const retry = () => {
+    if (coolingMs > 0) return;
     setSubmit(null);
     setAnswers(sq.questions.map(() => null));
+    // a new try: a new order of questions and choices
+    if (fund) setOrder(makeGateOrder(choiceCounts));
     setStep(0);
     setReviewing(false);
     // a new try is closed-book again
     setLessonShown(false);
     setAssisted(false);
   };
-
-  // fund wave: a Fundamentals topic has no repo and no reading list; its lesson is the Lesson pane
-  const fund = isFundTopicKey(detail.unit.key);
 
   // the gate is open from "Start quiz" until the submit is recorded
   const gateOpen = started && submit === null;
@@ -161,6 +219,13 @@ function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuest
     else setStep(step + 1);
   };
   const goBack = () => setStep(Math.max(0, step - 1));
+  /** the served question on screen in the stepper */
+  const stepQi = order.questions[step] ?? 0;
+  /** the lesson headings of the questions a failed try missed (ruling 7 gate map; lesson order) */
+  const reread =
+    fund && submit?.studyQuiz && !passedNow
+      ? [...new Set(submit.studyQuiz.items.flatMap((it, qi) => (!it.correct && aids.gate[String(qi + 1)] ? [aids.gate[String(qi + 1)]!] : [])))]
+      : [];
 
   // keyboard focus follows the stepper: the question's first choice, then (on review) Submit, so
   // the whole gate can be taken without the mouse
@@ -180,22 +245,27 @@ function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuest
       if (e.isComposing) return;
       // Enter on a focused button / link / checkbox is that control's own Enter
       if (enterActsOnFocus(e.target) || isEditableTarget(e.target)) return;
-      if (answers[step] === null) return;
+      if (answers[stepQi] === null) return;
       e.preventDefault();
       goNext();
       return;
     }
     if (isEditableTarget(e.target)) return;
+    // a digit picks the choice at that position ON SCREEN
     const n = Number(e.key);
-    if (Number.isInteger(n) && n >= 1 && n <= (sq.questions[step]?.choices.length ?? 0)) {
+    const picked = Number.isInteger(n) && n >= 1 ? servedPick(order, step, n - 1) : null;
+    if (picked) {
       e.preventDefault();
-      pick(step, n - 1);
+      pick(picked.question, picked.choice);
     }
   });
 
   return (
     <>
-    {lesson !== null && (gateOpen && !lessonShown ? <LessonHidden onShow={showLesson} /> : lesson)}
+    {/* wave B: the check cards are open-book practice, so they are off while the gate is open */}
+    <LessonAidsContext.Provider value={{ checks: aids.checks, show: !gateOpen }}>
+      {lesson !== null && (gateOpen && !lessonShown ? <LessonHidden onShow={showLesson} /> : lesson)}
+    </LessonAidsContext.Provider>
     {lesson !== null && gateOpen && lessonShown && (
       <p className="muted small lesson-shown-note" data-testid="lesson-shown">
         Lesson shown: this attempt is marked &ldquo;I had help&rdquo;.
@@ -208,7 +278,7 @@ function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuest
             <h2 className="panel-title">Quiz gate</h2>
             {done && (
               <span data-testid="quest-done">
-                <Chip tone="success">topic passed</Chip>
+                <Chip tone="success">gate passed</Chip>
               </span>
             )}
           </div>
@@ -253,8 +323,9 @@ function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuest
       {!started ? (
         <div className="toolbar">
           <span className="toolbar-spacer" />
-          <button type="button" className="btn btn-primary" onClick={() => setStarted(true)}>
-            <Icon name="play" /> Start quiz
+          {coolingMs > 0 && <CooldownNote ms={coolingMs} />}
+          <button type="button" className="btn btn-primary" onClick={() => setStarted(true)} disabled={coolingMs > 0}>
+            <Icon name="play" /> {coolingMs > 0 ? `Start quiz in ${fmtCountdown(coolingMs)}` : 'Start quiz'}
           </button>
         </div>
       ) : stepping ? (
@@ -271,26 +342,27 @@ function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuest
             <span style={{ width: `${((step + 1) / total) * 100}%` }} />
           </div>
           {(() => {
-            const q = sq.questions[step]!;
+            const q = sq.questions[stepQi]!;
             return (
               // keyed: each question is a fresh group (its first choice takes focus)
               <fieldset key={q.itemKey} className="choices" data-testid={`question-${step + 1}`}>
                 <legend>
                   <strong>Q{step + 1}.</strong> <InlineProse text={q.prompt} />
                 </legend>
-                {q.choices.map((c, ci) => (
-                  <label key={ci} className={`choice${answers[step] === ci ? ' choice-on' : ''}`}>
+                {/* choices in this try's display order: position d shows served choice ci */}
+                {order.choices[stepQi]!.map((ci, d) => (
+                  <label key={ci} className={`choice${answers[stepQi] === ci ? ' choice-on' : ''}`}>
                     <input
-                      ref={ci === 0 ? firstRadio : undefined}
+                      ref={d === 0 ? firstRadio : undefined}
                       type="radio"
                       name={`q${step + 1}`}
-                      checked={answers[step] === ci}
-                      onChange={() => pick(step, ci)}
-                      aria-label={`Q${step + 1} choice ${ci + 1}`}
+                      checked={answers[stepQi] === ci}
+                      onChange={() => pick(stepQi, ci)}
+                      aria-label={`Q${step + 1} choice ${d + 1}`}
                     />
-                    <Kbd>{ci + 1}</Kbd>
+                    <Kbd>{d + 1}</Kbd>
                     <span className="choice-text">
-                      <InlineProse text={c} />
+                      <InlineProse text={q.choices[ci]!} />
                     </span>
                   </label>
                 ))}
@@ -303,7 +375,7 @@ function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuest
             </button>
             <span className="toolbar-spacer" />
             <span className="muted small">
-              Pick with 1–{sq.questions[step]!.choices.length}, then Enter
+              Pick with 1–{sq.questions[stepQi]!.choices.length}, then Enter
             </span>
             <button type="button" className="btn btn-primary" onClick={goNext}>
               {step === total - 1 ? 'Review answers' : 'Next'} <Kbd>Enter</Kbd>
@@ -330,43 +402,44 @@ function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuest
             const outcome = submit?.studyQuiz?.items[qi];
             const note = explained.get(q.itemKey);
             const ex = note ? splitExplanation(note.body) : null;
+            // the number the learner saw for this question during the try
+            const num = numOf(qi);
+            // wave B (ruling 2): a FAILED Fundamentals gate marks no question (only the score and what to re-read)
+            const marked = outcome !== undefined && !(fund && !passedNow);
             return (
-              <fieldset key={q.itemKey} className="choices" disabled={busy || submit !== null} data-testid={`question-${qi + 1}`}>
+              <fieldset key={q.itemKey} className="choices" disabled={busy || submit !== null} data-testid={`question-${num}`}>
                 <legend>
-                  <strong>Q{qi + 1}.</strong> <InlineProse text={q.prompt} />
+                  <strong>Q{num}.</strong> <InlineProse text={q.prompt} />
                   {fund && !submit && answers[qi] === null && <span className="gate-unanswered"> not answered</span>}
-                  {outcome && (
-                    <span className={`study-mark ${outcome.correct ? 'study-right' : 'study-wrong'}`} data-testid={`mark-${qi + 1}`}>
+                  {outcome && marked && (
+                    <span className={`study-mark ${outcome.correct ? 'study-right' : 'study-wrong'}`} data-testid={`mark-${num}`}>
                       {outcome.correct ? ' correct' : ' incorrect'}
                     </span>
                   )}
                   {/* inside the legend: a disabled fieldset (after submit) never disables its first legend's controls */}
                   {hasNotes(q.itemKey) && (
-                    <span className="question-learn-more" data-testid={`learn-more-q${qi + 1}`}>
-                      <LearnMoreButton unitId={unitId} target={q.itemKey} subject={`Q${qi + 1}`} compact />
+                    <span className="question-learn-more" data-testid={`learn-more-q${num}`}>
+                      <LearnMoreButton unitId={unitId} target={q.itemKey} subject={`Q${num}`} compact />
                     </span>
                   )}
                 </legend>
-                {q.choices.map((c, ci) => (
-                  // the keyed choice is marked only from a released explanation (a passed gate)
-                  <label
-                    key={ci}
-                    className={`choice${answers[qi] === ci ? ' choice-on' : ''}${ex?.answer != null && ex.answer === c ? ' choice-right' : ex?.answer != null && outcome && !outcome.correct && answers[qi] === ci ? ' choice-wrong' : ''}`}
-                  >
-                    <input
-                      type="radio"
-                      name={`q${qi + 1}`}
-                      checked={answers[qi] === ci}
-                      onChange={() => setAnswers((prev) => prev.map((a, i) => (i === qi ? ci : a)))}
-                      aria-label={`Q${qi + 1} choice ${ci + 1}`}
-                    />
-                    <span className="choice-text">
-                      <InlineProse text={c} />
-                    </span>
-                  </label>
-                ))}
+                {order.choices[qi]!.map((ci, d) => {
+                  const c = q.choices[ci]!;
+                  return (
+                    // the keyed choice is marked only from a released explanation (a passed gate)
+                    <label
+                      key={ci}
+                      className={`choice${answers[qi] === ci ? ' choice-on' : ''}${ex?.answer != null && ex.answer === c ? ' choice-right' : ex?.answer != null && outcome && !outcome.correct && answers[qi] === ci ? ' choice-wrong' : ''}`}
+                    >
+                      <input type="radio" name={`q${num}`} checked={answers[qi] === ci} onChange={() => pick(qi, ci)} aria-label={`Q${num} choice ${d + 1}`} />
+                      <span className="choice-text">
+                        <InlineProse text={c} />
+                      </span>
+                    </label>
+                  );
+                })}
                 {ex && (
-                  <div className={`gate-explain${outcome && !outcome.correct ? ' gate-explain-missed' : ''}`} data-testid={`explain-${qi + 1}`}>
+                  <div className={`gate-explain${outcome && !outcome.correct ? ' gate-explain-missed' : ''}`} data-testid={`explain-${num}`}>
                     {ex.answer !== null && (
                       <p>
                         <strong>Answer:</strong> <InlineProse text={ex.answer} />
@@ -388,7 +461,8 @@ function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuest
                 className="btn"
                 disabled={busy}
                 onClick={() => {
-                  const firstOpen = answers.findIndex((a) => a === null);
+                  // the first question ON SCREEN that is still open
+                  const firstOpen = order.questions.findIndex((qi) => answers[qi] === null);
                   setStep(firstOpen === -1 ? total - 1 : firstOpen);
                   setReviewing(false);
                 }}
@@ -401,8 +475,8 @@ function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuest
               {answered}/{sq.questions.length} answered
             </span>
             {submit ? (
-              <button type="button" className="btn" onClick={retry}>
-                Try again
+              <button type="button" className="btn" onClick={retry} disabled={coolingMs > 0} data-testid="gate-retry">
+                {coolingMs > 0 ? `Try again in ${fmtCountdown(coolingMs)}` : 'Try again'}
               </button>
             ) : (
               <button
@@ -425,9 +499,10 @@ function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuest
             <Icon name="warn" /> {error}
           </div>
         )}
-        {submit?.studyQuiz && <StudyResult submit={submit} fund={fund} explained={fund && explained.size > 0} />}
+        {submit?.studyQuiz && <StudyResult submit={submit} fund={fund} explained={fund && explained.size > 0} reread={reread} />}
+        {submit !== null && coolingMs > 0 && <CooldownNote ms={coolingMs} />}
         {/* U5: a passed gate is not a dead end — the topic's drills, then the next topic */}
-        {submit?.verdict === 'pass' && <NextStep unit={detail.unit} />}
+        {submit?.verdict === 'pass' && <NextStep unit={detail.unit} submit={submit} />}
       </div>
       <Link to={`/campaign/${detail.unit.trackId}`} className="muted small">
         Back to campaign
@@ -437,7 +512,16 @@ function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuest
   );
 }
 
-function StudyResult({ submit, fund, explained }: { submit: SubmitResponse; fund: boolean; explained: boolean }) {
+/** wave B (ruling 2): why the next try is not open yet, with the time left. */
+function CooldownNote({ ms }: { ms: number }) {
+  return (
+    <p className="muted small gate-cooldown" data-testid="gate-cooldown" role="timer" aria-live="off">
+      Two misses in a row: take a few minutes with the lesson first. The next try opens in {fmtCountdown(ms)}.
+    </p>
+  );
+}
+
+function StudyResult({ submit, fund, explained, reread }: { submit: SubmitResponse; fund: boolean; explained: boolean; reread: readonly string[] }) {
   const r = submit.studyQuiz!;
   const pass = submit.verdict === 'pass';
   const xp = submit.xp;
@@ -469,15 +553,29 @@ function StudyResult({ submit, fund, explained }: { submit: SubmitResponse; fund
           The keyed answer and the explanation of every question are shown above.
         </p>
       )}
-      {r.flashcardsEnrolled > 0 && (
+      {/* a Fundamentals pass says this in its completion panel (Player/NextStep) */}
+      {r.flashcardsEnrolled > 0 && !(fund && pass) && (
         <p className="muted small" data-testid="flashcards-notice">
           {r.flashcardsEnrolled} flashcard{r.flashcardsEnrolled === 1 ? '' : 's'} from this quest joined your review queue (first due tomorrow).
+        </p>
+      )}
+      {!pass && fund && reread.length > 0 && (
+        <p className="gate-reread" data-testid="reread">
+          <strong>Re-read:</strong>{' '}
+          {reread.map((h, i) => (
+            <span key={h}>
+              {i > 0 && ' · '}
+              <InlineProse text={h} />
+            </span>
+          ))}
         </p>
       )}
       {!pass && (
         <p className="muted small" data-testid="fail-advice">
           {fund
-            ? 'A failed try costs nothing and is saved. Re-read the lesson, then try again: the answers stay hidden until you pass.'
+            ? reread.length > 0
+              ? 'A failed try costs nothing and is saved. No question is marked and the answers stay hidden until you pass; the next try shuffles the questions.'
+              : 'A failed try costs nothing and is saved. Re-read the lesson, then try again: no question is marked and the answers stay hidden until you pass.'
             : 'Failed submits cost nothing and are recorded; review the reading list and try again.'}
         </p>
       )}

@@ -184,6 +184,20 @@ describe('submit attempts are readable back (GET /attempts/:id, like the server)
   });
 });
 
+describe('wave B lesson aids', () => {
+  it('the mock Fundamentals topic has a gate map over its real headings and questions, and checks; any other unit is empty', async () => {
+    const api = createMockApi();
+    const aids = await api.getLessonAids(207);
+    const unit = await api.getUnit(207);
+    const headings = [...String(unit.instructions).matchAll(/^#{1,4} +(.+)$/gm)].map((m) => m[1]);
+    expect(Object.keys(aids.gate)).toEqual(unit.studyQuest!.questions.map((_, i) => String(i + 1)));
+    for (const h of [...Object.values(aids.gate), ...aids.checks.map((c) => c.heading)]) expect(headings).toContain(h);
+    expect(aids.checks.length).toBeGreaterThan(0);
+    expect(await api.getLessonAids(DRILL)).toEqual({ gate: {}, checks: [] });
+    expect(await api.getLessonAids(999_999)).toEqual({ gate: {}, checks: [] });
+  });
+});
+
 describe('f52 hints (mirrors server/src/api/hints-service.ts)', () => {
   const FAILING = 'export const groupBy = () => ({});';
 
