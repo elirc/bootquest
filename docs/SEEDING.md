@@ -1863,3 +1863,20 @@ resolved); quiz variety `concept` and flashcard shape `hand-authored`;
     code: the graders have no framework runtimes. Fundamentals topic units are not in the daily slate
     (their drills join the drill pools like any pack drill). Quiz explanations reach the learner only on
     a miss's review card: there is no "Learn more" notes pack for fundamentals yet.
+- **f52 wave: review fixes + senior-CRUD Fundamentals — DONE on branch `f52-wave` (2026-11-09, not on main):**
+  implements `fable52docs/` after two councils; full account in `fable52docs/wave/REPORT.md`.
+  - **Content:** Fundamentals 60 → 73 topics (js 21-33: lost updates, idempotency, pagination, tenant scoping,
+    live migrations, caching, N+1, seams/logs, four SQL topics on real in-memory SQLite, authentication);
+    quiz 600 → 704, flashcards 480 → 558, drills 65 → 116 (js 62, csharp 27, java 27). All 600 existing quiz
+    items had their choices rewritten (key-is-longest 60-74% → 16-20%) and were blind-answered by a second
+    agent. Census `FUNDAMENTALS_EXPECTED`: js 33/304/238/62, csharp 20/200/160/27, java 20/200/160/27.
+  - **Side files (server-local, not fingerprinted):** `content/fundamentals/related.json` ("more practice"
+    drills per topic) and `content/fundamentals/sections.json` (quiz item → lesson heading; check-yourself
+    cards for js 01-05). A new topic needs an entry in both (tests enforce it).
+  - **Lint:** `seed:lint:answers` also checks answer-length bias per pack and per Fundamentals topic (>40%
+    fails; shrink-only baseline `tools/seed/src/ops/answer-length-baseline.json`, bootforge only).
+  - **App:** hints (migration 019), closed-book shuffled gate with cooldown, course rail, CodeMirror editor,
+    dashboard hero, lesson aids. No restamp (700/700 fresh).
+  - **Suites:** server 747 + selfrun 20, client 610, tools/seed 2293, smoke:api 76/76, demo:promotion 39/39,
+    test:java 23; test:csharp 45/46 and cli 101 + 19 skipped: both are time-limit failures that the baseline
+    reproduces on the same memory-starved machine; rerun before landing.
