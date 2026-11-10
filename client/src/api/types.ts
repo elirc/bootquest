@@ -90,6 +90,23 @@ export type { FundamentalsResponseExt, FundTopicDtoExt };
 import type { HintLockReason, HintsResponse, HintTakenResponse } from '@bootquest/shared/api-ext';
 export type { HintLockReason, HintsResponse, HintTakenResponse };
 
+/**
+ * f52 wave B (app ruling 7): lesson aids of a Fundamentals topic (GET /units/:id/lesson-aids). Declared
+ * here, in the client, while the server half lands in parallel (its DTO goes to shared/src/api-ext.ts).
+ *   gate    1-based SERVED question number -> the lesson heading that teaches it (the "Re-read" line)
+ *   checks  ungraded "check yourself" reveal cards, each placed after its lesson heading
+ */
+export interface LessonCheck {
+  heading: string;
+  prompt: string;
+  answer: string;
+}
+export interface LessonAids {
+  gate: Record<string, string>;
+  checks: LessonCheck[];
+}
+export const NO_LESSON_AIDS: LessonAids = { gate: {}, checks: [] };
+
 // ---------------------------------------------------------------- re-exported wire types
 
 export type {
@@ -353,6 +370,13 @@ export interface BootQuestApi {
    * hints on this unit), 403 TRACK_LOCKED / ACT_LOCKED. Each hint cuts the eventual pass XP by 25% (floor 50%).
    */
   takeHint(unitId: number): Promise<HintTakenResponse>;
+
+  // ---- f52 wave B: lesson aids (read-only; no XP, no attempt)
+  /**
+   * GET /api/units/:id/lesson-aids — never rejects: a unit without aids, an older server (404) or any
+   * other failure is `{ gate: {}, checks: [] }`.
+   */
+  getLessonAids(unitId: number): Promise<LessonAids>;
 }
 
 /** Codes the client can raise itself on top of the server's envelope codes. */

@@ -75,6 +75,24 @@ describe('http client: real routes', () => {
     expect(calls[1]!.body).toEqual({});
   });
 
+  it('wave B lesson aids: GET /units/:id/lesson-aids; a 404, a network failure or a malformed body is the empty shape', async () => {
+    const aids = { gate: { '1': 'Heading' }, checks: [{ heading: 'Heading', prompt: 'p', answer: 'a' }] };
+    const good = fakeFetch(() => ok(aids));
+    expect(await createHttpApi('/api', good.impl).getLessonAids(7)).toEqual(aids);
+    expect(good.calls.map((c) => `${c.method} ${c.url}`)).toEqual(['GET /api/units/7/lesson-aids']);
+    const empty = { gate: {}, checks: [] };
+    const missing = fakeFetch(() => ({ status: 404, body: { error: { code: 'NOT_FOUND', message: 'no route' } } }));
+    expect(await createHttpApi('/api', missing.impl).getLessonAids(7)).toEqual(empty);
+    const html = fakeFetch(() => ({ status: 200, body: '<html>', raw: true }));
+    expect(await createHttpApi('/api', html.impl).getLessonAids(7)).toEqual(empty);
+    const partial = fakeFetch(() => ok({ gate: null }));
+    expect(await createHttpApi('/api', partial.impl).getLessonAids(7)).toEqual(empty);
+    const down = (async () => {
+      throw new TypeError('failed to fetch');
+    }) as typeof fetch;
+    expect(await createHttpApi('/api', down).getLessonAids(7)).toEqual(empty);
+  });
+
   it('hits the W6 ladder routes with whitelisted bodies', async () => {
     const { calls, impl } = fakeFetch(() => ok({}));
     const api = createHttpApi('/api', impl);

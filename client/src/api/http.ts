@@ -42,6 +42,8 @@ import {
   type UnitSearchResponse,
   type HintsResponse,
   type HintTakenResponse,
+  type LessonAids,
+  NO_LESSON_AIDS,
 } from './types';
 
 type Init = { method: 'POST' | 'PUT'; body: unknown };
@@ -167,5 +169,14 @@ export function createHttpApi(baseUrl = '/api', fetchImpl: typeof fetch = (...a)
     // f52 S: progressive hints (empty POST body)
     getHints: (id) => call<HintsResponse>(`${unit(id)}/hints`),
     takeHint: (id) => post<HintTakenResponse>(`${unit(id)}/hint`),
+    // f52 wave B: lesson aids are an extra, never an error (404 on an older server, a unit without aids)
+    getLessonAids: (id) =>
+      call<Partial<LessonAids> | null>(`${unit(id)}/lesson-aids`).then(
+        (r): LessonAids => ({
+          gate: r && typeof r.gate === 'object' && r.gate !== null ? r.gate : {},
+          checks: r && Array.isArray(r.checks) ? r.checks : [],
+        }),
+        (): LessonAids => NO_LESSON_AIDS,
+      ),
   };
 }

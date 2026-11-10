@@ -32,6 +32,7 @@ import { LearnMoreButton } from '../components/LearnMore';
 import { WrittenPane } from './WrittenPane';
 import { CodeEditor } from './Player/Editor';
 import { HintBar, hintedXpNote } from './Player/HintBar';
+import { LessonProse } from './Player/LessonAids';
 import { NextStep } from './Player/NextStep';
 import { RevealPanel, promotionLeg, type Solution } from './Player/RevealFlow';
 
@@ -132,7 +133,8 @@ function Player({ detail }: { detail: UnitDetail }) {
     />
   );
   const insMain = hasProse ? (
-    <Prose text={prose.instructions} className="ins-prose" headings={isFundTopic} />
+    // wave B: a Fundamentals lesson carries its "check yourself" cards (same rendering otherwise)
+    isFundTopic ? <LessonProse text={prose.instructions} className="ins-prose" /> : <Prose text={prose.instructions} className="ins-prose" />
   ) : paneCarriesTask ? null : isReading && !hasRefs ? (
     <ReadingEmpty unitId={unit.id} unitKey={unit.key} trackId={unit.trackId} />
   ) : (

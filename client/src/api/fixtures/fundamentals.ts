@@ -1,6 +1,7 @@
 // fund wave: mock Fundamentals ladder (two JS topics; the second waits for the first's quiz gate).
 // The topic units are study-quiz units (lesson = instructions); they join studyQuestFixtures so the
 // mock's unit detail / submit flow serves them exactly like the borrowbox study quest.
+import type { LessonAids } from '../types';
 import type { StudyQuestFixture } from './ladder';
 
 const LESSON_1 = `## The seven primitives
@@ -92,4 +93,18 @@ export const fundExplanationFixtures: Record<string, string> = {
   'fund:js/01-values-types-and-coercion/q04': 'The empty string converts to `0`, not `NaN`.',
   'fund:js/01-values-types-and-coercion/q05': '`null` and `undefined` are loosely equal to each other and to nothing else.',
   'fund:js/02-functions-and-closures/q01': 'A closure keeps the variables themselves alive, not a snapshot of their values.',
+};
+
+/**
+ * f52 wave B: lesson aids of the mock topics (server: content/fundamentals/sections.json). `gate` maps
+ * each 1-based question number to the lesson heading that teaches it; `checks` are ungraded reveal cards.
+ */
+export const fundLessonAidFixtures: Record<string, LessonAids> = {
+  '207': {
+    gate: { '1': 'typeof surprises', '2': 'The seven primitives', '3': 'typeof surprises', '4': 'The seven primitives', '5': 'The seven primitives' },
+    checks: [
+      { heading: 'The seven primitives', prompt: 'Is `42n` a primitive? Of which type?', answer: 'Yes: it is a `bigint`, one of the seven primitive types.' },
+      { heading: 'typeof surprises', prompt: 'What does `typeof function () {}` report?', answer: "`'function'`, although a function is an object." },
+    ],
+  },
 };

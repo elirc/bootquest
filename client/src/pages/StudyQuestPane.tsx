@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom';
 import { useApi } from '../api/context';
 import { errorText } from '../api/errors';
-import type { StudyQuestPublic, SubmitResponse, UnitDetail, UnitNotesResponse } from '../api/types';
+import { NO_LESSON_AIDS, type LessonAids, type StudyQuestPublic, type SubmitResponse, type UnitDetail, type UnitNotesResponse } from '../api/types';
 import { LearnMoreButton } from '../components/LearnMore';
 import { Icon } from '../components/Icon';
 import { Chip, Kbd } from '../components/ui';
@@ -12,6 +12,7 @@ import { enterActsOnFocus, shortcutBlocked } from '../lib/shortcuts';
 import { useTracksRefresh } from '../lib/tracks';
 import { readingTitle } from '../lib/view';
 import { isFundTopicKey } from '../lib/fundamentals';
+import { LessonAidsContext } from './Player/LessonAids';
 import { NextStep } from './Player/NextStep';
 
 /**
@@ -112,6 +113,21 @@ function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuest
     const items = submit.studyQuiz.items;
     displayOrder.sort((a, b) => Number(items[a]?.correct ?? true) - Number(items[b]?.correct ?? true) || a - b);
   }
+  // fund wave: a Fundamentals topic has no repo and no reading list; its lesson is the Lesson pane
+  const fund = isFundTopicKey(detail.unit.key);
+  // wave B (ruling 7): the topic's lesson aids ("check yourself" cards, and the gate's heading map)
+  const [aids, setAids] = useState<LessonAids>(NO_LESSON_AIDS);
+  useEffect(() => {
+    if (!fund) return;
+    let live = true;
+    api.getLessonAids(unitId).then(
+      (a) => live && setAids(a),
+      () => undefined, // aids are an extra: without them the lesson and the gate are unchanged
+    );
+    return () => {
+      live = false;
+    };
+  }, [api, unitId, fund]);
   const complete = answers.every((a) => a !== null);
   const answered = answers.filter((a) => a !== null).length;
 
@@ -141,9 +157,6 @@ function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuest
     setLessonShown(false);
     setAssisted(false);
   };
-
-  // fund wave: a Fundamentals topic has no repo and no reading list; its lesson is the Lesson pane
-  const fund = isFundTopicKey(detail.unit.key);
 
   // the gate is open from "Start quiz" until the submit is recorded
   const gateOpen = started && submit === null;
@@ -195,7 +208,10 @@ function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuest
 
   return (
     <>
-    {lesson !== null && (gateOpen && !lessonShown ? <LessonHidden onShow={showLesson} /> : lesson)}
+    {/* wave B: the check cards are open-book practice, so they are off while the gate is open */}
+    <LessonAidsContext.Provider value={{ checks: aids.checks, show: !gateOpen }}>
+      {lesson !== null && (gateOpen && !lessonShown ? <LessonHidden onShow={showLesson} /> : lesson)}
+    </LessonAidsContext.Provider>
     {lesson !== null && gateOpen && lessonShown && (
       <p className="muted small lesson-shown-note" data-testid="lesson-shown">
         Lesson shown: this attempt is marked &ldquo;I had help&rdquo;.
