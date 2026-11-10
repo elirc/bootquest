@@ -1,3 +1,4 @@
+import { PROJECT_UNIT_KINDS } from '@bootquest/shared';
 import type { ApiErrorCode } from '@bootquest/shared/api';
 import type { HintLockReason, HintsResponse, HintTakenResponse } from '@bootquest/shared/api-ext';
 import { questUnitUnlocked } from '../engines/campaign.ts';
@@ -15,8 +16,24 @@ import { assertTrackOpen, type ServiceDeps } from './service.ts';
  * XP cut) and by the promotion legs (never unassisted evidence).
  */
 
-/** Unit kinds that never serve hints, whatever their check type. */
-const NO_HINT_KINDS: ReadonlySet<string> = new Set(['quiz', 'predict-output', 'study', 'reading', 'explain-back', 'patch-kata', 'review', 'retest', 'written']);
+/**
+ * Unit kinds that never serve hints, whatever their check type. f52 fix: the project kinds
+ * (PROJECT_UNIT_KINDS) and retests are here too: their verified solo passes are promotion legs (a)
+ * and (c) (evidence.ts), and a hinted pass never counts as unassisted, so a hint there would silently
+ * forfeit the leg. They are refused as not-hintable instead.
+ */
+const NO_HINT_KINDS: ReadonlySet<string> = new Set([
+  'quiz',
+  'predict-output',
+  'study',
+  'reading',
+  'explain-back',
+  'patch-kata',
+  'review',
+  'retest',
+  'written',
+  ...PROJECT_UNIT_KINDS,
+]);
 
 function requireUnit(deps: ServiceDeps, id: number): UnitRecord {
   const unit = getUnit(deps.db, id);
@@ -26,7 +43,8 @@ function requireUnit(deps: ServiceDeps, id: number): UnitRecord {
 
 /** The unit's servable hints: [] unless it is a drill / code-check unit (live check earning code XP). */
 function servableFor(deps: ServiceDeps, unit: UnitRecord): string[] {
-  if (NO_HINT_KINDS.has(unit.kind)) return [];
+  // a changed-example variation (variation_of set) is a retest whatever its kind label says
+  if (NO_HINT_KINDS.has(unit.kind) || unit.variationOfUnitId !== null) return [];
   const check = primaryCheck(deps.db, unit.id);
   if (!check || xpKindForCheck(check.type) !== 'code') return [];
   return servableHints(deps.content.get(unit.key)?.hints);
