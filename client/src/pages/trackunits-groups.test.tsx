@@ -28,7 +28,7 @@ function bigApi(): BootQuestApi {
   return { ...base, getTrackUnits: async (t) => ({ ...(await base.getTrackUnits(t)), units: big() }) };
 }
 const rows = () => document.querySelectorAll('[data-unit]');
-const groupButtons = () => [...document.querySelectorAll<HTMLButtonElement>('.tu-group > h3 > button')];
+const groupButtons = () => [...document.querySelectorAll<HTMLButtonElement>('.tu-group > .tu-group-head > button')];
 
 describe('unit browser: groups collapsed by default (4,000-row fixture)', () => {
   async function open() {

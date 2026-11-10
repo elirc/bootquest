@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode, type Ref } from 'react';
 import { Link } from 'react-router-dom';
 import { useApi } from '../api/context';
 import { errorText } from '../api/errors';
@@ -46,6 +46,9 @@ import { NextStep } from './Player/NextStep';
  * each submit), which releases a Fundamentals gate's explanations on a verified pass only. After a
  * FAILED gate nothing more is shown than which questions were missed.
  */
+/** The lesson panel's heading (Player renders it; "Show lesson" moves focus to it). */
+export const LESSON_HEADING_ID = 'ins-title';
+
 /** The first line of a Fundamentals explanation note: the keyed choice by text (notes-service FUND_ANSWER_PREFIX). */
 const ANSWER_PREFIX = 'Answer: ';
 
@@ -55,7 +58,16 @@ export function splitExplanation(body: string): { answer: string | null; rest: s
   const end = body.indexOf('\n');
   return end === -1 ? { answer: body.slice(ANSWER_PREFIX.length), rest: '' } : { answer: body.slice(ANSWER_PREFIX.length, end), rest: body.slice(end + 1).trim() };
 }
-export function StudyQuestPane({ detail, lesson = null }: { detail: UnitDetail; lesson?: ReactNode }) {
+export function StudyQuestPane({
+  detail,
+  lesson = null,
+  onGateOpenChange,
+}: {
+  detail: UnitDetail;
+  lesson?: ReactNode;
+  /** fix pass 2: told when a Fundamentals (closed-book) gate opens and closes, so the page can lock "Learn more" */
+  onGateOpenChange?: (open: boolean) => void;
+}) {
   const sq = detail.studyQuest ?? null;
   if (!sq) {
     return (
@@ -66,7 +78,7 @@ export function StudyQuestPane({ detail, lesson = null }: { detail: UnitDetail; 
       </section>
     );
   }
-  return <StudyQuest detail={detail} sq={sq} lesson={lesson} />;
+  return <StudyQuest detail={detail} sq={sq} lesson={lesson} onGateOpenChange={onGateOpenChange} />;
 }
 
 /**
@@ -91,7 +103,17 @@ function LessonHidden({ onShow }: { onShow: () => void }) {
   );
 }
 
-function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuestPublic; lesson: ReactNode }) {
+function StudyQuest({
+  detail,
+  sq,
+  lesson,
+  onGateOpenChange,
+}: {
+  detail: UnitDetail;
+  sq: StudyQuestPublic;
+  lesson: ReactNode;
+  onGateOpenChange?: (open: boolean) => void;
+}) {
   const api = useApi();
   const unitId = detail.unit.id;
   const [started, setStarted] = useState(false);
@@ -108,6 +130,9 @@ function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuest
   const [reviewing, setReviewing] = useState(false);
   const firstRadio = useRef<HTMLInputElement>(null);
   const submitButton = useRef<HTMLButtonElement>(null);
+  // fix pass 5: where focus goes when Submit cannot take it, and after a submit
+  const backToQuestions = useRef<HTMLButtonElement>(null);
+  const resultPanel = useRef<HTMLDivElement>(null);
   const refreshTracks = useTracksRefresh();
   const refreshLadder = useFundLadderRefresh();
   // "Learn more": which items have a reading, and (after an answer) which have a released explanation
@@ -205,6 +230,14 @@ function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuest
 
   // the gate is open from "Start quiz" until the submit is recorded
   const gateOpen = started && submit === null;
+  // fix pass 2: a Fundamentals gate is closed-book for as long as it is open, a retake after a pass
+  // included: the explanations an earlier pass released must not be readable mid-gate
+  const closedBook = fund && gateOpen;
+  useEffect(() => {
+    onGateOpenChange?.(closedBook);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [closedBook]);
+  useEffect(() => () => onGateOpenChange?.(false), []); // eslint-disable-line react-hooks/exhaustive-deps
   const showLesson = () => {
     setLessonShown(true);
     setAssisted(true);
@@ -233,9 +266,21 @@ function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuest
     if (stepping) firstRadio.current?.focus({ preventScroll: true });
   }, [stepping, step]);
   useEffect(() => {
-    if (fund && reviewing && submit === null) submitButton.current?.focus({ preventScroll: true });
+    if (!(fund && reviewing && submit === null)) return;
+    // fix pass 5: a disabled Submit (a question is still open) cannot take focus: "Back to questions" does
+    const submitEl = submitButton.current;
+    (submitEl && !submitEl.disabled ? submitEl : backToQuestions.current)?.focus({ preventScroll: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reviewing]);
+  // fix pass 5: the submit replaces the focused Submit button, so focus moves to the result (a
+  // pass then hands it on to the next-step link, Player/NextStep)
+  useEffect(() => {
+    if (submit?.studyQuiz) resultPanel.current?.focus();
+  }, [submit]);
+  // fix pass 5: "Show lesson" removes its own button; focus lands on the lesson's heading
+  useEffect(() => {
+    if (lessonShown) document.getElementById(LESSON_HEADING_ID)?.focus();
+  }, [lessonShown]);
 
   // The same guards as the single-question quiz (Player QuizPane). On the review screen there is
   // no page-level Enter at all: Submit acts only as the focused button.
@@ -417,7 +462,7 @@ function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuest
                     </span>
                   )}
                   {/* inside the legend: a disabled fieldset (after submit) never disables its first legend's controls */}
-                  {hasNotes(q.itemKey) && (
+                  {hasNotes(q.itemKey) && !closedBook && (
                     <span className="question-learn-more" data-testid={`learn-more-q${num}`}>
                       <LearnMoreButton unitId={unitId} target={q.itemKey} subject={`Q${num}`} compact />
                     </span>
@@ -457,6 +502,7 @@ function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuest
             </label>
             {fund && !submit && (
               <button
+                ref={backToQuestions}
                 type="button"
                 className="btn"
                 disabled={busy}
@@ -499,7 +545,7 @@ function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuest
             <Icon name="warn" /> {error}
           </div>
         )}
-        {submit?.studyQuiz && <StudyResult submit={submit} fund={fund} explained={fund && explained.size > 0} reread={reread} />}
+        {submit?.studyQuiz && <StudyResult submit={submit} fund={fund} explained={fund && explained.size > 0} reread={reread} panelRef={resultPanel} />}
         {submit !== null && coolingMs > 0 && <CooldownNote ms={coolingMs} />}
         {/* U5: a passed gate is not a dead end — the topic's drills, then the next topic */}
         {submit?.verdict === 'pass' && <NextStep unit={detail.unit} submit={submit} />}
@@ -521,7 +567,19 @@ function CooldownNote({ ms }: { ms: number }) {
   );
 }
 
-function StudyResult({ submit, fund, explained, reread }: { submit: SubmitResponse; fund: boolean; explained: boolean; reread: readonly string[] }) {
+function StudyResult({
+  submit,
+  fund,
+  explained,
+  reread,
+  panelRef,
+}: {
+  submit: SubmitResponse;
+  fund: boolean;
+  explained: boolean;
+  reread: readonly string[];
+  panelRef?: Ref<HTMLDivElement>;
+}) {
   const r = submit.studyQuiz!;
   const pass = submit.verdict === 'pass';
   const xp = submit.xp;
@@ -529,7 +587,8 @@ function StudyResult({ submit, fund, explained, reread }: { submit: SubmitRespon
   const missed = r.total - r.correct;
   return (
     <div data-testid="study-result">
-      <div className={`verdict verdict-${pass ? 'pass' : 'fail'}`}>
+      {/* focus target after a submit (never a tab stop) */}
+      <div ref={panelRef} tabIndex={-1} className={`verdict verdict-${pass ? 'pass' : 'fail'}`} data-testid="study-verdict">
         <Icon name={pass ? 'check' : 'warn'} />
         <strong>{pass ? 'Quiz gate passed' : 'Below the pass mark'}</strong>
         <span className="muted">

@@ -405,6 +405,8 @@ export function LearnMoreButton({
   hotkey = false,
   compact = false,
   label = 'Learn more',
+  disabled = false,
+  disabledReason,
 }: {
   unitId: number;
   target?: string;
@@ -413,8 +415,13 @@ export function LearnMoreButton({
   hotkey?: boolean;
   compact?: boolean;
   label?: string;
+  /** fix pass 2: off (button and `i` hotkey) while a closed-book quiz gate is open */
+  disabled?: boolean;
+  disabledReason?: string;
 }) {
   const [open, setOpen] = useState(false);
+  // a drawer that was open when the gate opened closes with it
+  if (disabled && open) setOpen(false);
   useKeydown(
     (e) => {
       // fix/client-review 7a: the shared gate (any dialog / alertdialog / modal in front, a held
@@ -423,7 +430,7 @@ export function LearnMoreButton({
       e.preventDefault();
       setOpen(true);
     },
-    hotkey,
+    hotkey && !disabled,
   );
   return (
     <>
@@ -431,6 +438,8 @@ export function LearnMoreButton({
         type="button"
         className={`btn ${compact ? 'btn-ghost btn-sm' : 'btn-sm'} learn-more-btn`}
         onClick={() => setOpen(true)}
+        disabled={disabled}
+        title={disabled ? disabledReason : undefined}
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-label={subject ? `${label}: ${subject}` : label}
@@ -438,7 +447,7 @@ export function LearnMoreButton({
         <Icon name="info" /> {label}
         {hotkey && <Kbd>i</Kbd>}
       </button>
-      {open && <LearnMoreDrawer unitId={unitId} target={target} subject={subject} onClose={() => setOpen(false)} />}
+      {open && !disabled && <LearnMoreDrawer unitId={unitId} target={target} subject={subject} onClose={() => setOpen(false)} />}
     </>
   );
 }

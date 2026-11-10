@@ -192,15 +192,17 @@ function UnitBrowser({ units, tiers }: { units: UnitSummary[]; tiers?: Record<Gr
               const t = totals.get(g.label)!;
               const open = isOpen(g.label);
               const listId = `${listIds}-${si}-${gi}`;
+              // heading levels follow the outline: a group under a tier heading (h3) is an h4; without tiers it is the h3
+              const GroupHead = tier && tiers ? 'h4' : 'h3';
               return (
                 <section className="tu-group" key={g.label} data-group={g.label}>
-                  <h3>
+                  <GroupHead className="tu-group-head">
                     {/* a j/k stop (data-step) like the rows, so the keyboard reaches a collapsed group */}
                     <button type="button" aria-expanded={open} aria-controls={listId} data-step data-state="group" onClick={() => toggle(g.label)}>
                       {g.label}{' '}
                       <span className="muted">{`${t.done}/${t.total} done${g.units.length < t.total ? ` · ${g.units.length} shown` : ''}`}</span>
                     </button>
-                  </h3>
+                  </GroupHead>
                   {/* rows exist only while the group is open (a 4,000-unit track renders headers only) */}
                   <ul className="tu-list" id={listId} hidden={!open}>
                     {open &&

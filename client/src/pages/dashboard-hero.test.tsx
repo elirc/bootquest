@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 import { createMockApi } from '../api/mock';
 import type { BootQuestApi, Dashboard, FundTopicDto, FundamentalsResponse, SlateSettingsResponse, TrackId, UnitSummary } from '../api/types';
 import { renderApp } from '../test/render';
-import { firstFundTrack, fundamentalsStep, pickHero } from './Dashboard';
+import { firstFundTrack, firstUnfinishedStep, fundamentalsStep, ladderFinished, pickHero } from './Dashboard';
 
 const unit = (id: number, state: UnitSummary['state'], over: Partial<UnitSummary> = {}): UnitSummary => ({
   id,
@@ -80,6 +80,35 @@ describe('firstFundTrack', () => {
     expect(firstFundTrack(settings(['java', 'csharp']))).toBe('csharp');
     expect(firstFundTrack(settings(['sysdesign']))).toBeNull();
     expect(firstFundTrack(undefined)).toBe('js');
+  });
+});
+
+describe('firstUnfinishedStep / ladderFinished (fix pass 1)', () => {
+  const done = ladder([topic(1, unit(1, 'done'), [drill(11, 'done')])]);
+  it('finished = every gate passed and no open drill; empty or locked ladders are not finished', () => {
+    expect(ladderFinished(done)).toBe(true);
+    expect(ladderFinished(ladder([]))).toBe(false);
+    expect(ladderFinished(ladder([topic(1, unit(1, 'done')), topic(2, unit(2, 'locked'))]))).toBe(false);
+    expect(ladderFinished(ladder([topic(1, unit(1, 'done'), [drill(11, 'available')])]))).toBe(false);
+  });
+  it('walks on only past a finished ladder; a locked step or a failed read ends the walk', async () => {
+    const asked: TrackId[] = [];
+    const read = (m: Partial<Record<TrackId, FundamentalsResponse>>) => async (t: TrackId) => {
+      asked.push(t);
+      const r = m[t];
+      if (!r) throw new Error('boom');
+      return r;
+    };
+    const open = ladder([topic(1, unit(9, 'available'))], 'java');
+    expect(await firstUnfinishedStep(['js', 'csharp', 'java'], read({ js: done, csharp: done, java: open }))).toMatchObject({ trackId: 'java', unitId: 9 });
+    expect(asked).toEqual(['js', 'csharp', 'java']);
+    asked.length = 0;
+    expect(await firstUnfinishedStep(['js', 'csharp', 'java'], read({ js: ladder([topic(1, unit(1, 'locked'))]), csharp: open }))).toBeNull();
+    expect(asked).toEqual(['js']);
+    asked.length = 0;
+    expect(await firstUnfinishedStep(['js', 'csharp'], read({ csharp: open }))).toBeNull();
+    expect(asked).toEqual(['js']);
+    expect(await firstUnfinishedStep([], read({}))).toBeNull();
   });
 });
 
@@ -168,6 +197,52 @@ describe('dashboard hero (rendered)', () => {
     expect(asked).toEqual(['csharp']);
     expect(box).toHaveAttribute('data-kind', 'slate');
     expect(go).toHaveAttribute('href', '/play/202');
+  });
+
+  it('fix pass 1: a finished JS ladder is skipped; the hero points at the first unfinished enabled ladder (C#)', async () => {
+    const asked: TrackId[] = [];
+    renderApp(
+      '/',
+      api({
+        due: 0,
+        fund: async (t) => {
+          asked.push(t);
+          if (t === 'js') return ladder([topic(1, unit(207, 'done'), [drill(301, 'done')])], 'js');
+          return ladder([topic(1, unit(501, 'done', { trackId: t })), topic(2, unit(502, 'available', { trackId: t }))], t);
+        },
+      }),
+    );
+    const { go, box, context } = await hero();
+    expect(box).toHaveAttribute('data-kind', 'fundamentals');
+    expect(go).toHaveAttribute('href', '/play/502');
+    expect(context).toHaveTextContent('Fundamentals · C#/.NET · Topic 2 of 2');
+    // the walk stops at the first unfinished ladder: Java is never read
+    expect(asked).toEqual(['js', 'csharp']);
+  });
+
+  it('fix pass 1: an unfinished first ladder is ONE read, and a disabled track is never read even when JS is finished', async () => {
+    const one: TrackId[] = [];
+    const first = renderApp('/', api({ due: 0, fund: async (t) => (one.push(t), ladder([topic(1, unit(207, 'available'))], t)) }));
+    await hero();
+    expect(one).toEqual(['js']);
+    first.unmount();
+
+    const asked: TrackId[] = [];
+    renderApp(
+      '/',
+      api({
+        due: 0,
+        settings: (s) => ({ ...s, todayTracks: s.todayTracks.map((t) => (t.trackId === 'csharp' ? { ...t, enabled: false } : t)) }),
+        fund: async (t) => {
+          asked.push(t);
+          return t === 'js' ? ladder([topic(1, unit(207, 'done'))], 'js') : ladder([topic(1, unit(601, 'available', { trackId: t }))], t);
+        },
+      }),
+    );
+    const { go, context } = await hero();
+    expect(asked).toEqual(['js', 'java']);
+    expect(go).toHaveAttribute('href', '/play/601');
+    expect(context).toHaveTextContent('Fundamentals · Java');
   });
 
   it('a failed ladder read never blocks the hero: it moves on to the slate', async () => {

@@ -1175,11 +1175,129 @@ export function classifyDiff(lines: readonly string[]): DiffLineClass[] {
   });
 }
 
-/** A removed line that holds nothing but a comment (`//`, `#`, `--`, a block-comment line or `<!--`). */
-export function isRemovedCommentLine(line: string): boolean {
+/** Which comment forms a file type has. A file type that is not listed has none: nothing in it folds. */
+export interface CommentSyntax {
+  /** `// x` */
+  line: boolean;
+  /** a C-style block comment (and, only inside one, its `* x` lines) */
+  block: boolean;
+  /** `# x` */
+  hash: boolean;
+  /** `-- x` */
+  dash: boolean;
+  /** an HTML / XML comment on one line */
+  html: boolean;
+}
+const NO_COMMENTS: CommentSyntax = { line: false, block: false, hash: false, dash: false, html: false };
+const syntaxOf = (on: Partial<CommentSyntax>): CommentSyntax => ({ ...NO_COMMENTS, ...on });
+const C_LIKE = syntaxOf({ line: true, block: true });
+const HASH = syntaxOf({ hash: true });
+const MARKUP = syntaxOf({ html: true });
+const all = (exts: readonly string[], sx: CommentSyntax): Record<string, CommentSyntax> => Object.fromEntries(exts.map((e) => [e, sx]));
+const SYNTAX_BY_EXT: Readonly<Record<string, CommentSyntax>> = {
+  ...all(
+    ['js', 'jsx', 'mjs', 'cjs', 'ts', 'tsx', 'mts', 'cts', 'java', 'cs', 'c', 'h', 'cc', 'cpp', 'hpp', 'go', 'rs', 'kt', 'kts', 'swift', 'scala', 'dart', 'groovy', 'gradle', 'proto', 'scss', 'less', 'jsonc', 'json5'],
+    C_LIKE,
+  ),
+  ...all(['py', 'rb', 'sh', 'bash', 'zsh', 'yml', 'yaml', 'toml', 'dockerfile', 'env', 'mk', 'pl', 'r', 'ps1', 'properties', 'conf'], HASH),
+  ...all(['html', 'htm', 'xml', 'svg', 'xaml', 'csproj', 'props', 'targets'], MARKUP),
+  css: syntaxOf({ block: true }),
+  php: syntaxOf({ line: true, block: true, hash: true }),
+  tf: syntaxOf({ line: true, block: true, hash: true }),
+  sql: syntaxOf({ dash: true, block: true }),
+  lua: syntaxOf({ dash: true }),
+  hs: syntaxOf({ dash: true }),
+};
+/** Files named for what they are: `Dockerfile`, `Dockerfile.dev`, `Makefile`, `.env`, `.env.local`, `.gitignore`. */
+const HASH_NAME_RE = /^(dockerfile(\..+)?|makefile|gnumakefile|\.env(\..+)?|\.gitignore|\.dockerignore)$/;
+
+/**
+ * The comment forms of a file, by its path. `#` is a comment in Python or YAML and a heading in
+ * markdown; `--` is a comment in SQL and an operator elsewhere: what folds depends on the file.
+ * Markdown, and every file type that is not known, has no foldable comments at all.
+ */
+export function commentSyntaxOf(path: string | null | undefined): CommentSyntax {
+  if (!path) return NO_COMMENTS;
+  const name = path.split(/[\\/]/).pop()!.toLowerCase();
+  if (HASH_NAME_RE.test(name)) return HASH;
+  const dot = name.lastIndexOf('.');
+  return (dot > 0 ? SYNTAX_BY_EXT[name.slice(dot + 1)] : undefined) ?? NO_COMMENTS;
+}
+
+/** The file a `diff --git a/x b/y`, `+++ b/y` or `--- a/x` header names (null: none, or /dev/null). */
+export function diffHeaderPath(line: string): string | null {
+  const git = /^diff --git a\/(.+?) b\/(.+)$/.exec(line);
+  if (git) return git[2]!.trim();
+  const side = /^(?:\+\+\+|---) ([^\t]+)/.exec(line);
+  if (!side) return null;
+  const p = side[1]!.trim();
+  return p === '/dev/null' ? null : p.replace(/^[ab]\//, '');
+}
+
+/**
+ * One line of a file (no diff marker): is it nothing but a comment in this syntax, and is a block
+ * comment still open after it? A block opens only at the START of a line (a comment that begins
+ * after code is left alone), so a glob such as `'src/*.ts'` in code never opens one.
+ */
+function scanCommentLine(text: string, sx: CommentSyntax, inBlock: boolean): { comment: boolean; inBlock: boolean } {
+  let t = text.trim();
+  let open = inBlock;
+  let seen = inBlock; // comment text was on this line
+  for (;;) {
+    if (open) {
+      const end = t.indexOf('*/');
+      if (end === -1) return { comment: true, inBlock: true };
+      t = t.slice(end + 2).trimStart();
+      open = false;
+      continue;
+    }
+    if (t === '') return { comment: seen, inBlock: false };
+    if (sx.block && t.startsWith('/*')) {
+      t = t.slice(2);
+      open = seen = true;
+      continue;
+    }
+    if (sx.line && t.startsWith('//')) return { comment: true, inBlock: false };
+    if (!seen && ((sx.hash && t.startsWith('#')) || (sx.dash && t.startsWith('--')) || (sx.html && /^<!--.*-->$/.test(t)))) return { comment: true, inBlock: false };
+    return { comment: false, inBlock: false }; // code
+  }
+}
+
+/**
+ * A removed line that holds nothing but a comment, for the file at `path` (commentSyntaxOf).
+ * `inBlock`: the line sits inside a block comment that an earlier line opened; only then is a
+ * `* x` line a comment. Without a known file type nothing is a comment.
+ */
+export function isRemovedCommentLine(line: string, path?: string | null, inBlock = false): boolean {
   if (!line.startsWith('-')) return false;
-  const t = line.slice(1).trim();
-  return /^(\/\/|\/\*|\*\/|<!--|-->)/.test(t) || /^(#|--|\*)(\s|$)/.test(t) || /^#!/.test(t);
+  return scanCommentLine(line.slice(1), commentSyntaxOf(path), inBlock).comment;
+}
+
+/**
+ * Per line: is it a removed comment-only line? The file type comes from the header of the line's
+ * own file section, and block-comment context is followed down the OLD side of each hunk (context
+ * and removed lines; an added line is not part of the old file).
+ */
+export function removedCommentLines(lines: readonly string[], cls: readonly DiffLineClass[]): boolean[] {
+  let sx = NO_COMMENTS;
+  let inBlock = false;
+  return lines.map((line, i) => {
+    const c = cls[i];
+    if (c === 'diff-file') {
+      const p = diffHeaderPath(line);
+      if (p !== null) sx = commentSyntaxOf(p);
+      inBlock = false;
+      return false;
+    }
+    if (c === 'diff-hunk') {
+      inBlock = false;
+      return false;
+    }
+    if (c === 'diff-add' || line.startsWith('\\')) return false;
+    const r = scanCommentLine(line.slice(1), sx, inBlock);
+    inBlock = r.inBlock;
+    return c === 'diff-del' && r.comment;
+  });
 }
 
 type DiffRow = { kind: 'line'; i: number } | { kind: 'fold'; from: number; to: number };
@@ -1187,7 +1305,8 @@ type DiffRow = { kind: 'line'; i: number } | { kind: 'fold'; from: number; to: n
 /** Runs of two or more removed comment-only lines (inside a hunk) fold into one row. */
 function diffRows(lines: readonly string[], cls: readonly DiffLineClass[]): DiffRow[] {
   const rows: DiffRow[] = [];
-  const foldable = (i: number) => cls[i] === 'diff-del' && isRemovedCommentLine(lines[i]!);
+  const comment = removedCommentLines(lines, cls);
+  const foldable = (i: number) => comment[i] === true;
   for (let i = 0; i < lines.length; ) {
     let j = i;
     while (j < lines.length && foldable(j)) j++;

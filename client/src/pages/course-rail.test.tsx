@@ -239,6 +239,47 @@ describe('the completion panel', () => {
     expect(screen.queryByTestId('completion-panel')).toBeNull();
   }, 60_000);
 
+  // fix pass 3: the panel marks a NEW completion only (the ladder before the submit vs after it)
+  it('a gate re-pass shows no panel: the topic was already complete, the links stay', async () => {
+    const { api } = ladderApi({ gate: 'done', drills: [] });
+    const { user } = renderApp(`/play/${T1}`, api);
+    await passGate(user);
+    const next = await screen.findByTestId('next-unit');
+    expect(within(next).getByTestId('next-primary')).toHaveTextContent('Next topic: 02 Functions & closures');
+    expect(screen.queryByTestId('completion-panel')).toBeNull();
+  }, 60_000);
+
+  it('a gate re-pass on a topic with an open drill shows no "quiz gate passed" panel either', async () => {
+    const { api } = ladderApi({ gate: 'done', drills: [[950, 'Defaults that keep `0`', 'available']] });
+    const { user } = renderApp(`/play/${T1}`, api);
+    await passGate(user);
+    expect(within(await screen.findByTestId('next-unit')).getByTestId('next-primary')).toHaveTextContent('Practise: Defaults that keep 0');
+    expect(screen.queryByTestId('completion-panel')).toBeNull();
+  }, 60_000);
+
+  it('a re-pass of a drill that was already passed shows no panel, whatever the XP line says', async () => {
+    const { api } = ladderApi({ gate: 'done', drills: [[DRILL, 'First drill', 'done'], [901, 'Second drill', 'available']] });
+    const { user } = renderApp(`/play/${DRILL}`, api);
+    await passDrill(user);
+    expect(within(await screen.findByTestId('next-unit')).getByTestId('next-primary')).toHaveTextContent('Practise: Second drill');
+    expect(screen.queryByTestId('completion-panel')).toBeNull();
+  }, 60_000);
+
+  it.each(['revealed', 'already-awarded'] as const)('a pass that paid 0 XP (%s) completes nothing: no panel', async (reason) => {
+    const { api } = ladderApi({ gate: 'done', drills: [[DRILL, 'First drill', 'available']] });
+    const zero: BootQuestApi = {
+      ...api,
+      submitUnit: async (id, s) => {
+        const r = await api.submitUnit(id, s);
+        return { ...r, xp: { id: 1, amount: 0, reason } };
+      },
+    };
+    const { user } = renderApp(`/play/${DRILL}`, zero);
+    await passDrill(user);
+    expect(await screen.findByTestId('next-unit')).toBeInTheDocument();
+    expect(screen.queryByTestId('completion-panel')).toBeNull();
+  }, 60_000);
+
   it('a unit off the ladder keeps the plain next-unit line', async () => {
     const { user } = renderApp(`/play/${DRILL}`);
     await passDrill(user);

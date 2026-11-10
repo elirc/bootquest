@@ -17,7 +17,7 @@ import type { SubmitResponse, TrackId, UnitSummary } from '../../api/types';
 import { Icon } from '../../components/Icon';
 import { MorePractice } from '../../components/MorePractice';
 import { useCountUp } from '../../lib/countup';
-import { fundPlace } from '../../lib/fundamentals';
+import { fundPlace, topicComplete } from '../../lib/fundamentals';
 import { InlineProse } from '../../lib/prose';
 import { fundStepLabel, fundTrackOf, pickFundNext, type FundStep } from '../../lib/nextstep';
 import { overlayOpen } from '../../lib/shortcuts';
@@ -51,13 +51,22 @@ function StepText({ step }: { step: FundStep }) {
   );
 }
 
-/** "+50 XP", counted up from 0 in 600 ms (at once under reduced motion and in tests). */
-function XpCount({ amount }: { amount: number }) {
+/**
+ * "+50 XP", counted up from 0 in 600 ms (at once under reduced motion and in tests). The panel sits
+ * in the results' aria-live region, so the animated number is hidden from assistive technology
+ * (every frame would be announced) and the final amount is there once, as visually-hidden text.
+ */
+export function XpCount({ amount }: { amount: number }) {
   const shown = useCountUp(amount);
   return (
-    <span className="completion-xp" data-testid="completion-xp" aria-label={`+${amount} XP`}>
-      +{shown} XP
-    </span>
+    <>
+      <span className="completion-xp" data-testid="completion-xp" aria-hidden="true">
+        +{shown} XP
+      </span>
+      <span className="sr-only" data-testid="completion-xp-text">
+        {`+${amount} XP`}
+      </span>
+    </>
   );
 }
 
@@ -96,11 +105,26 @@ export function NextStep({ unit, submit }: { unit: Unit; submit?: SubmitResponse
   const isGate = place !== null && unit.id === place.topic.unit.id;
   const gateDone = place !== null && (isGate || place.topic.unit.state === 'done');
   const otherDrillDone = place !== null && place.topic.drills.some((d) => d.id !== unit.id && d.state === 'done');
-  // a re-pass of a drill that was already passed completes nothing new
-  const firstPass = submit?.xp?.reason !== 'already-awarded';
-  const completes =
-    place !== null && (isGate ? place.topic.drills.length === 0 || otherDrillDone : gateDone && !otherDrillDone && firstPass);
-  const showPanel = place !== null && (isGate || completes);
+  // fix pass 3: the panel marks something NEW. A pass that paid no XP for a stated reason
+  // ('already-awarded', 'revealed', ...) is a re-pass or a guided pass: it completes nothing.
+  const cleanPass = (submit?.xp?.reason ?? null) === null;
+  // ...and the proof is the ladder itself: the topic as read before this submit against the re-read
+  // after it. Without both reads (the first one had not landed, or the re-read failed) the state
+  // of the one ladder in hand decides, as before.
+  const beforeLadder = onLadder && !waiting ? shared.before : null;
+  const was = beforeLadder !== null && beforeLadder !== ladder ? fundPlace(beforeLadder, unit.key) : null;
+  let completes = false;
+  let newGatePass = false;
+  if (place !== null && cleanPass) {
+    if (was !== null) {
+      completes = !topicComplete(was.topic) && topicComplete(place.topic);
+      newGatePass = isGate && was.topic.unit.state !== 'done' && place.topic.unit.state === 'done';
+    } else {
+      completes = isGate ? place.topic.drills.length === 0 || otherDrillDone : gateDone && !otherDrillDone;
+      newGatePass = isGate;
+    }
+  }
+  const showPanel = place !== null && (newGatePass || completes);
   const afterGate = isGate && fund?.primary?.kind === 'drill';
 
   const links = (

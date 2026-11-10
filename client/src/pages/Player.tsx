@@ -83,6 +83,8 @@ function Player({ detail }: { detail: UnitDetail }) {
   const prose = unitProse(detail);
   const [revealed, setRevealed] = useState(unit.revealed);
   const [solution, setSolution] = useState<Solution | null>(null);
+  // fix pass 2: a Fundamentals quiz gate is open (closed-book): "Learn more" and its `i` key are off
+  const [gateOpen, setGateOpen] = useState(false);
   const isReading = unit.kind === 'reading';
   // fund wave: a Fundamentals topic unit — its instructions ARE the lesson (headings rendered)
   const isFundTopic = isFundTopicKey(unit.key);
@@ -147,7 +149,7 @@ function Player({ detail }: { detail: UnitDetail }) {
   const showIns = twoCol || insMain !== null || hasRefs || hasLegs || practiceRetest;
   const insPanel = showIns && (
     <section className="panel player-instructions" aria-labelledby="ins-title">
-      <h2 className="panel-title" id="ins-title">
+      <h2 className="panel-title" id="ins-title" tabIndex={-1}>
         {isFundTopic ? 'Lesson' : 'Instructions'}
       </h2>
       {insMain}
@@ -196,7 +198,7 @@ function Player({ detail }: { detail: UnitDetail }) {
                 <Chip tone="warning">Guided · 0 XP</Chip>
               </span>
             )}
-            <LearnMoreButton unitId={unit.id} hotkey />
+            <LearnMoreButton unitId={unit.id} hotkey disabled={gateOpen} disabledReason="Not available while the quiz gate is open" />
           </span>
         }
       />
@@ -218,7 +220,7 @@ function Player({ detail }: { detail: UnitDetail }) {
         ) : spec.type === 'patch-kata' ? (
           <KataPane detail={detail} />
         ) : spec.type === 'study-quiz' ? (
-          <StudyQuestPane detail={detail} lesson={isFundTopic ? insPanel || null : null} />
+          <StudyQuestPane detail={detail} lesson={isFundTopic ? insPanel || null : null} onGateOpenChange={setGateOpen} />
         ) : spec.type === 'quiz' ? (
           <QuizPane detail={detail} spec={spec} prompt={prose.prompt} solution={solution} />
         ) : spec.type === 'predict-output' ? (
