@@ -11,6 +11,7 @@ import {
 } from '@bootquest/shared/api';
 import type { Db } from '../db/database.ts';
 import { VERIFIED_PASS_SQL } from '../engines/attempts.ts';
+import { fundMissHeldSql } from '../engines/fund-review-hold.ts';
 import { campaignState, type ActState } from '../engines/campaign.ts';
 import { addDays, dayKey, nowMs, type Clock } from '../engines/clock.ts';
 import {
@@ -88,7 +89,8 @@ export function passRates({ db }: StatsDeps): PassRatesResponse {
 export function reviewStats({ db, clock }: StatsDeps): ReviewStatsResponse {
   const now = nowMs(clock);
   const t = dayKey(now);
-  const dueAts = db.all<{ dueAt: number }>(`SELECT due_at AS dueAt FROM review_item WHERE kind <> 'retest' AND retired_at IS NULL`).map((r) => r.dueAt);
+  // f52: a held Fundamentals miss card (engines/fund-review-hold.ts) has no reviewable due time yet: not counted
+  const dueAts = db.all<{ dueAt: number }>(`SELECT due_at AS dueAt FROM review_item WHERE kind <> 'retest' AND retired_at IS NULL AND NOT ${fundMissHeldSql('review_item')}`).map((r) => r.dueAt);
   const logs = db.all<{ rating: string; day: number }>(
     `SELECT l.rating, l.reviewed_at AS day FROM review_log l JOIN review_item i ON i.id = l.review_item_id WHERE i.kind <> 'retest'`,
   );

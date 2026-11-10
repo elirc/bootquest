@@ -28,10 +28,16 @@ import { repoLink } from './study-service.ts';
  *           itself shows the keyed answer. Until then a missed question's key stays hidden (no
  *           free retry with the key in hand: a fail lists missed question NUMBERS only);
  *     withheld explanations are counted, never titled (a title can hint at the key);
- *   - f52 U3: a Fundamentals topic's gate has no seed:notes pack. Its explanations are built from the
- *     topic's own quiz items (keyed answer TEXT + authored explanation, one per question) and are
- *     released ALL TOGETHER by a verified pass of THIS unit, and by nothing else: a failed gate
- *     releases none (not even for the questions answered right), so a retry is never open-key;
+ *   - f52 U3: a Fundamentals topic's gate has no seed:notes pack, and rule (c) above does NOT apply to
+ *     it. Its explanations are built from the topic's own quiz items (keyed answer TEXT + authored
+ *     explanation, one per question) and are released ALL TOGETHER by a verified pass of THIS unit,
+ *     and by nothing else: a failed gate releases none (not even for the questions answered right).
+ *     A missed question still queues its 'quiz-miss:fund:<key>' review card (the card's back is the
+ *     keyed choice + explanation), but that card is HELD (engines/fund-review-hold.ts): not served by
+ *     GET /reviews/queue, not counted as due and not gradeable until the gate's unit has a verified
+ *     pass, whatever its due time; right after the pass it is an ordinary card. So nothing on the
+ *     server hands out a Fundamentals key before a pass and a retry is never open-key. (The FAILED
+ *     submit response still marks each question right/wrong in `studyQuiz.items`, never a key);
  *   - any other unit: its registered refs; the post-solve `explanation` after a verified pass or
  *     a reveal; the solution only after a reveal (what GET /solution already serves). Explain-back
  *     and patch-kata keys stay behind their own answer-first endpoints, a written unit's model
@@ -105,6 +111,9 @@ export function explanationRelease(db: Db, quizKey: string, now: number): Releas
   const a = quizAnswered(db, quizKey);
   if (!a.answered) return { released: false, reason: 'unanswered', at: null };
   if (a.passed) return { released: true };
+  // f52: a Fundamentals question is released by a verified pass of its gate and by nothing else
+  // (its missed-question card is HELD until that pass: engines/fund-review-hold.ts)
+  if (isFundItemKey(quizKey)) return { released: false, reason: 'missed', at: null };
   const card = db.get<{ id: number; due: number }>('SELECT id, due_at AS due FROM review_item WHERE card_key = ?', `${QUIZ_MISS_CARD_PREFIX}${quizKey}`);
   if (!card) return { released: true };
   if (card.due <= now || db.get('SELECT 1 AS x FROM review_log WHERE review_item_id = ? LIMIT 1', card.id)) return { released: true };

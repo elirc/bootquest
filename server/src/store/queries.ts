@@ -2,6 +2,7 @@ import { CheckSpec, type CompetencyId, type TrackId, type UnitKind } from '@boot
 import type { Db } from '../db/database.ts';
 import { READING_ATTEST_SQL, VERIFIED_PASS_SQL } from '../engines/attempts.ts';
 import { dayKey } from '../engines/clock.ts';
+import { fundMissHeldSql } from '../engines/fund-review-hold.ts';
 
 /**
  * Read-side queries for the HTTP API (W1b). Pure SQL reads mapped to camelCase
@@ -196,7 +197,8 @@ export interface ReviewQueueRow {
 export function reviewQueue(db: Db, atMs: number, limit: number): ReviewQueueRow[] {
   return db.all<ReviewQueueRow>(
     `SELECT id, card_key AS cardKey, kind, unit_id AS unitId, competency_id AS competencyId, due_at AS dueAt
-       FROM review_item WHERE due_at <= ? AND kind <> 'retest' AND retired_at IS NULL ORDER BY due_at, id LIMIT ?`,
+       FROM review_item WHERE due_at <= ? AND kind <> 'retest' AND retired_at IS NULL AND NOT ${fundMissHeldSql('review_item')}
+      ORDER BY due_at, id LIMIT ?`,
     atMs,
     limit,
   );

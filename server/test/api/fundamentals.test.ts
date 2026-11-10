@@ -17,13 +17,15 @@ import { join, resolve } from 'node:path';
 import request from 'supertest';
 import type { Express } from 'express';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { ReviewQueueResponse, SubmitResponse, UnitDetailResponse, UnitNotesResponse } from '@bootquest/shared/api';
+import { ReviewQueueResponse, ReviewStatsResponse, SubmitResponse, UnitDetailResponse, UnitNotesResponse } from '@bootquest/shared/api';
 import { FundamentalsResponse } from '@bootquest/shared/api-ext';
 import { FundamentalsFile, fundTopicUnitKey, type FundTopic } from '@bootquest/shared/fundamentals';
 import { createApp } from '../../src/api/app.ts';
 import { entriesContentStore } from '../../src/api/content-store.ts';
 import { defaultRunners } from '../../src/api/runners.ts';
-import { DAY_MS, fixedClock } from '../../src/engines/clock.ts';
+import { DAY_MS, fixedClock, nowMs } from '../../src/engines/clock.ts';
+import { dueCount } from '../../src/engines/fsrs.ts';
+import { dueAsOf } from '../../src/engines/streak.ts';
 import {
   defaultFundamentalsDirs,
   FUND_SOURCE_KEY,
@@ -271,6 +273,44 @@ describe('Fundamentals over HTTP', () => {
     const miss = fund.find((it) => it.cardKey === `quiz-miss:${ladder.topics[0]!.quiz[0]!.key}`)!;
     const q0 = ladder.topics[0]!.quiz[0]!;
     expect(miss.card).toMatchObject({ front: q0.prompt, back: `${q0.choices[q0.answer]}\n\n${q0.explanation}` });
+  });
+
+  // f52 fix: a failed gate's miss cards (back = keyed choice) are HELD until the gate is passed
+  it('a failed gate keeps its miss cards enrolled but out of the queue, due counts and grading until a pass', async () => {
+    const u0 = topicUnit(0);
+    const quiz = ladder.topics[0]!.quiz;
+    const fail = SubmitResponse.parse((await request(app).post(`/api/units/${u0}/submit`).send({ answers: await served(u0, 3) })).body);
+    expect(fail.verdict).toBe('fail');
+    expect(fail.studyQuiz!.reviewCards.created).toBe(3);
+    expect(JSON.stringify(fail)).not.toContain('due tomorrow');
+    const cards = tmp.db.all<{ id: number }>(`SELECT id FROM review_item WHERE card_key LIKE 'quiz-miss:fund:%' ORDER BY id`);
+    expect(cards).toHaveLength(3);
+
+    // a day later the cards are past their due time, yet nothing serves, counts or grades them
+    clock.advance(DAY_MS + 1);
+    const held = ReviewQueueResponse.parse((await request(app).get('/api/reviews/queue?limit=50')).body);
+    expect(held.count).toBe(0);
+    expect(held.items).toEqual([]);
+    expect(dueCount(tmp.db, clock)).toBe(0);
+    expect(dueAsOf(tmp.db, nowMs(clock))).toBe(0);
+    expect(ReviewStatsResponse.parse((await request(app).get('/api/stats/reviews')).body)).toMatchObject({ cards: 0, dueNow: 0 });
+    const grade = await request(app).post(`/api/reviews/${cards[0]!.id}/grade`).send({ grade: 'good' });
+    expect(grade.status).toBe(409);
+    expect(grade.body.error.code).toBe('NOT_DUE');
+    expect(tmp.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM review_log')!.n).toBe(0);
+
+    // the pass releases them at once (their due time already elapsed): ordinary cards from here on
+    const passAt = nowMs(clock);
+    const pass = SubmitResponse.parse((await request(app).post(`/api/units/${u0}/submit`).send({ answers: await served(u0) })).body);
+    expect(pass.verdict).toBe('pass');
+    const open = ReviewQueueResponse.parse((await request(app).get('/api/reviews/queue?limit=50')).body);
+    expect(open.items.map((it) => it.id)).toEqual(cards.map((c) => c.id));
+    expect(open.count).toBe(3);
+    const q0 = quiz[0]!;
+    expect(open.items[0]!.card).toMatchObject({ front: q0.prompt, back: `${q0.choices[q0.answer]}\n\n${q0.explanation}` });
+    expect(dueAsOf(tmp.db, passAt - 1)).toBe(0); // as of before the pass they were still held
+    expect(dueAsOf(tmp.db, nowMs(clock))).toBe(3);
+    expect((await request(app).post(`/api/reviews/${cards[0]!.id}/grade`).send({ grade: 'good' })).status).toBe(200);
   });
 
   // f52 U3 (ruling 4): keyed answers + explanations after a PASSED gate; a failed gate releases nothing

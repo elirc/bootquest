@@ -157,18 +157,20 @@ export function gradeStudySubmission(
   const pct = Math.floor(grade.score * 100);
   const mark = Math.round(spec.passPct * 100);
   const missedNos = grade.items.map((g, i) => (g.correct ? null : i + 1)).filter((n): n is number => n !== null);
+  const fund = fundTopicFor(store, spec);
+  // f52: a Fundamentals miss card is held until the gate is passed (engines/fund-review-hold.ts)
+  const cardWhen = fund ? 'once you pass this gate' : 'due tomorrow';
   const output =
     `${grade.correct}/${grade.total} correct (${pct}%); pass mark ${mark}%` +
-    (missedNos.length ? `; missed Q${missedNos.join(', Q')} -> review cards due tomorrow` : '');
+    (missedNos.length ? `; missed Q${missedNos.join(', Q')} -> review cards ${cardWhen}` : '');
   const result: CanonicalRunResult = grade.passed
     ? { pass: true, output, failures: [], durationMs: 0 }
     : {
         pass: false,
         output,
-        failures: missedNos.map((n) => ({ name: `Q${n}`, message: 'incorrect (the key arrives as a review card, due tomorrow)' })),
+        failures: missedNos.map((n) => ({ name: `Q${n}`, message: `incorrect (the key arrives as a review card, ${cardWhen})` })),
         durationMs: 0,
       };
-  const fund = fundTopicFor(store, spec);
   const flashcardKeys = fund ? fund.topic.flashcards.map((f) => f.key) : (packFor(store, spec)?.flashcards ?? []).map((f) => f.key);
   return { result, grade, flashcardKeys };
 }
