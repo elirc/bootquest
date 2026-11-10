@@ -8,7 +8,9 @@ import {
   answerLengthReport,
   answerLengthRow,
   DEFAULT_ANSWER_LENGTH_BASELINE,
+  DEFAULT_TOPIC_LENGTH_OPTIONS,
   fundamentalsLengthRows,
+  fundamentalsTopicLengthRows,
   keyedChoiceChecks,
   keyLengthClass,
   readAnswerLengthBaseline,
@@ -53,6 +55,49 @@ describe('answer-length lint (f52 C2)', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it('per-topic Fundamentals rows: a topic with >= 8 keyed items fails at more than 3 of 8 single-longest keys', () => {
+    const long = { choices: ['short', 'a keyed answer that is far longer', 'mid one', 'tiny'], answer: 1 };
+    const even = { choices: ['same', 'size', 'four', 'char'], answer: 2 };
+    const dir = mkdtempSync(join(tmpdir(), 'bq-alen-topic-'));
+    try {
+      mkdirSync(join(dir, 'js'));
+      const topics = [
+        { id: '01-three', quiz: [...many(3, long as never), ...many(5, even as never)] }, // 3/8 = 37.5%: passes
+        { id: '02-four', quiz: [...many(4, long as never), ...many(4, even as never)] }, // 4/8 = 50%: fails
+        { id: '03-small', quiz: many(7, long as never) }, // 7 keyed: too small to judge
+        { quiz: [...many(5, long as never), ...many(5, even as never)] }, // id-less: named by position
+      ];
+      writeFileSync(join(dir, 'js', 'topics.json'), JSON.stringify({ track: 'js', topics }));
+      const rows = fundamentalsTopicLengthRows(dir);
+      expect(rows.map((r) => [r.pack, r.keyed, r.longest, r.exceeds])).toEqual([
+        ['fundamentals/js/01-three', 8, 3, []],
+        ['fundamentals/js/02-four', 8, 4, ['longest']],
+        ['fundamentals/js/03-small', 7, 7, []],
+        ['fundamentals/js/#4', 10, 5, ['longest']],
+      ]);
+      expect(DEFAULT_TOPIC_LENGTH_OPTIONS).toEqual({ maxShare: 0.4, minItems: 8 });
+      // the track row still pools every topic (33 keyed, 19 longest)
+      expect(fundamentalsLengthRows(dir)[0]).toMatchObject({ pack: 'fundamentals/js', keyed: 33, longest: 19 });
+      // a fresh topic over the limit fails the lint (never baselined)
+      expect(answerLengthReport(rows, baseline([])).fresh.map((f) => f.row.pack)).toEqual(['fundamentals/js/02-four', 'fundamentals/js/#4']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('ratchet: a share below the baselined entry is stale-high and fails until the entry is lowered', () => {
+    const row = answerLengthRow('packs/x', [...many(6, longKey), ...many(4, balanced)]); // 60%
+    const entry = { pack: 'packs/x', metric: 'longest' as const, keyed: 10, hits: 7, why: 't' }; // baselined 70%
+    const high = answerLengthReport([row], baseline([entry]));
+    expect(high.staleHigh).toHaveLength(1);
+    expect(high.staleHigh[0]).toContain('lower the entry to hits 6, keyed 10');
+    expect(high.known).toEqual([]);
+    expect(answerLengthFails(high)).toBe(true);
+    // lowered to the new share: passes again (same share on a different keyed count counts as equal)
+    expect(answerLengthFails(answerLengthReport([row], baseline([{ ...entry, hits: 6 }])))).toBe(false);
+    expect(answerLengthFails(answerLengthReport([row], baseline([{ ...entry, keyed: 20, hits: 12 }])))).toBe(false);
   });
 
   it('shrink-only baseline: known passes, a rise fails, a pack back under the limit is stale, new offenders fail', () => {

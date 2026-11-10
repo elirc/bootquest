@@ -48,38 +48,95 @@ export function firstOpenDrill(ctx: FindCtx, trackId: string): DrillPick | null 
   return u ? { id: u.id, key: u.key, trackId: u.trackId, title: u.title, difficulty: u.difficulty } : null;
 }
 
+/** The Fundamentals view of one track: its drill-key prefix, topic of a key, and each topic's gate state. */
+interface FundView {
+  prefix: string;
+  topicOf: (key: string) => string;
+  /** the topic's lesson is open: its study (gate) unit is not locked, or is not loaded */
+  topicOpen: (topic: string) => boolean;
+  /** the topic's gate unit has a verified pass */
+  topicPassed: (topic: string) => boolean;
+}
+
+/** null = the track has no Fundamentals units (`fund-<track>/` drills). */
+function fundView(ctx: FindCtx, trackId: TrackId, units: ReturnType<typeof unitsForTrack>): FundView | null {
+  const prefix = `${fundPackSource(trackId as FundTrack)}/`;
+  if (!units.some((u) => u.key.startsWith(prefix))) return null;
+  const byKey = new Map(units.map((u) => [u.key, u]));
+  const gateOf = (topic: string) => byKey.get(fundTopicUnitKey(trackId as FundTrack, topic));
+  return {
+    prefix,
+    topicOf: (key) => key.slice(prefix.length).split('/')[0] ?? '',
+    topicOpen: (topic) => {
+      const gate = gateOf(topic);
+      return gate === undefined || lockStateFor(gate, false, ctx.passed, ctx.prereqs) !== 'locked';
+    },
+    topicPassed: (topic) => {
+      const gate = gateOf(topic);
+      return gate !== undefined && ctx.passed.has(gate.id);
+    },
+  };
+}
+
+const pickOf = (u: { id: number; key: string; trackId: TrackId; title: string; difficulty: number | null }): DrillPick => ({
+  id: u.id,
+  key: u.key,
+  trackId: u.trackId,
+  title: u.title,
+  difficulty: u.difficulty,
+});
+
 /**
- * f52 U6 (W3.9): the slate's drill-set link for a language track prefers the Fundamentals ladder: the
- * passable Fundamentals drill (`fund-<track>/<NN-topic>/<slug>`, same rule as firstOpenDrill: kind 'drill',
- * never revealed, available) of the LOWEST topic whose lesson is open (the topic's study unit
- * `fund/<track>/<topic>` is not locked; a drill whose topic unit is not loaded counts as open), in served
- * order within the topic. null = the track has no such drill (the caller falls back to firstOpenDrill).
- * Never a study (gate) unit. Used for the slate link only: firstOpenDrill and /drills/next stay as they are.
+ * f52 U6 (W3.9): the slate's drill-set link for a language track prefers the Fundamentals ladder. Candidates
+ * are the passable Fundamentals drills (`fund-<track>/<NN-topic>/<slug>`, same rule as firstOpenDrill: kind
+ * 'drill', not passed, never revealed, available), in served order within a topic:
+ *   - once ANY topic gate is passed: a drill of the HIGHEST-numbered topic whose gate is passed and that still
+ *     has one (practice what was just learned); none left there = null;
+ *   - no gate passed yet: a drill of the lowest topic whose lesson is open (its study unit
+ *     `fund/<track>/<topic>` is not locked; a drill whose topic unit is not loaded counts as open).
+ * null = no such drill (the caller falls back to firstOpenSlateDrill). Never a study (gate) unit. Used for
+ * the slate link only: firstOpenDrill and /drills/next stay as they are.
  */
 export function firstFundamentalsDrill(ctx: FindCtx, trackId: string): DrillPick | null {
   const track = getTrack(ctx.db, trackId);
   if (!track || track.locked) return null;
-  const prefix = `${fundPackSource(track.id as FundTrack)}/`;
   const units = unitsForTrack(ctx.db, track.id);
-  if (!units.some((u) => u.key.startsWith(prefix))) return null;
-  const byKey = new Map(units.map((u) => [u.key, u]));
-  const topicOf = (key: string): string => key.slice(prefix.length).split('/')[0] ?? '';
-  const topicOpen = (topic: string): boolean => {
-    const gate = byKey.get(fundTopicUnitKey(track.id as FundTrack, topic));
-    return gate === undefined || lockStateFor(gate, false, ctx.passed, ctx.prereqs) !== 'locked';
+  const fv = fundView(ctx, track.id, units);
+  if (!fv) return null;
+  const candidates = units.filter(
+    (x) => x.kind === 'drill' && x.key.startsWith(fv.prefix) && !ctx.revealed.has(x.id) && lockStateFor(x, false, ctx.passed, ctx.prereqs) === 'available',
+  );
+  const byTopic = (dir: 1 | -1) => (a: (typeof units)[number], b: (typeof units)[number]) => {
+    const ta = fv.topicOf(a.key);
+    const tb = fv.topicOf(b.key);
+    return ta < tb ? -dir : ta > tb ? dir : a.id - b.id;
   };
-  const picks = units
-    .filter(
-      (x) =>
-        x.kind === 'drill' &&
-        x.key.startsWith(prefix) &&
-        !ctx.revealed.has(x.id) &&
-        lockStateFor(x, false, ctx.passed, ctx.prereqs) === 'available' &&
-        topicOpen(topicOf(x.key)),
-    )
-    .sort((a, b) => (topicOf(a.key) < topicOf(b.key) ? -1 : topicOf(a.key) > topicOf(b.key) ? 1 : a.id - b.id));
-  const u = picks[0];
-  return u ? { id: u.id, key: u.key, trackId: u.trackId, title: u.title, difficulty: u.difficulty } : null;
+  const gatePrefix = fundTopicUnitKey(track.id as FundTrack, '');
+  const anyPassed = units.some((u) => u.kind === 'study' && u.key.startsWith(gatePrefix) && ctx.passed.has(u.id));
+  const u = anyPassed
+    ? candidates.filter((x) => fv.topicPassed(fv.topicOf(x.key))).sort(byTopic(-1))[0]
+    : candidates.filter((x) => fv.topicOpen(fv.topicOf(x.key))).sort(byTopic(1))[0];
+  return u ? pickOf(u) : null;
+}
+
+/**
+ * The slate's fallback drill-set link: firstOpenDrill's rule, except that a `fund-<track>/` drill whose
+ * topic is LOCKED (its lesson is behind an unpassed earlier gate) is never picked. /drills/next keeps
+ * firstOpenDrill unchanged.
+ */
+export function firstOpenSlateDrill(ctx: FindCtx, trackId: string): DrillPick | null {
+  const track = getTrack(ctx.db, trackId);
+  if (!track || track.locked) return null;
+  const units = unitsForTrack(ctx.db, track.id);
+  const fv = fundView(ctx, track.id, units);
+  const u = units.find(
+    (x) =>
+      x.kind === 'drill' &&
+      !ctx.revealed.has(x.id) &&
+      lockStateFor(x, false, ctx.passed, ctx.prereqs) === 'available' &&
+      (fv === null || !x.key.startsWith(fv.prefix) || fv.topicOpen(fv.topicOf(x.key))),
+  );
+  return u ? pickOf(u) : null;
 }
 
 /**
@@ -102,7 +159,8 @@ export type SlateItemWithTarget = SlateItem & { targetUnitId?: number | null };
 
 /**
  * GET /dashboard response mapping: a COPY of each slate item plus the unit its row links to (a drill set:
- * the next Fundamentals drill of the track when it has one, else its first open drill). The
+ * the next Fundamentals drill of the track when it has one, else its first open drill outside a locked
+ * Fundamentals topic). The
  * stored slate (daily_slate.items, frozen in closed days) is never touched: targetUnitId exists
  * in the response only. The review slot gets no target (it links to the review queue).
  */
@@ -110,7 +168,7 @@ export function withSlateTargets(ctx: FindCtx, items: readonly SlateItem[]): Sla
   let campaign: number | null | undefined;
   return items.map((item): SlateItemWithTarget => {
     // f52 U6: a language track's drill set links to its next Fundamentals drill first
-    if (item.kind === 'drill-set') return { ...item, targetUnitId: (firstFundamentalsDrill(ctx, item.track) ?? firstOpenDrill(ctx, item.track))?.id ?? null };
+    if (item.kind === 'drill-set') return { ...item, targetUnitId: (firstFundamentalsDrill(ctx, item.track) ?? firstOpenSlateDrill(ctx, item.track))?.id ?? null };
     if (item.kind === 'campaign-step') {
       if (campaign === undefined) campaign = campaignTarget(campaignState(ctx.db));
       return { ...item, targetUnitId: campaign };

@@ -1,3 +1,4 @@
+import { PROJECT_UNIT_KINDS } from '@bootquest/shared';
 import type { ApiErrorCode } from '@bootquest/shared/api';
 import type { HintLockReason, HintsResponse, HintTakenResponse } from '@bootquest/shared/api-ext';
 import { questUnitUnlocked } from '../engines/campaign.ts';
@@ -15,8 +16,24 @@ import { assertTrackOpen, type ServiceDeps } from './service.ts';
  * XP cut) and by the promotion legs (never unassisted evidence).
  */
 
-/** Unit kinds that never serve hints, whatever their check type. */
-const NO_HINT_KINDS: ReadonlySet<string> = new Set(['quiz', 'predict-output', 'study', 'reading', 'explain-back', 'patch-kata', 'review', 'retest', 'written']);
+/**
+ * Unit kinds that never serve hints, whatever their check type. f52 fix: the project kinds
+ * (PROJECT_UNIT_KINDS) and retests are here too: their verified solo passes are promotion legs (a)
+ * and (c) (evidence.ts), and a hinted pass never counts as unassisted, so a hint there would silently
+ * forfeit the leg. They are refused as not-hintable instead.
+ */
+const NO_HINT_KINDS: ReadonlySet<string> = new Set([
+  'quiz',
+  'predict-output',
+  'study',
+  'reading',
+  'explain-back',
+  'patch-kata',
+  'review',
+  'retest',
+  'written',
+  ...PROJECT_UNIT_KINDS,
+]);
 
 function requireUnit(deps: ServiceDeps, id: number): UnitRecord {
   const unit = getUnit(deps.db, id);
@@ -26,7 +43,8 @@ function requireUnit(deps: ServiceDeps, id: number): UnitRecord {
 
 /** The unit's servable hints: [] unless it is a drill / code-check unit (live check earning code XP). */
 function servableFor(deps: ServiceDeps, unit: UnitRecord): string[] {
-  if (NO_HINT_KINDS.has(unit.kind)) return [];
+  // a changed-example variation (variation_of set) is a retest whatever its kind label says
+  if (NO_HINT_KINDS.has(unit.kind) || unit.variationOfUnitId !== null) return [];
   const check = primaryCheck(deps.db, unit.id);
   if (!check || xpKindForCheck(check.type) !== 'code') return [];
   return servableHints(deps.content.get(unit.key)?.hints);
@@ -80,7 +98,10 @@ const REFUSALS: Readonly<Record<Exclude<HintLockReason, 'locked'>, { status: num
   'not-hintable': { status: 409, code: 'WRONG_UNIT_KIND', message: (id) => `unit ${id} serves no hints (drill / code-check units with more than one authored hint only)` },
   'needs-fail': { status: 409, code: 'NOT_ANSWERED', message: (id) => `unit ${id}: submit an attempt first; a hint opens after one failed submit` },
   passed: { status: 409, code: 'ALREADY_ANSWERED', message: (id) => `unit ${id} already has a verified pass; hints are for getting unstuck` },
-  exhausted: { status: 404, code: 'NOT_FOUND', message: (id) => `unit ${id}: every hint was taken; Reveal solution is the next step` },
+  // 409, not 404: the unit and its hints exist, the request conflicts with the ledger (every servable hint is
+  // already taken). ALREADY_ATTESTED is the existing "this once-only step is already done" code, distinct from
+  // `passed` (ALREADY_ANSWERED) so a client can tell the two apart without GET.
+  exhausted: { status: 409, code: 'ALREADY_ATTESTED', message: (id) => `unit ${id}: every hint was taken; Reveal solution is the next step` },
 };
 
 /** POST /units/:id/hint — records the next hint (append-only hint_taken row), then returns it. */

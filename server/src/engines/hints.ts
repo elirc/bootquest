@@ -13,7 +13,7 @@ import { nowMs, type Clock } from './clock.ts';
  *   - each hint taken at/before a passing attempt cuts that pass's XP by 25% (floor 50%; xp.ts). Reveal
  *     stays 0 XP;
  *   - an attempt with a hint taken at/before it is a verified pass but NOT unassisted ladder evidence
- *     (HINT_FREE_SQL, used by the promotion legs in evidence.ts and the solo-pass reads in ladder.ts).
+ *     (UNASSISTED_PASS_SQL, used by the promotion legs in evidence.ts and the solo-pass reads in ladder.ts).
  * Assistance (shared/src/enums.ts) is untouched: hints are a server-side fact read from this table.
  */
 
@@ -26,6 +26,15 @@ export const HINT_XP_FLOOR = 0.5;
  * At-or-before (not strictly before): a hint and a submit in the same millisecond count as hinted.
  */
 export const HINT_FREE_SQL = `NOT EXISTS (SELECT 1 FROM hint_taken h WHERE h.unit_id = a.unit_id AND h.created_at <= a.created_at)`;
+
+/**
+ * SQL predicate (alias `a` = attempt): an UNASSISTED verified pass — a verified pass (VERIFIED_PASS_SQL)
+ * in solo mode (no self-flag, no reveal: attempts.ts deriveMode) with no hint taken at/before it
+ * (HINT_FREE_SQL). Assistance (shared/src/enums.ts) has no 'hint' value, so a hinted pass is stored
+ * solo / assistance 'none'; this predicate is the ONE place that folds the hint ledger in, and every
+ * promotion leg (evidence.ts) and ladder solo-pass read (ladder.ts) uses it.
+ */
+export const UNASSISTED_PASS_SQL = `(a.mode = 'solo' AND ${VERIFIED_PASS_SQL} AND ${HINT_FREE_SQL})`;
 
 /** The authored hints a unit may serve: all but the last one. */
 export function servableHints(authored: readonly string[] | undefined): string[] {

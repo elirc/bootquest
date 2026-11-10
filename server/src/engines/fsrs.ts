@@ -3,6 +3,7 @@ import { ReviewGrade, type CompetencyId } from '@bootquest/shared';
 import type { Db } from '../db/database.ts';
 import { dayKey, nowMs, type Clock } from './clock.ts';
 import { HonestyRuleError } from './attempts.ts';
+import { fundMissHeldSql } from './fund-review-hold.ts';
 import { demote, getRating, MIN_RATING, writeReviewEvidence, type RatingChange } from './evidence.ts';
 import { dayBounds } from './streak.ts';
 import { awardReviewXp, type XpAward } from './xp.ts';
@@ -138,11 +139,13 @@ export function getReviewItem(db: Db, id: number): ReviewItemRow {
 }
 
 /**
- * A review_item row that can be reviewed: not a retest schedule, and not RETIRED (a seeded card
- * whose source item a re-seed removed: store/review-cards.ts). Every due count, queue and the
- * slate's review-clear slot use this predicate (alias-free: `ri.` prefix it where needed).
+ * A review_item row that can be reviewed: not a retest schedule, not RETIRED (a seeded card
+ * whose source item a re-seed removed: store/review-cards.ts), and not a HELD Fundamentals
+ * quiz-miss card (its gate unit has no verified pass yet: engines/fund-review-hold.ts). Every due
+ * count and queue use this predicate; it reads the table by name (`FROM review_item`, unaliased).
+ * streak.ts dueAsOf (the slate's review-clear slot) applies the same rules as of a moment.
  */
-export const REVIEWABLE_SQL = `kind <> 'retest' AND retired_at IS NULL`;
+export const REVIEWABLE_SQL = `kind <> 'retest' AND retired_at IS NULL AND NOT ${fundMissHeldSql('review_item')}`;
 
 export function dueItems(db: Db, now: Clock): ReviewItemRow[] {
   return db.all<ReviewItemRow>(`SELECT * FROM review_item WHERE due_at <= ? AND ${REVIEWABLE_SQL} ORDER BY due_at, id`, nowMs(now));
@@ -211,6 +214,10 @@ export function review(db: Db, itemId: number, grade: ReviewGrade, now: Clock, o
       throw new HonestyRuleError('STALE', `review item ${itemId} was retired: its source item left the seed content in a re-seed`);
     }
     if (item.due_at > t) throw new HonestyRuleError('NOT_DUE', `review item ${itemId} is not due until ${new Date(item.due_at).toISOString()}`);
+    // f52: a held Fundamentals quiz-miss card is not served, so it is not gradeable either
+    if (db.get(`SELECT 1 AS x FROM review_item WHERE id = ? AND ${fundMissHeldSql('review_item')}`, itemId)) {
+      throw new HonestyRuleError('NOT_DUE', `review item ${itemId} is a missed Fundamentals gate question: its card opens once you pass that gate`);
+    }
     const before = deserializeCard(item.fsrs_state);
     const next = schedule(before, g, now);
     db.run(

@@ -6,12 +6,15 @@
 // about 25%. This lint scans every choice-graded item of the quest packs (content/seed/quests), the code
 // packs (content/packs) and the Fundamentals quizzes (content/fundamentals/<track>/topics.json) and FAILS a
 // pack/track when more than 40% of its keyed items have the key as the single longest choice, or more than
-// 40% as the single shortest.
+// 40% as the single shortest. A Fundamentals TOPIC is a closed-book gate of its own, so each topic also gets
+// a row ('fundamentals/<track>/<topic id>') judged with the same 40% limit from 8 keyed items up (a topic
+// with 8 items fails at 4 single-longest keys, i.e. more than 3 of 8).
 //
-// Packs that already exceed it are listed in a SHRINK-ONLY baseline (answer-length-baseline.json): an entry
-// passes while its share is at or below the baselined share; it FAILS when the share rose (worse), and it
-// is STALE (fails: delete the entry) once the pack no longer exceeds the limit or is gone. Never add
-// entries for new content: rebalance its distractors instead.
+// Packs that already exceed it are listed in a RATCHET baseline (answer-length-baseline.json): an entry
+// passes while its share EQUALS the baselined hits/keyed; it FAILS when the share rose (worse), it FAILS as
+// STALE-HIGH when the share fell below the entry (lower the entry to the new hits/keyed, so the gain can
+// never be given back), and it is STALE (fails: delete the entry) once the pack no longer exceeds the limit
+// or is gone. Never add entries for new content: rebalance its distractors instead.
 //
 // Deliberately OUTSIDE the fingerprinted factory / validate code (like answer-positions.ts): it only READS
 // JSON and changes nothing, so it never invalidates a stamp.
@@ -26,6 +29,8 @@ export interface AnswerLengthOptions {
 }
 
 export const DEFAULT_ANSWER_LENGTH_OPTIONS: AnswerLengthOptions = { maxShare: 0.4, minItems: 10 };
+/** One Fundamentals topic (its own gate): the same 40% limit, judged from 8 keyed items. */
+export const DEFAULT_TOPIC_LENGTH_OPTIONS: AnswerLengthOptions = { maxShare: 0.4, minItems: 8 };
 
 export type LengthMetric = 'longest' | 'shortest';
 
@@ -36,7 +41,7 @@ export interface KeyedChoices {
 }
 
 export interface AnswerLengthRow {
-  /** 'quests/<repo>', 'packs/<source>' or 'fundamentals/<track>' */
+  /** 'quests/<repo>', 'packs/<source>', 'fundamentals/<track>' or 'fundamentals/<track>/<topic id>' */
   pack: string;
   keyed: number;
   /** items whose key is the single longest choice */
@@ -136,25 +141,39 @@ export function codePackLengthRows(packsDir: string, options: AnswerLengthOption
     });
 }
 
-/** The Fundamentals quizzes under <fundDir>/<track>/topics.json ({topics:[{quiz:[{choices, answer}]}]}), one row per track. */
-export function fundamentalsLengthRows(fundDir: string, options: AnswerLengthOptions = DEFAULT_ANSWER_LENGTH_OPTIONS): AnswerLengthRow[] {
+interface FundTopicDoc {
+  id?: unknown;
+  quiz?: { choices?: unknown; answer?: unknown }[];
+}
+
+/** The Fundamentals tracks under <fundDir> (each <track>/topics.json), in name order, with their topics. */
+function fundTracks(fundDir: string): { track: string; topics: FundTopicDoc[] }[] {
   if (!existsSync(fundDir)) return [];
   return readdirSync(fundDir, { withFileTypes: true })
     .filter((e) => e.isDirectory() && existsSync(join(fundDir, e.name, 'topics.json')))
     .map((e) => e.name)
     .sort()
-    .map((track) => {
-      const doc = JSON.parse(readFileSync(join(fundDir, track, 'topics.json'), 'utf8')) as { topics?: { quiz?: { choices?: unknown; answer?: unknown }[] }[] };
-      const items = (doc.topics ?? []).flatMap((t) =>
-        (t.quiz ?? []).flatMap((q) =>
-          isStrings(q.choices) && typeof q.answer === 'number' && Number.isInteger(q.answer) && q.answer >= 0 && q.answer < q.choices.length ? [{ choices: q.choices, key: q.answer }] : [],
-        ),
-      );
-      return answerLengthRow(`fundamentals/${track}`, items, options);
-    });
+    .map((track) => ({ track, topics: (JSON.parse(readFileSync(join(fundDir, track, 'topics.json'), 'utf8')) as { topics?: FundTopicDoc[] }).topics ?? [] }));
 }
 
-// ---------------------------------------------------------------- shrink-only baseline
+const topicKeyed = (t: FundTopicDoc): KeyedChoices[] =>
+  (t.quiz ?? []).flatMap((q) =>
+    isStrings(q.choices) && typeof q.answer === 'number' && Number.isInteger(q.answer) && q.answer >= 0 && q.answer < q.choices.length ? [{ choices: q.choices, key: q.answer }] : [],
+  );
+
+/** The Fundamentals quizzes under <fundDir>/<track>/topics.json ({topics:[{quiz:[{choices, answer}]}]}), one row per track. */
+export function fundamentalsLengthRows(fundDir: string, options: AnswerLengthOptions = DEFAULT_ANSWER_LENGTH_OPTIONS): AnswerLengthRow[] {
+  return fundTracks(fundDir).map(({ track, topics }) => answerLengthRow(`fundamentals/${track}`, topics.flatMap(topicKeyed), options));
+}
+
+/** One row per Fundamentals TOPIC ('fundamentals/<track>/<topic id>'; an id-less topic is named by its 1-based position). */
+export function fundamentalsTopicLengthRows(fundDir: string, options: AnswerLengthOptions = DEFAULT_TOPIC_LENGTH_OPTIONS): AnswerLengthRow[] {
+  return fundTracks(fundDir).flatMap(({ track, topics }) =>
+    topics.map((t, i) => answerLengthRow(`fundamentals/${track}/${typeof t.id === 'string' ? t.id : `#${i + 1}`}`, topicKeyed(t), options)),
+  );
+}
+
+// ---------------------------------------------------------------- ratchet baseline
 
 export const ANSWER_LENGTH_BASELINE_FORMAT = 'bootquest-answer-length-baseline@1' as const;
 export const DEFAULT_ANSWER_LENGTH_BASELINE = resolve(import.meta.dirname, 'answer-length-baseline.json');
@@ -162,7 +181,7 @@ export const DEFAULT_ANSWER_LENGTH_BASELINE = resolve(import.meta.dirname, 'answ
 export interface AnswerLengthBaselineEntry {
   pack: string;
   metric: LengthMetric;
-  /** keyed items and hits when baselined: the share may only shrink */
+  /** keyed items and hits when baselined: the current share must EQUAL hits/keyed (a ratchet: lower the entry when it falls) */
   keyed: number;
   hits: number;
   why: string;
@@ -185,10 +204,12 @@ export interface AnswerLengthReport {
   rows: AnswerLengthRow[];
   /** over the limit and not baselined */
   fresh: { row: AnswerLengthRow; metric: LengthMetric }[];
-  /** baselined, still over the limit, at or below the baselined share */
+  /** baselined, still over the limit, exactly at the baselined share */
   known: { row: AnswerLengthRow; metric: LengthMetric }[];
   /** baselined but the share grew */
   worse: string[];
+  /** baselined, still over the limit, but the share fell below the entry: lower the entry (ratchet) */
+  staleHigh: string[];
   /** baselined but no longer over the limit, or the pack is gone: delete the entry */
   stale: string[];
   /** a pack / metric listed twice */
@@ -211,6 +232,7 @@ export function answerLengthReport(rows: readonly AnswerLengthRow[], baseline: A
   const fresh: AnswerLengthReport['fresh'] = [];
   const known: AnswerLengthReport['known'] = [];
   const worse: string[] = [];
+  const staleHigh: string[] = [];
   for (const row of rows) {
     for (const metric of row.exceeds) {
       const e = listed.get(`${row.pack}:${metric}`);
@@ -219,8 +241,13 @@ export function answerLengthReport(rows: readonly AnswerLengthRow[], baseline: A
         continue;
       }
       const now = share(row[metric], row.keyed);
-      if (now > share(e.hits, e.keyed) + 1e-9) {
-        worse.push(`${row.pack} ${metric}: ${pct(now)} (${row[metric]}/${row.keyed}) is above its baselined ${pct(share(e.hits, e.keyed))} (${e.hits}/${e.keyed}); the baseline only shrinks`);
+      const was = share(e.hits, e.keyed);
+      if (now > was + 1e-9) {
+        worse.push(`${row.pack} ${metric}: ${pct(now)} (${row[metric]}/${row.keyed}) is above its baselined ${pct(was)} (${e.hits}/${e.keyed}); the baseline only shrinks`);
+      } else if (now < was - 1e-9) {
+        staleHigh.push(
+          `${row.pack} ${metric}: now ${pct(now)} (${row[metric]}/${row.keyed}), below its baselined ${pct(was)} (${e.hits}/${e.keyed}) — lower the entry to hits ${row[metric]}, keyed ${row.keyed} (the baseline is a ratchet)`,
+        );
       } else known.push({ row, metric });
     }
   }
@@ -232,10 +259,11 @@ export function answerLengthReport(rows: readonly AnswerLengthRow[], baseline: A
       stale.push(`${e.pack} ${e.metric}: now ${pct(share(row[e.metric], row.keyed))} (${row[e.metric]}/${row.keyed}), within the ${pct(options.maxShare)} limit — delete the entry (the baseline only shrinks)`);
     }
   }
-  return { rows: [...rows], fresh, known, worse, stale, duplicates, options };
+  return { rows: [...rows], fresh, known, worse, staleHigh, stale, duplicates, options };
 }
 
-export const answerLengthFails = (r: AnswerLengthReport): boolean => r.fresh.length + r.worse.length + r.stale.length + r.duplicates.length > 0;
+export const answerLengthFails = (r: AnswerLengthReport): boolean =>
+  r.fresh.length + r.worse.length + r.staleHigh.length + r.stale.length + r.duplicates.length > 0;
 
 function pct(x: number): string {
   return `${Math.round(x * 100)}%`;
@@ -245,16 +273,17 @@ export function formatAnswerLengthReport(r: AnswerLengthReport, opts: { all?: bo
   const fmt = (row: AnswerLengthRow, tag: string) =>
     `${tag.padEnd(10)}  ${row.pack.padEnd(46)} ${String(row.keyed).padStart(4)} keyed  longest ${pct(row.longestShare).padStart(4)}  shortest ${pct(row.shortestShare).padStart(4)}`;
   const lines = [
-    `seed:lint:answers — answer-key length bias (fails: > ${pct(r.options.maxShare)} of a pack's keyed items have the key as the single longest, or the single shortest, choice; >= ${r.options.minItems} keyed items)`,
+    `seed:lint:answers — answer-key length bias (fails: > ${pct(r.options.maxShare)} of a pack's keyed items have the key as the single longest, or the single shortest, choice; >= ${r.options.minItems} keyed items, >= ${DEFAULT_TOPIC_LENGTH_OPTIONS.minItems} for a Fundamentals topic)`,
   ];
   if (opts.all) for (const row of r.rows) lines.push(fmt(row, row.exceeds.length ? 'OVER' : 'ok'));
   for (const f of r.fresh) lines.push(`${fmt(f.row, 'BIASED')}  (${f.metric}; not baselined: rebalance the distractors)`);
   for (const k of r.known) lines.push(`${fmt(k.row, 'baselined')}  (${k.metric})`);
   for (const w of r.worse) lines.push(`WORSE       answer-length-baseline ${w}`);
+  for (const h of r.staleHigh) lines.push(`STALE-HIGH  answer-length-baseline ${h}`);
   for (const s of r.stale) lines.push(`STALE       answer-length-baseline ${s}`);
   for (const d of r.duplicates) lines.push(`DUPLICATE   answer-length-baseline ${d}`);
   lines.push(
-    `${r.rows.length} pack(s) scanned, ${r.fresh.length} new over the limit, ${r.known.length} baselined, ${r.worse.length} worse, ${r.stale.length} stale`,
+    `${r.rows.length} pack(s) / topic(s) scanned, ${r.fresh.length} new over the limit, ${r.known.length} baselined, ${r.worse.length} worse, ${r.staleHigh.length} stale-high, ${r.stale.length} stale`,
     `RESULT ${answerLengthFails(r) ? 'BIASED' : 'OK'}`,
   );
   return lines;

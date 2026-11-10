@@ -1,9 +1,9 @@
 import { CompetencyId, EvidenceInput, PROJECT_UNIT_KINDS, PROMOTION_MIN_COVERAGE, type Assistance } from '@bootquest/shared';
 import type { Db } from '../db/database.ts';
-import { getAttempt, HonestyRuleError, isVerifiedPass, VERIFIED_PASS_SQL, type AttemptRow } from './attempts.ts';
+import { getAttempt, HonestyRuleError, isVerifiedPass, type AttemptRow } from './attempts.ts';
 import { DAY_MS, nowMs, type Clock } from './clock.ts';
 import { EB_PASS_SQL } from './eb-score.ts';
-import { HINT_FREE_SQL } from './hints.ts';
+import { UNASSISTED_PASS_SQL } from './hints.ts';
 
 /**
  * Competency ladder (spec §6.2) — the truth layer.
@@ -20,7 +20,7 @@ import { HINT_FREE_SQL } from './hints.ts';
  *   (a) artifact — 'artifact' evidence on an attempt that is a VERIFIED pass
  *       (outcome pass + passing submit run), solo, on a PROJECT_UNIT_KINDS
  *       unit that declares the competency, with no hint taken on that unit at/before the attempt
- *       (f52 U13: a hinted pass is verified but not unassisted; engines/hints.ts HINT_FREE_SQL);
+ *       (f52 U13: a hinted pass is verified but not unassisted; engines/hints.ts UNASSISTED_PASS_SQL);
  *   (b) ITS explain-back — 'explain-back' evidence that PASSES (EB_PASS_SQL:
  *       >= 80% self-scored coverage, weighted for a [wN] set, and no [w3] missed)
  *       on an unassisted 'submitted' answer attempt made at/after the artifact attempt, on the artifact's unit itself or on an
@@ -275,7 +275,7 @@ export function evaluatePromotion(db: Db, competency: CompetencyId, now: Clock):
     `SELECT e.id AS id, a.id AS attemptId, a.unit_id AS unitId, a.created_at AS at
        FROM evidence e JOIN attempt a ON a.id = e.attempt_id JOIN unit u ON u.id = a.unit_id
       WHERE e.competency_id = ? AND e.kind = 'artifact' AND e.verified = 1 AND e.assessor = 'pipeline'
-        AND e.assistance = 'none' AND a.mode = 'solo' AND ${VERIFIED_PASS_SQL} AND ${HINT_FREE_SQL}
+        AND e.assistance = 'none' AND ${UNASSISTED_PASS_SQL}
         AND u.kind IN (${PROJECT_KINDS_SQL})
         AND EXISTS (SELECT 1 FROM unit_competency uc WHERE uc.unit_id = u.id AND uc.competency_id = e.competency_id)
         AND a.created_at > ? AND e.created_at > ? AND e.created_at <= ?
@@ -313,7 +313,7 @@ export function evaluatePromotion(db: Db, competency: CompetencyId, now: Clock):
         `SELECT e.id AS id, a.id AS attemptId, a.unit_id AS unitId, a.created_at AS at
            FROM evidence e JOIN attempt a ON a.id = e.attempt_id JOIN unit u ON u.id = a.unit_id
           WHERE e.competency_id = ? AND e.kind = 'retest' AND e.verified = 1 AND e.assessor = 'pipeline'
-            AND e.assistance = 'none' AND a.mode = 'solo' AND ${VERIFIED_PASS_SQL} AND ${HINT_FREE_SQL}
+            AND e.assistance = 'none' AND ${UNASSISTED_PASS_SQL}
             AND u.kind = 'retest' AND a.id NOT IN (?, ?)
             AND a.created_at >= ? AND a.created_at <= ? AND e.created_at <= ?
           ORDER BY a.created_at, e.id`,

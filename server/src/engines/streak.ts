@@ -2,6 +2,7 @@ import type { Db } from '../db/database.ts';
 import { READING_ATTEST_SQL, VERIFIED_PASS_SQL } from './attempts.ts';
 import { campaignStepAvailable } from './campaign.ts';
 import { addDays, dayKey, nowMs, type Clock } from './clock.ts';
+import { fundMissHeldSql } from './fund-review-hold.ts';
 import { xpOnDay } from './xp.ts';
 
 /**
@@ -285,15 +286,19 @@ export function campaignStepDone(db: Db, from: number, to: number): boolean {
  * Review items due as of moment T, rebuilt from review_log (reviews after T are undone).
  * Retirement is judged AS OF T too (server review F4): a card retired after T was live at T,
  * so retiring it later (a re-seed removed its item) never rewrites a past day's review-clear.
+ * A held Fundamentals quiz-miss card (engines/fund-review-hold.ts) is judged as of T as well: it
+ * counts only once its gate unit had a verified pass at/before T.
  */
 export function dueAsOf(db: Db, T: number): number {
   return (
     db.get<{ n: number }>(
       `SELECT COUNT(*) AS n FROM review_item ri
         WHERE ri.created_at <= ? AND ri.kind <> 'retest' AND (ri.retired_at IS NULL OR ri.retired_at > ?)
+          AND NOT ${fundMissHeldSql('ri', '?')}
           AND COALESCE((SELECT rl.prev_due_at FROM review_log rl
                          WHERE rl.review_item_id = ri.id AND rl.reviewed_at > ?
                          ORDER BY rl.reviewed_at, rl.id LIMIT 1), ri.due_at) <= ?`,
+      T,
       T,
       T,
       T,
