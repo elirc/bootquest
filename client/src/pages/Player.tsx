@@ -149,7 +149,7 @@ function Player({ detail }: { detail: UnitDetail }) {
   const showIns = twoCol || insMain !== null || hasRefs || hasLegs || practiceRetest;
   const insPanel = showIns && (
     <section className="panel player-instructions" aria-labelledby="ins-title">
-      <h2 className="panel-title" id="ins-title">
+      <h2 className="panel-title" id="ins-title" tabIndex={-1}>
         {isFundTopic ? 'Lesson' : 'Instructions'}
       </h2>
       {insMain}
