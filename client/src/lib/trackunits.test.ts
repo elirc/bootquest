@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { UnitKind, UnitSummary } from '../api/types';
-import { NO_FILTER, SECTION_LABEL, groupLabelOf, groupTotals, groupUnits, sectionCounts, sectionOf, type UnitFilter } from './trackunits';
+import { NO_FILTER, SECTION_LABEL, groupLabelOf, groupTotals, groupUnits, moduleNumberOf, sectionCounts, sectionOf, tierGroups, tierLabels, type UnitFilter } from './trackunits';
 
 let nextId = 9000;
 function unit(over: Partial<UnitSummary> = {}): UnitSummary {
@@ -222,5 +222,41 @@ describe('fund wave: Fundamentals units', () => {
     expect(groupUnits(units, { ...NO_FILTER, section: 'fundamentals' }).flatMap((g) => g.units.map((u) => u.key))).toEqual(['fund/js/01-a', 'fund-js/01-a/01-x']);
     expect(groupUnits(units, { ...NO_FILTER, section: 'drill' }).flatMap((g) => g.units.map((u) => u.key))).toEqual(['jstrain/01-x/y']);
     expect(SECTION_LABEL.fundamentals).toBe('Fundamentals');
+  });
+});
+
+describe('f52 U14: core drill modules vs repo practice', () => {
+  it('moduleNumberOf reads the module number from numbered module keys only', () => {
+    expect(moduleNumberOf('sysdrills/01-estimation/01-qps-from-dau')).toBe(1);
+    expect(moduleNumberOf('sysdrills/12-search/x')).toBe(12);
+    expect(moduleNumberOf('jstrain/03_async_flow/p2')).toBe(3);
+    expect(moduleNumberOf('ladder/explain-back/bazaar/abc')).toBeNull();
+    expect(moduleNumberOf('ladder/g2/atlas-net/f06a')).toBeNull();
+    expect(moduleNumberOf('gh:elirc/signalpost:U01')).toBeNull();
+    expect(moduleNumberOf('bootforge/js-fundamentals/values/q1')).toBeNull();
+    expect(moduleNumberOf('fund-js/01-values-types-and-coercion/01-x')).toBeNull();
+    expect(moduleNumberOf('agentic/g3-live-delegation')).toBeNull();
+  });
+
+  it('tierGroups: numbered modules first by number (not by label), then the rest by label', () => {
+    const us = [
+      unit({ key: 'sysdrills/10-capacity/a' }),
+      unit({ key: 'sysdrills/02-caching/a' }),
+      unit({ key: 'ladder/explain-back/zeta/h', kind: 'explain-back' }),
+      unit({ key: 'sysdrills/01-estimation/a' }),
+      unit({ key: 'ladder/explain-back/alpha/h', kind: 'explain-back' }),
+    ];
+    const tiers = tierGroups(groupUnits(us, filter()));
+    expect(tiers.map((t) => [t.tier, t.groups.map((g) => g.label)])).toEqual([
+      ['core', ['estimation', 'caching', 'capacity']],
+      ['repo', ['alpha', 'zeta']],
+    ]);
+    expect(tierGroups(groupUnits(us.slice(2, 3), filter())).map((t) => t.tier)).toEqual(['repo']);
+    expect(tierGroups([])).toEqual([]);
+  });
+
+  it('tier headings per track', () => {
+    expect(tierLabels('sysdesign')).toEqual({ core: 'Core drills', repo: 'Design a real system' });
+    expect(tierLabels('agentic')).toEqual({ core: 'Core drills', repo: 'Real-repo practice' });
   });
 });

@@ -15,7 +15,19 @@ import { useApi } from '../api/context';
 import type { TrackId, UnitSummary } from '../api/types';
 import { Icon } from '../components/Icon';
 import { Chip, LoadState } from '../components/ui';
-import { NO_FILTER, SECTION_LABEL, groupTotals, groupUnits, sectionCounts, type UnitFilter, type UnitSection } from '../lib/trackunits';
+import {
+  NO_FILTER,
+  SECTION_LABEL,
+  groupTotals,
+  groupUnits,
+  sectionCounts,
+  tierGroups,
+  tierLabels,
+  type GroupTier,
+  type UnitFilter,
+  type UnitGroup,
+  type UnitSection,
+} from '../lib/trackunits';
 import { useAsync } from '../lib/useAsync';
 import { useDebouncedValue } from '../lib/useDebouncedValue';
 
@@ -68,7 +80,8 @@ function TrackUnitsBody({ trackId, variant }: { trackId: TrackId; variant: Varia
         // errors still render collapsed so the Retry affordance (and header count) can recover
         (expanded || res.status === 'error') && <LoadState error={res.error} onRetry={res.reload} minHeight={expanded ? 240 : undefined} />
       ) : (
-        expanded && <UnitBrowser units={res.data.units} />
+        // f52 U14: a track without acts lists its numbered drill modules first, under headings
+        expanded && <UnitBrowser units={res.data.units} tiers={variant === 'primary' ? tierLabels(trackId) : undefined} />
       )}
     </section>
   );
@@ -85,12 +98,17 @@ const toggled = (set: ReadonlySet<string>, label: string): Set<string> => {
   return next;
 };
 
-function UnitBrowser({ units }: { units: UnitSummary[] }) {
+function UnitBrowser({ units, tiers }: { units: UnitSummary[]; tiers?: Record<GroupTier, string> }) {
   const [filter, setFilter] = useState<UnitFilter>(NO_FILTER);
   // groups the learner opened (no query), and groups they closed while a query auto-opened them
   const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set());
   const [closedInQuery, setClosedInQuery] = useState<ReadonlySet<string>>(() => new Set());
   const groups = useMemo(() => groupUnits(units, filter), [units, filter]);
+  // the tier sections (tracks without acts) or one untitled section in label order
+  const sections = useMemo(
+    (): { tier: GroupTier | null; groups: UnitGroup[] }[] => (tiers ? tierGroups(groups) : [{ tier: null, groups }]),
+    [groups, tiers],
+  );
   const listIds = useId();
   const counts = useMemo(() => sectionCounts(units), [units]);
   // headers show each group's UNFILTERED done/total (so they agree with the count line below),
@@ -167,31 +185,36 @@ function UnitBrowser({ units }: { units: UnitSummary[] }) {
           </button>
         </div>
       ) : (
-        groups.map((g, i) => {
-          const t = totals.get(g.label)!;
-          const open = isOpen(g.label);
-          const listId = `${listIds}-${i}`;
-          return (
-            <section className="tu-group" key={g.label} data-group={g.label}>
-              <h3>
-                {/* a j/k stop (data-step) like the rows, so the keyboard reaches a collapsed group */}
-                <button type="button" aria-expanded={open} aria-controls={listId} data-step data-state="group" onClick={() => toggle(g.label)}>
-                  {g.label}{' '}
-                  <span className="muted">{`${t.done}/${t.total} done${g.units.length < t.total ? ` · ${g.units.length} shown` : ''}`}</span>
-                </button>
-              </h3>
-              {/* rows exist only while the group is open (a 4,000-unit track renders headers only) */}
-              <ul className="tu-list" id={listId} hidden={!open}>
-                {open &&
-                  g.units.map((u) => (
-                    <li key={u.id}>
-                      <UnitRow unit={u} />
-                    </li>
-                  ))}
-              </ul>
-            </section>
-          );
-        })
+        sections.map(({ tier, groups: tierGroupsList }, si) => (
+          <div className="tu-tier" key={tier ?? 'all'} data-tier={tier ?? undefined}>
+            {tier && tiers && <h3 className="tu-tier-head">{tiers[tier]}</h3>}
+            {tierGroupsList.map((g, gi) => {
+              const t = totals.get(g.label)!;
+              const open = isOpen(g.label);
+              const listId = `${listIds}-${si}-${gi}`;
+              return (
+                <section className="tu-group" key={g.label} data-group={g.label}>
+                  <h3>
+                    {/* a j/k stop (data-step) like the rows, so the keyboard reaches a collapsed group */}
+                    <button type="button" aria-expanded={open} aria-controls={listId} data-step data-state="group" onClick={() => toggle(g.label)}>
+                      {g.label}{' '}
+                      <span className="muted">{`${t.done}/${t.total} done${g.units.length < t.total ? ` · ${g.units.length} shown` : ''}`}</span>
+                    </button>
+                  </h3>
+                  {/* rows exist only while the group is open (a 4,000-unit track renders headers only) */}
+                  <ul className="tu-list" id={listId} hidden={!open}>
+                    {open &&
+                      g.units.map((u) => (
+                        <li key={u.id}>
+                          <UnitRow unit={u} />
+                        </li>
+                      ))}
+                  </ul>
+                </section>
+              );
+            })}
+          </div>
+        ))
       )}
     </>
   );

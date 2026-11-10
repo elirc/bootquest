@@ -117,7 +117,8 @@ describe('track units: campaign-less track (primary)', () => {
       const count = await within(sec).findByTestId('track-units-count');
       const toolbar = within(sec.querySelector<HTMLElement>('.tu-toolbar')!);
       const kinds = within(toolbar.getByRole('group', { name: 'Filter by kind' }));
-      const groupHeads = () => [...sec.querySelectorAll('h3')].map((h) => h.textContent);
+      // f52 U14: the group headers (the tier headings above them are h3s too)
+      const groupHeads = () => [...sec.querySelectorAll('.tu-group > h3')].map((h) => h.textContent);
       // ab S4: groups start collapsed; these tests read the rows, so open every group first
       expect(rows()).toHaveLength(0);
       await r.user.click(expandAll());
@@ -394,5 +395,53 @@ describe('track units: #units deep link (the dashboard "Browse all" link)', () =
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
     expect(document.activeElement).not.toBe(toggle);
     expect(scrolled).toEqual([]);
+  });
+});
+
+describe('f52 U14: tracks without acts list core drill modules first', () => {
+  const tierHeads = (sec: HTMLElement) => [...sec.querySelectorAll('.tu-tier-head')].map((h) => h.textContent);
+  const groupOrder = (sec: HTMLElement) => [...sec.querySelectorAll<HTMLElement>('.tu-group')].map((g) => g.dataset.group);
+
+  it('sysdesign: "Core drills" in module-number order, then "Design a real system" (repo groups by name)', async () => {
+    renderApp('/campaign/sysdesign', withUnits('sysdesign', generated()));
+    const sec = await section();
+    await within(sec).findByTestId('track-units-count');
+    expect(tierHeads(sec)).toEqual(['Core drills', 'Design a real system']);
+    const order = groupOrder(sec);
+    expect(order.slice(0, 10)).toEqual(['estimation', 'caching', 'queues', 'sharding', 'replication', 'consistency', 'rate limiting', 'storage', 'search', 'observability']);
+    expect(order[10]).toBe('bazaar');
+    expect(order).toHaveLength(39);
+    const [core, repo] = [...sec.querySelectorAll<HTMLElement>('.tu-tier')];
+    expect(core).toHaveAttribute('data-tier', 'core');
+    expect(core!.querySelectorAll('.tu-group')).toHaveLength(10);
+    expect(repo).toHaveAttribute('data-tier', 'repo');
+    expect(repo!.querySelectorAll('.tu-group')).toHaveLength(29);
+  });
+
+  it('agentic: repo-based groups sit under "Real-repo practice"; a tier with no group has no heading', async () => {
+    const units: UnitSummary[] = [
+      { id: 951, key: 'ladder/g2/atlas-net/aa', trackId: 'agentic', kind: 'explain-back', title: 'Brief A', difficulty: null, state: 'available', revealed: false, prerequisites: [] },
+      { id: 952, key: 'agentic/g3-live-delegation', trackId: 'agentic', kind: 'program-unit', title: 'Live delegation', difficulty: null, state: 'available', revealed: false, prerequisites: [] },
+    ];
+    renderApp('/campaign/agentic', withUnits('agentic', units));
+    const sec = await section();
+    await within(sec).findByTestId('track-units-count');
+    expect(tierHeads(sec)).toEqual(['Real-repo practice']);
+  });
+
+  it('a filter keeps the order and drops an emptied tier heading', async () => {
+    const { user } = renderApp('/campaign/sysdesign', withUnits('sysdesign', generated()));
+    const sec = await section();
+    await within(sec).findByTestId('track-units-count');
+    await user.type(within(sec.querySelector<HTMLElement>('.tu-toolbar')!).getByRole('searchbox', { name: 'Filter units' }), 'bazaar');
+    await waitFor(() => expect(tierHeads(sec)).toEqual(['Design a real system']));
+  });
+
+  it('a track with acts keeps one alphabetical list, no tier headings', async () => {
+    const { user } = renderApp('/campaign/js');
+    const sec = await section();
+    await user.click(within(sec).getByRole('button', { name: /Practice units/ }));
+    await within(sec).findByTestId('track-units-count');
+    expect(tierHeads(sec)).toEqual([]);
   });
 });
