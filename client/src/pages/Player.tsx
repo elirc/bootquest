@@ -6,6 +6,7 @@ import {
   ApiError,
   isApiError,
   type CanonicalRunResult,
+  type HintsResponse,
   type PublicCheck,
   type RatingChangeDto,
   type RunFailure,
@@ -30,6 +31,7 @@ import { isFundKey, isFundTopicKey } from '../lib/fundamentals';
 import { LearnMoreButton } from '../components/LearnMore';
 import { WrittenPane } from './WrittenPane';
 import { CodeEditor } from './Player/Editor';
+import { HintBar, hintedXpNote } from './Player/HintBar';
 import { NextStep } from './Player/NextStep';
 import { RevealPanel, promotionLeg, type Solution } from './Player/RevealFlow';
 
@@ -414,9 +416,11 @@ function HelpCheckbox({ checked, onChange }: { checked: boolean; onChange: (v: b
   );
 }
 
-function XpLine({ submit }: { submit: SubmitResponse }) {
+function XpLine({ submit, hintNote = '' }: { submit: SubmitResponse; hintNote?: string }) {
   const xp = submit.xp;
-  const text = xp === null ? '0 XP' : xp.amount > 0 ? `+${xp.amount} XP` : xp.reason ? `0 XP (${xp.reason})` : '0 XP';
+  // wave B: a hinted pass says what the hints cost, e.g. "+7 XP (75% · 1 hint)"
+  const text =
+    xp === null ? '0 XP' : xp.amount > 0 ? `+${xp.amount} XP${hintNote ? ` ${hintNote}` : ''}` : xp.reason ? `0 XP (${xp.reason})` : '0 XP';
   return (
     <span className="verdict-xp">
       {text}
@@ -475,7 +479,8 @@ const show = (v: unknown): string => (typeof v === 'string' ? v : JSON.stringify
 
 // ---------------------------------------------------------------- code drills
 
-type Outcome = { kind: 'run'; result: CanonicalRunResult } | { kind: 'submit'; submit: SubmitResponse };
+/** `hintNote`: what the hints taken before this submit cost its pass XP ('' when none) */
+type Outcome = { kind: 'run'; result: CanonicalRunResult } | { kind: 'submit'; submit: SubmitResponse; hintNote: string };
 
 /** localStorage key (under bq:) of the last attempt this browser recorded on a unit. */
 const lastAttemptKey = (unitId: number) => `last-attempt:v1:${unitId}`;
@@ -511,6 +516,9 @@ function CodePane({ detail, spec }: { detail: UnitDetail; spec: PublicCheck }) {
   const [error, setError] = useState<string | null>(null);
   const language = languageOf(spec) ?? 'code';
   const refreshTracks = useTracksRefresh();
+  // wave B hints: the bar's latest state (for the XP line of a hinted pass); re-read after every submit
+  const hintState = useRef<HintsResponse | null>(null);
+  const [hintRefresh, setHintRefresh] = useState(0);
 
   // Leaving only loses work when it exists nowhere else: storage refused the draft AND it differs
   // from what is already safe (the starter or the last recorded submit).
@@ -582,7 +590,8 @@ function CodePane({ detail, spec }: { detail: UnitDetail; spec: PublicCheck }) {
       if (kind === 'run') setOutcome({ kind, result: (await api.runUnit(id, { code })).result });
       else {
         const submit = await api.submitUnit(id, { code, selfAssisted: assisted });
-        setOutcome({ kind, submit });
+        setOutcome({ kind, submit, hintNote: submit.verdict === 'pass' ? hintedXpNote(hintState.current) : '' });
+        setHintRefresh((n) => n + 1); // a failed submit opens the first hint; a pass closes them
         storedSet(lastAttemptKey(id), String(submit.attempt.id));
         setLastAttempt(submit.attempt.id);
         setLoaded(false); // a new attempt to offer (an earlier "loaded" referred to an older one)
@@ -695,6 +704,7 @@ function CodePane({ detail, spec }: { detail: UnitDetail; spec: PublicCheck }) {
           <Kbd>Enter</Kbd>
         </button>
       </div>
+      <HintBar unitId={id} refreshKey={hintRefresh} onState={(h) => (hintState.current = h)} />
       <Results outcome={outcome} error={error} busy={busy !== null} unit={detail.unit} />
     </section>
   );
@@ -712,7 +722,8 @@ function Results({ outcome, error, busy, unit }: { outcome: Outcome | null; erro
       ) : !result || !verdict ? (
         <div className="results-empty">
           <p>
-            Run checks to see results here. Runs are free and are not saved; <strong>Submit</strong> saves an attempt you can&apos;t change afterwards.
+            Run checks to see results here. Runs are free and are not saved; <strong>Submit</strong> saves an attempt you can&apos;t change afterwards. A failed Submit
+            costs nothing.
           </p>
         </div>
       ) : (
@@ -724,7 +735,7 @@ function Results({ outcome, error, busy, unit }: { outcome: Outcome | null; erro
               {result.failures.length} failing · {result.durationMs} ms
               {outcome?.kind === 'run' ? ' · practice run — not saved' : ''}
             </span>
-            {outcome?.kind === 'submit' && <XpLine submit={outcome.submit} />}
+            {outcome?.kind === 'submit' && <XpLine submit={outcome.submit} hintNote={outcome.hintNote} />}
           </div>
           {outcome?.kind === 'submit' && <SubmitFollowUp submit={outcome.submit} unit={unit} />}
           {result.failures.length > 0 && (
