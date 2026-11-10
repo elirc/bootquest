@@ -620,3 +620,25 @@ describe('failed tests in the results', () => {
     expect(pre.textContent).toBe('TypeError: xs.reduce is not a function\n    at groupBy (solution.js:1:1)');
   });
 });
+
+// U18: learner-facing copy
+describe('copy (U18)', () => {
+  it('a run is a "practice run — not saved"; a submit says the attempt was saved', async () => {
+    const { user } = renderApp(`/play/${DRILL}`);
+    await editorBox();
+    const results = screen.getByTestId('results');
+    expect(results).toHaveTextContent("Runs are free and are not saved; Submit saves an attempt you can't change afterwards.");
+    await user.click(screen.getByRole('button', { name: /^Run/ }));
+    expect(await within(results).findByText(/practice run — not saved/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /Submit/ }));
+    expect(await within(results).findByText(/solo attempt saved/)).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/immutable|not recorded/);
+  });
+
+  it('the kata says "Submit findings", with "You can\'t edit them afterwards" under it', async () => {
+    renderApp('/play/109');
+    const button = await screen.findByRole('button', { name: 'Submit findings' });
+    expect(button).not.toHaveTextContent('immutable');
+    expect(screen.getByTestId('findings-final')).toHaveTextContent("You can't edit them afterwards.");
+  });
+});

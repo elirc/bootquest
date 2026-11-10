@@ -422,7 +422,7 @@ function XpLine({ submit }: { submit: SubmitResponse }) {
       {text}
       {' · '}
       {submit.attempt.mode}
-      {' attempt recorded'}
+      {' attempt saved'}
     </span>
   );
 }
@@ -712,7 +712,7 @@ function Results({ outcome, error, busy, unit }: { outcome: Outcome | null; erro
       ) : !result || !verdict ? (
         <div className="results-empty">
           <p>
-            Run checks to see structured results here. Runs are free; <strong>Submit</strong> records an immutable attempt.
+            Run checks to see results here. Runs are free and are not saved; <strong>Submit</strong> saves an attempt you can&apos;t change afterwards.
           </p>
         </div>
       ) : (
@@ -722,7 +722,7 @@ function Results({ outcome, error, busy, unit }: { outcome: Outcome | null; erro
             <strong>{VERDICT_TEXT[verdict]}</strong>
             <span className="muted">
               {result.failures.length} failing · {result.durationMs} ms
-              {outcome?.kind === 'run' ? ' · practice run (not recorded)' : ''}
+              {outcome?.kind === 'run' ? ' · practice run — not saved' : ''}
             </span>
             {outcome?.kind === 'submit' && <XpLine submit={outcome.submit} />}
           </div>
@@ -970,8 +970,8 @@ function QuizPane({
           error={error}
           idle={
             byChoice
-              ? `Pick an answer with 1–${choices.length}, then Enter. Every check is a recorded attempt.`
-              : 'Type your answer, then press Enter to check it. Every check is a recorded attempt.'
+              ? `Pick an answer with 1–${choices.length}, then Enter. Every check is saved as an attempt.`
+              : 'Type your answer, then press Enter to check it. Every check is saved as an attempt.'
           }
         />
         {submit && !error && <SubmitFollowUp submit={submit} unit={detail.unit} />}
