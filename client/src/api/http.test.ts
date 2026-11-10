@@ -66,6 +66,15 @@ describe('http client: real routes', () => {
     expect(calls[12]!.body).toEqual({ grade: 'good' });
   });
 
+  it('f52 hints: GET /units/:id/hints, POST /units/:id/hint with an empty body', async () => {
+    const { calls, impl } = fakeFetch(() => ok({}));
+    const api = createHttpApi('/api', impl);
+    await api.getHints(7);
+    await api.takeHint(7);
+    expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual(['GET /api/units/7/hints', 'POST /api/units/7/hint']);
+    expect(calls[1]!.body).toEqual({});
+  });
+
   it('hits the W6 ladder routes with whitelisted bodies', async () => {
     const { calls, impl } = fakeFetch(() => ok({}));
     const api = createHttpApi('/api', impl);

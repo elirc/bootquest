@@ -83,6 +83,9 @@ import type { DashboardResponseExt, DrillNextResponse, SlateItemDtoExt, UnitSear
 // fund wave: the Fundamentals ladder (GET /tracks/:id/fundamentals)
 import type { FundamentalsResponse, FundTopicDto } from '@bootquest/shared/api-ext';
 export type { FundamentalsResponse, FundTopicDto };
+// f52 S: progressive hints (GET /units/:id/hints, POST /units/:id/hint)
+import type { HintLockReason, HintsResponse, HintTakenResponse } from '@bootquest/shared/api-ext';
+export type { HintLockReason, HintsResponse, HintTakenResponse };
 
 // ---------------------------------------------------------------- re-exported wire types
 
@@ -337,6 +340,16 @@ export interface BootQuestApi {
   searchUnits(q: string, limit?: number): Promise<UnitSearchResponse>;
   /** GET /api/drills/next?tracks=a,b&mode=mixed — the next passable drill, rotating deterministically over the tracks. */
   getNextDrill(tracks: readonly TrackId[]): Promise<DrillNextResponse>;
+
+  // ---- f52 S: progressive hints (drill / code-check units; never the last authored hint)
+  /** GET /api/units/:id/hints — servable count, the texts already taken, whether the next one is open (and why not). */
+  getHints(unitId: number): Promise<HintsResponse>;
+  /**
+   * POST /api/units/:id/hint — records and returns the next hint. Refusals: 409 NOT_ANSWERED (no failed submit
+   * yet), 409 ALREADY_ANSWERED (already passed), 404 NOT_FOUND (every hint taken), 409 WRONG_UNIT_KIND (no
+   * hints on this unit), 403 TRACK_LOCKED / ACT_LOCKED. Each hint cuts the eventual pass XP by 25% (floor 50%).
+   */
+  takeHint(unitId: number): Promise<HintTakenResponse>;
 }
 
 /** Codes the client can raise itself on top of the server's envelope codes. */

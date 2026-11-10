@@ -374,7 +374,8 @@ async function grade(deps: ServiceDeps, spec: CheckSpec, submission: LearnerSubm
   }
 }
 
-function assertTrackOpen(db: Db, unit: UnitRecord): void {
+/** 403 TRACK_LOCKED / ACT_LOCKED: the unit is not playable (hints-service.ts reuses it). */
+export function assertTrackOpen(db: Db, unit: UnitRecord): void {
   if (getTrack(db, unit.trackId)?.locked) throw new HttpError(403, 'TRACK_LOCKED', `track ${unit.trackId} is locked`);
   // W5b: a campaign quest's unit is playable only once its act is unlocked (derived, engines/campaign.ts)
   if (questUnitUnlocked(db, unit.id) === false) {

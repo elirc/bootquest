@@ -90,6 +90,9 @@ import {
   type SlateItem,
   type UnitSearchHit,
   type UnitSearchResponse,
+  type HintLockReason,
+  type HintsResponse,
+  type HintTakenResponse,
 } from './types';
 import type { XpByTrack } from '@bootquest/shared/api';
 import { G1_MIN_DEFECTS, G1_TARGET_RATE, PROMOTION_MIN_COVERAGE } from '@bootquest/shared/thresholds';
@@ -139,6 +142,16 @@ const GRADE_DAYS: Record<ReviewGrade, number> = { again: 0, hard: 1, good: 3, ea
 const NOW = Date.parse(`${fx.dashboard.today}T23:00:00Z`);
 const READING_XP = 5;
 const SUBMIT_KEYS = new Set(['code', 'answer', 'answers', 'selfAssisted']);
+/**
+ * f52 S: authored hints of the fixture drills (mock-only; the server reads `hints` from the pack content).
+ * Like the server, the LAST authored hint is never served: 3 authored -> 2 servable.
+ */
+const MOCK_HINTS: Readonly<Record<number, readonly string[]>> = {
+  102: ['Group first, then count: what should the accumulator start as?', 'reduce((acc, x) => ..., {}) - read the key from each item and bump acc[key].', 'full solution (never served)'],
+  202: ['GroupBy takes a key selector; what is the key here?', 'Select a new { Key, Count } per group, then order by Count descending.', 'full solution (never served)'],
+};
+const NO_HINT_KINDS = new Set(['quiz', 'predict-output', 'study', 'reading', 'explain-back', 'patch-kata', 'review', 'retest', 'written']);
+const CODE_CHECKS = new Set(['drill-js', 'drill-cs', 'drill-java', 'guided-step', 'http', 'repo', 'node-test-file', 'self-run', 'vitest-project']);
 
 const err = (status: number, code: ApiError['code'], message: string) => new ApiError(status, code, message);
 
@@ -277,6 +290,10 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
   const soloPassedUnits = new Set<number>();
   const graded = new Set<number>();
   const awarded = new Set<number>();
+  // f52 S hints: unitId -> hints taken (count); units with a failed graded submit
+  const hintsTaken = new Map<number, number>();
+  const failedUnits = new Set<number>();
+  const hintXpPct = (n: number) => Math.max(50, 100 - 25 * n);
   const revealed = new Map<number, number>(); // unitId -> reveal attemptId
   const attested = new Set<number>();
   let nextId = 5000;
@@ -460,6 +477,37 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
     tracks: trackList.filter((t) => !t.locked && t.id !== 'agentic'),
     start: opts.slateSettings,
   });
+  /** f52 S: the hint state of a unit (server/src/api/hints-service.ts hintState, same precedence). */
+  function hintView(id: number): { u: UnitSummary; servable: readonly string[]; reason: HintLockReason | null; view: HintsResponse } {
+    const u = findUnit(id);
+    if (!u) throw err(404, 'NOT_FOUND', `unit ${id} not found`);
+    const spec = detail(u).check?.spec ?? null;
+    const authored = MOCK_HINTS[id] ?? [];
+    const servable = !NO_HINT_KINDS.has(u.kind) && spec && CODE_CHECKS.has(spec.type) && authored.length > 1 ? authored.slice(0, -1) : [];
+    const taken = Math.min(hintsTaken.get(id) ?? 0, servable.length);
+    const reason: HintLockReason | null =
+      servable.length === 0
+        ? 'not-hintable'
+        : trackOf(u.trackId).locked
+          ? 'locked'
+          : passedUnits.has(id) || u.state === 'done'
+            ? 'passed'
+            : taken >= servable.length
+              ? 'exhausted'
+              : !failedUnits.has(id)
+                ? 'needs-fail'
+                : null;
+    const view: HintsResponse = {
+      unitId: id,
+      total: servable.length,
+      taken: servable.slice(0, taken),
+      nextAvailable: reason === null,
+      ...(reason !== null ? { lockedReason: reason } : {}),
+      xpPct: hintXpPct(taken),
+    };
+    return { u, servable, reason, view };
+  }
+
   // ---- ab S4 find things: mirrors server/src/api/find-service.ts over the fixture state
   /** first passable drill of a track: a drill, available (not done, prerequisites met), never revealed */
   const firstOpenDrill = (t: string): UnitSummary | null => {
@@ -880,13 +928,14 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
           if (wasRevealed) xp = { id: nextId++, amount: 0, reason: 'revealed' };
           else if (awarded.has(id)) xp = { id: nextId++, amount: 0, reason: 'already-awarded' };
           else {
-            xp = { id: nextId++, amount: xpFor(u, spec!), reason: null };
+            // f52 S: each hint taken before the pass cuts its XP by 25% (floor 50%), like server/src/engines/xp.ts
+            xp = { id: nextId++, amount: Math.floor((xpFor(u, spec!) * hintXpPct(hintsTaken.get(id) ?? 0)) / 100), reason: null };
             awarded.add(id);
           }
           u.state = 'done';
           passedUnits.add(id);
           if (mode === 'solo') soloPassedUnits.add(id);
-        }
+        } else failedUnits.add(id);
         const attemptId = nextId++;
         recordGraded(u, spec!.type, attemptId, mode, result.pass);
         return keep({
@@ -1427,6 +1476,21 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
           if (u) return { mode: 'mixed', tracks: [...tracks], startIndex, unit: { id: u.id, key: u.key, trackId: u.trackId, title: u.title, difficulty: u.difficulty } };
         }
         return { mode: 'mixed', tracks: [...tracks], startIndex, unit: null };
+      }),
+
+    // ---- f52 S: progressive hints, mirrors server/src/api/hints-service.ts
+    getHints: (id) => wrap((): HintsResponse => hintView(id).view),
+    takeHint: (id) =>
+      wrap((): HintTakenResponse => {
+        const { u, servable, reason } = hintView(id);
+        if (reason === 'locked') throw err(403, 'TRACK_LOCKED', `track ${u.trackId} is locked`);
+        if (reason === 'not-hintable') throw err(409, 'WRONG_UNIT_KIND', `unit ${id} serves no hints`);
+        if (reason === 'passed') throw err(409, 'ALREADY_ANSWERED', `unit ${id} already has a verified pass`);
+        if (reason === 'exhausted') throw err(404, 'NOT_FOUND', `unit ${id}: every hint was taken`);
+        if (reason === 'needs-fail') throw err(409, 'NOT_ANSWERED', `unit ${id}: a hint opens after one failed submit`);
+        const index = (hintsTaken.get(id) ?? 0) + 1;
+        hintsTaken.set(id, index);
+        return { ...hintView(id).view, hint: { index, text: servable[index - 1]! } };
       }),
 
     reseedItem: (unitId) => {

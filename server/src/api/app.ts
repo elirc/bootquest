@@ -61,8 +61,9 @@ import { defaultRunners, type RunnerRegistry } from './runners.ts';
 import { emptySeedItemStore, type SeedItemStore } from '../store/seed-items.ts';
 import { ladderUnits } from '../store/ladder.ts';
 import { registerSettingsRoutes } from './settings-routes.ts';
-import { FundamentalsResponse } from '@bootquest/shared/api-ext';
+import { FundamentalsResponse, HintsResponse, HintTakenResponse } from '@bootquest/shared/api-ext';
 import { getFundamentals } from './fundamentals-service.ts';
+import { getHints, takeHint } from './hints-service.ts';
 import {
   answerExplainBack,
   getAttemptDetail,
@@ -257,6 +258,20 @@ export function createApp(opts: AppOptions): Express {
     validate(EmptyQuery, req.query, 'query');
     validate(EmptyBody, req.body, 'body');
     sendJson(res, 200, revealUnit(deps, id));
+  }));
+
+  // f52 U13: progressive hints (drill / code-check units; after a failed submit; never the last authored hint)
+  router.get('/units/:id/hints', asyncRoute((req, res) => {
+    const { id } = validate(UnitIdParams, req.params, 'params');
+    validate(EmptyQuery, req.query, 'query');
+    sendJson(res, 200, HintsResponse.parse(getHints(deps, id)));
+  }));
+
+  router.post('/units/:id/hint', asyncRoute((req, res) => {
+    const { id } = validate(UnitIdParams, req.params, 'params');
+    validate(EmptyQuery, req.query, 'query');
+    validate(EmptyBody, req.body ?? {}, 'body');
+    sendJson(res, 200, HintTakenResponse.parse(takeHint(deps, id)));
   }));
 
   router.post('/units/:id/self-attest', asyncRoute((req, res) => {

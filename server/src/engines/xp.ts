@@ -3,6 +3,7 @@ import type { Db } from '../db/database.ts';
 import { getAttempt, HonestyRuleError, isRevealed, isVerifiedPass, READING_ATTEST_SQL } from './attempts.ts';
 import { dayKey, nowMs, type Clock } from './clock.ts';
 import { EB_PASS_SQL } from './eb-score.ts';
+import { hintsTakenAtOrBefore, hintXpMultiplier } from './hints.ts';
 import { PROMOTION_MIN_COVERAGE } from './evidence.ts';
 
 /** Spec §6.1 amounts. `code` is per difficulty point (10 x difficulty). */
@@ -159,6 +160,9 @@ export function awardXp(db: Db, input: XpAwardInput, now: Clock): XpAward {
     }
 
     let amount = baseAmount(x.kind, x.kind === 'code' ? (unit.difficulty ?? 1) : undefined);
+    // f52 U13: each hint taken at/before this attempt cuts its pass XP by 25% (floor 50%; engines/hints.ts)
+    const hints = hintsTakenAtOrBefore(db, unit.id, attempt.created_at);
+    if (hints > 0) amount = Math.floor(amount * hintXpMultiplier(hints));
     let reason: XpZeroReason | null = null;
     if (attempt.assistance_source === 'reveal' || isRevealed(db, unit.id)) {
       amount = 0;

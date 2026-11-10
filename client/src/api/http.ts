@@ -40,6 +40,8 @@ import {
   type WeakSpotsResponse,
   type DrillNextResponse,
   type UnitSearchResponse,
+  type HintsResponse,
+  type HintTakenResponse,
 } from './types';
 
 type Init = { method: 'POST' | 'PUT'; body: unknown };
@@ -162,5 +164,8 @@ export function createHttpApi(baseUrl = '/api', fetchImpl: typeof fetch = (...a)
       return call<UnitSearchResponse>(`/units/search?${params.toString()}`);
     },
     getNextDrill: (tracks) => call<DrillNextResponse>(`/drills/next?${new URLSearchParams({ tracks: tracks.join(','), mode: 'mixed' }).toString()}`),
+    // f52 S: progressive hints (empty POST body)
+    getHints: (id) => call<HintsResponse>(`${unit(id)}/hints`),
+    takeHint: (id) => post<HintTakenResponse>(`${unit(id)}/hint`),
   };
 }
