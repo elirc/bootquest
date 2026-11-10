@@ -562,3 +562,61 @@ describe('after a submit', () => {
     });
   });
 });
+
+// U12: failed-test output
+describe('failed tests in the results', () => {
+  const RAW = 'Expected values to be strictly deep-equal:\n+ actual - expected\n\n  {\n+   a: 1\n-   a: 2\n  }';
+  const failing: BootQuestApi = {
+    ...createMockApi(),
+    runUnit: async () => ({
+      result: {
+        pass: false,
+        output: '',
+        durationMs: 12,
+        failures: [
+          { name: 'groups by key', message: RAW, expected: { a: 2 }, actual: { a: 1 } },
+          { name: 'keeps order', message: 'TypeError: xs.reduce is not a function\n    at groupBy (solution.js:1:1)' },
+          { name: 'handles empty input', message: RAW, expected: {}, actual: null },
+          { name: 'bare failure', message: '' },
+        ],
+      },
+    }),
+  };
+
+  it('the first failing test is open and the rest are collapsed to their titles', async () => {
+    const { user } = renderApp(`/play/${DRILL}`, failing);
+    await editorBox();
+    await user.click(screen.getByRole('button', { name: /^Run/ }));
+    const results = screen.getByTestId('results');
+    await within(results).findByText('Checks failed');
+    const rows = within(results).getAllByTestId('test-detail') as HTMLDetailsElement[];
+    expect(rows.map((d) => d.querySelector('summary')!.textContent)).toEqual(['groups by key', 'keeps order', 'handles empty input']);
+    expect(rows.map((d) => d.open)).toEqual([true, false, false]);
+    // a failure with nothing to expand is a plain title
+    expect(within(results).getByText('bare failure').tagName).toBe('SPAN');
+    await user.click(within(rows[1]!).getByText('keeps order'));
+    expect(rows[1]!.open).toBe(true);
+  });
+
+  it('structured expected / actual hide the raw assertion message behind a disclosure; a message alone is a monospace pre', async () => {
+    const { user } = renderApp(`/play/${DRILL}`, failing);
+    await editorBox();
+    await user.click(screen.getByRole('button', { name: /^Run/ }));
+    const rows = (await within(screen.getByTestId('results')).findAllByTestId('test-detail')) as HTMLDetailsElement[];
+    const structured = rows[0]!;
+    expect(structured.querySelector('dl.diff')).toHaveTextContent('expected{"a":2}');
+    expect(structured.querySelector('dl.diff')).toHaveTextContent('actual{"a":1}');
+    const raw = structured.querySelector('details.test-raw') as HTMLDetailsElement;
+    expect(raw.open).toBe(false);
+    expect(raw.querySelector('summary')).toHaveTextContent('Assertion message');
+    expect(raw.querySelector('pre')!.textContent).toBe(RAW);
+    // the message is nowhere else in the row
+    expect(structured.querySelectorAll('pre')).toHaveLength(1);
+
+    const plain = rows[1]!;
+    expect(plain.querySelector('dl.diff')).toBeNull();
+    expect(plain.querySelector('details.test-raw')).toBeNull();
+    const pre = plain.querySelector('pre.test-msg-pre')!;
+    expect(pre.textContent).toBe('TypeError: xs.reduce is not a function\n    at groupBy (solution.js:1:1)');
+  });
+});

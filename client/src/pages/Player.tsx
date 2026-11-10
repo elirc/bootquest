@@ -730,7 +730,8 @@ function Results({ outcome, error, busy, unit }: { outcome: Outcome | null; erro
           {result.failures.length > 0 && (
             <ol className="tests">
               {result.failures.map((f, i) => (
-                <FailureRow key={`${f.name}-${i}`} f={f} />
+                // U12: the first failing test is open, the rest are titles until clicked
+                <FailureRow key={`${f.name}-${i}`} f={f} open={i === 0} />
               ))}
             </ol>
           )}
@@ -746,29 +747,54 @@ function Results({ outcome, error, busy, unit }: { outcome: Outcome | null; erro
   );
 }
 
-function FailureRow({ f }: { f: RunFailure }) {
+/**
+ * U12: one failing test. With structured expected / actual those two rows ARE the answer, so the
+ * assertion library's raw message (the same values again, as a multi-line diff) sits behind a
+ * disclosure; without them the message is all there is and renders as monospace, line breaks kept.
+ */
+function FailureRow({ f, open }: { f: RunFailure; open: boolean }) {
   const hasDiff = f.expected !== undefined || f.actual !== undefined;
+  if (!hasDiff && !f.message) {
+    return (
+      <li className="test test-fail">
+        <span className="test-status">fail</span>
+        <span className="test-name">{f.name}</span>
+      </li>
+    );
+  }
   return (
     <li className="test test-fail">
       <span className="test-status">fail</span>
-      <span className="test-name">{f.name}</span>
-      {f.message && <span className="test-msg">{f.message}</span>}
-      {hasDiff && (
-        <dl className="diff">
-          <div>
-            <dt>expected</dt>
-            <dd>
-              <code>{f.expected === undefined ? '—' : show(f.expected)}</code>
-            </dd>
-          </div>
-          <div>
-            <dt>actual</dt>
-            <dd>
-              <code>{f.actual === undefined ? '—' : show(f.actual)}</code>
-            </dd>
-          </div>
-        </dl>
-      )}
+      <details className="test-detail" open={open} data-testid="test-detail">
+        <summary className="test-name">{f.name}</summary>
+        <div className="test-detail-body">
+          {hasDiff && (
+            <dl className="diff">
+              <div>
+                <dt>expected</dt>
+                <dd>
+                  <code>{f.expected === undefined ? '—' : show(f.expected)}</code>
+                </dd>
+              </div>
+              <div>
+                <dt>actual</dt>
+                <dd>
+                  <code>{f.actual === undefined ? '—' : show(f.actual)}</code>
+                </dd>
+              </div>
+            </dl>
+          )}
+          {f.message &&
+            (hasDiff ? (
+              <details className="test-raw">
+                <summary>Assertion message</summary>
+                <pre className="test-msg test-msg-pre">{f.message}</pre>
+              </details>
+            ) : (
+              <pre className="test-msg test-msg-pre">{f.message}</pre>
+            ))}
+        </div>
+      </details>
     </li>
   );
 }
