@@ -10,6 +10,7 @@ import { InlineProse } from '../lib/prose';
 import { useTracksRefresh } from '../lib/tracks';
 import { readingTitle } from '../lib/view';
 import { isFundTopicKey } from '../lib/fundamentals';
+import { NextStep } from './Player/NextStep';
 
 /**
  * W8 study quest (spec §4): an ordered reading list into the repo, then the pre-seeded quiz
@@ -207,6 +208,8 @@ function StudyQuest({ detail, sq }: { detail: UnitDetail; sq: StudyQuestPublic }
           </div>
         )}
         {submit?.studyQuiz && <StudyResult submit={submit} />}
+        {/* U5: a passed gate is not a dead end — the topic's drills, then the next topic */}
+        {submit?.verdict === 'pass' && <NextStep unit={detail.unit} />}
       </div>
       <Link to={`/campaign/${detail.unit.trackId}`} className="muted small">
         Back to campaign

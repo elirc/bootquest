@@ -13,7 +13,6 @@ import {
   type SelfAttestResponse,
   type Submission,
   type SubmitResponse,
-  type TrackId,
   type UnitDetail,
 } from '../api/types';
 import { Icon } from '../components/Icon';
@@ -31,6 +30,7 @@ import { isFundKey, isFundTopicKey } from '../lib/fundamentals';
 import { LearnMoreButton } from '../components/LearnMore';
 import { WrittenPane } from './WrittenPane';
 import { CodeEditor } from './Player/Editor';
+import { NextStep } from './Player/NextStep';
 import { RevealPanel, promotionLeg, type Solution } from './Player/RevealFlow';
 
 const ID_RE = /^[1-9]\d{0,14}$/;
@@ -427,39 +427,13 @@ function Promotions({ promotions }: { promotions: RatingChangeDto[] }) {
   );
 }
 
-/**
- * After a verified pass: the next open unit on the same track, from the same server-derived
- * "Next up" the dashboard shows (GET /dashboard nextUp; no extra endpoint). Read when the pass
- * lands, so it already reflects this unit being done.
- */
-function NextUnit({ unitId, trackId }: { unitId: number; trackId: TrackId }) {
-  const api = useApi();
-  const q = useAsync(() => api.getDashboard(), [api]);
-  if (q.status === 'loading') return null;
-  const next = q.status === 'ready' ? (q.data.nextUp.find((n) => n.trackId === trackId)?.unit ?? null) : null;
-  return (
-    <p className="next-unit" data-testid="next-unit">
-      {next && next.id !== unitId ? (
-        <Link to={`/play/${next.id}`} className="btn btn-sm">
-          Next unit: <InlineProse text={next.title} /> →
-        </Link>
-      ) : (
-        <>
-          <span className="muted">{q.status === 'error' ? 'Could not read what is next.' : 'Nothing else is open on this track right now.'}</span>{' '}
-          <Link to={`/campaign/${trackId}`}>Open the campaign map</Link>
-        </>
-      )}
-    </p>
-  );
-}
-
 /** What follows a recorded submit under its verdict: promotions, then (on a pass) the next unit. */
 function SubmitFollowUp({ submit, unit }: { submit: SubmitResponse; unit: UnitDetail['unit'] }) {
   const promotions = submit.promotions ?? [];
   return (
     <>
       {promotions.length > 0 && <Promotions promotions={promotions} />}
-      {submit.verdict === 'pass' && <NextUnit unitId={unit.id} trackId={unit.trackId} />}
+      {submit.verdict === 'pass' && <NextStep unit={unit} />}
     </>
   );
 }
