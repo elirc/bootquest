@@ -160,9 +160,11 @@ export function awardXp(db: Db, input: XpAwardInput, now: Clock): XpAward {
     }
 
     let amount = baseAmount(x.kind, x.kind === 'code' ? (unit.difficulty ?? 1) : undefined);
-    // f52 U13: each hint taken at/before this attempt cuts its pass XP by 25% (floor 50%; engines/hints.ts)
+    // f52 U13: each hint taken at/before this attempt cuts its pass XP by 25% (floor 50%; engines/hints.ts).
+    // Rounded to the nearest whole XP (.5 up) so the advertised 75% / 50% holds as closely as integers allow
+    // (10 -> 8, 30 -> 23); a floor would cut a hinted 10 XP drill to 70%.
     const hints = hintsTakenAtOrBefore(db, unit.id, attempt.created_at);
-    if (hints > 0) amount = Math.floor(amount * hintXpMultiplier(hints));
+    if (hints > 0) amount = Math.round(amount * hintXpMultiplier(hints));
     let reason: XpZeroReason | null = null;
     if (attempt.assistance_source === 'reveal' || isRevealed(db, unit.id)) {
       amount = 0;

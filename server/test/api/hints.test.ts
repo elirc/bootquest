@@ -4,7 +4,7 @@
  *     a retest or a variation: their passes are promotion legs a hint would silently forfeit);
  *   - the servable hints are the authored ones except the last (3 authored -> 2 served, 1 -> none);
  *   - a hint opens only after >= 1 failed graded submit and never after a verified pass;
- *   - each hint taken before the pass cuts its XP by 25% (floor 50%); reveal stays 0;
+ *   - each hint taken before the pass cuts its XP by 25% (floor 50%; rounded to the nearest XP); reveal stays 0;
  *   - a hinted pass is verified but never unassisted ladder evidence (leg (a)), and a hinted artifact
  *     is not waited on by its explain-back (it can never pass hint-free again);
  *   - hint_taken is append-only (migration 019).
@@ -61,6 +61,9 @@ describe('GET /units/:id/hints + POST /units/:id/hint', () => {
     ids.quiz = makeUnit(db, clock, { key: 'h:quiz', kind: 'quiz' });
     ids.retest = makeUnit(db, clock, { key: 'h:retest', kind: 'retest', variationOf: 'h:drill' });
     ids.cs = makeUnit(db, clock, { key: 'h:cs', track: 'agentic' });
+    ids.d1 = makeUnit(db, clock, { key: 'h:d1', difficulty: 1 });
+    ids.d3 = makeUnit(db, clock, { key: 'h:d3', difficulty: 3 });
+    ids.d3b = makeUnit(db, clock, { key: 'h:d3b', difficulty: 3 });
     // f52 fix: project kinds (promotion leg (a)) and a variation that is not kind-labelled retest (leg (c))
     for (const kind of PROJECT_UNIT_KINDS) ids[kind] = makeUnit(db, clock, { key: `h:${kind}`, kind });
     ids.variation = makeUnit(db, clock, { key: 'h:variation', variationOf: 'h:drill' });
@@ -77,6 +80,9 @@ describe('GET /units/:id/hints + POST /units/:id/hint', () => {
         'h:quiz': { hints: ['q1', 'q2', 'q3'] },
         'h:retest': three,
         'h:cs': three,
+        'h:d1': three,
+        'h:d3': three,
+        'h:d3b': three,
         'h:variation': three,
         ...Object.fromEntries(PROJECT_UNIT_KINDS.map((k) => [`h:${k}`, three])),
       }),
@@ -146,6 +152,17 @@ describe('GET /units/:id/hints + POST /units/:id/hint', () => {
     const r = await send(ids.drill2!, RIGHT);
     expect(r.verdict).toBe('pass'); // a hinted pass is a verified pass
     expect(r.xp).toMatchObject({ amount: 10, reason: null });
+  });
+
+  it('pass XP rounds to the nearest whole XP: 75% of 10 -> 8, of 30 -> 23; 50% of 30 -> 15', async () => {
+    const hinted = async (id: number, n: number) => {
+      await send(id, WRONG);
+      for (let i = 0; i < n; i++) expect((await take(id)).status).toBe(200);
+      return (await send(id, RIGHT)).xp;
+    };
+    expect(await hinted(ids.d1!, 1)).toMatchObject({ amount: 8, reason: null });
+    expect(await hinted(ids.d3!, 1)).toMatchObject({ amount: 23, reason: null });
+    expect(await hinted(ids.d3b!, 2)).toMatchObject({ amount: 15, reason: null });
   });
 
   it('no hint after a verified pass', async () => {
