@@ -1,0 +1,252 @@
+{
+ "format": "bootquest-pack@1",
+ "source": "fund-js",
+ "course": {
+  "id": "33-authentication-sessions-and-tokens",
+  "order": 33,
+  "title": "Authentication, sessions and tokens",
+  "description": "Storing passwords with a slow salted hash, server-side sessions and their cookie flags, what a JWT does and does not protect, and refresh-token rotation with reuse detection.",
+  "prerequisites": []
+ },
+ "modules": [
+  {
+   "id": "33-authentication-sessions-and-tokens",
+   "title": "Authentication, sessions and tokens",
+   "lessons": [
+    {
+     "id": "drills",
+     "title": "Authentication, sessions and tokens",
+     "explanation": "Storing passwords with a slow salted hash, server-side sessions and their cookie flags, what a JWT does and does not protect, and refresh-token rotation with reuse detection."
+    }
+   ]
+  }
+ ],
+ "units": [
+  {
+   "unit": {
+    "key": "fund-js/33-authentication-sessions-and-tokens/01-verify-hs256-jwt",
+    "track": "js",
+    "kind": "drill",
+    "title": "Verify an HS256 JWT with node:crypto",
+    "phase": "33-authentication-sessions-and-tokens",
+    "difficulty": 3,
+    "competencies": [
+     "language-fluency"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-js",
+       "language": "js",
+       "tests": [
+        {
+         "name": "a valid token returns its payload",
+         "code": "const { createHmac } = await import('node:crypto');\nconst part = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');\nconst sign = (header, payload, secret, hash = 'sha256') => {\n  const body = part(header) + '.' + part(payload);\n  return body + '.' + createHmac(hash, secret).update(body).digest('base64url');\n};\nconst SECRET = 'correct horse battery staple';\nconst NOW = 1800000000;\nconst HS256 = { alg: 'HS256', typ: 'JWT' };\nconst good = sign(HS256, { sub: 'u1', role: 'member', exp: NOW + 60 }, SECRET);\nassert.equal(typeof mod.verifyJwt, 'function', 'export function verifyJwt');\nassert.deepEqual(mod.verifyJwt(good, SECRET, NOW), { ok: true, payload: { sub: 'u1', role: 'member', exp: NOW + 60 } });"
+        },
+        {
+         "name": "a tampered payload or a foreign secret fails the signature check",
+         "code": "const { createHmac } = await import('node:crypto');\nconst part = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');\nconst sign = (header, payload, secret, hash = 'sha256') => {\n  const body = part(header) + '.' + part(payload);\n  return body + '.' + createHmac(hash, secret).update(body).digest('base64url');\n};\nconst SECRET = 'correct horse battery staple';\nconst NOW = 1800000000;\nconst HS256 = { alg: 'HS256', typ: 'JWT' };\nconst good = sign(HS256, { sub: 'u1', role: 'member', exp: NOW + 60 }, SECRET);\nassert.equal(typeof mod.verifyJwt, 'function', 'export function verifyJwt');\nconst [h, , s] = good.split('.');\nconst forged = h + '.' + part({ sub: 'u1', role: 'admin', exp: NOW + 60 }) + '.' + s;\nassert.deepEqual(mod.verifyJwt(forged, SECRET, NOW), { ok: false, reason: 'signature' });\nconst foreign = sign(HS256, { sub: 'u1', role: 'admin', exp: NOW + 60 }, 'some other secret');\nassert.deepEqual(mod.verifyJwt(foreign, SECRET, NOW), { ok: false, reason: 'signature' });\nassert.deepEqual(mod.verifyJwt(good, SECRET, NOW), { ok: true, payload: { sub: 'u1', role: 'member', exp: NOW + 60 } });"
+        },
+        {
+         "name": "alg none with an empty signature is rejected, and so is any other algorithm (trap)",
+         "code": "const { createHmac } = await import('node:crypto');\nconst part = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');\nconst sign = (header, payload, secret, hash = 'sha256') => {\n  const body = part(header) + '.' + part(payload);\n  return body + '.' + createHmac(hash, secret).update(body).digest('base64url');\n};\nconst SECRET = 'correct horse battery staple';\nconst NOW = 1800000000;\nconst HS256 = { alg: 'HS256', typ: 'JWT' };\nconst good = sign(HS256, { sub: 'u1', role: 'member', exp: NOW + 60 }, SECRET);\nassert.equal(typeof mod.verifyJwt, 'function', 'export function verifyJwt');\nconst unsigned = part({ alg: 'none', typ: 'JWT' }) + '.' + part({ sub: 'u1', role: 'admin', exp: NOW + 60 }) + '.';\nassert.deepEqual(mod.verifyJwt(unsigned, SECRET, NOW), { ok: false, reason: 'algorithm' });\nconst hs512 = sign({ alg: 'HS512', typ: 'JWT' }, { sub: 'u1', exp: NOW + 60 }, SECRET, 'sha512');\nassert.deepEqual(mod.verifyJwt(hs512, SECRET, NOW), { ok: false, reason: 'algorithm' });\nconst missing = sign({ typ: 'JWT' }, { sub: 'u1', exp: NOW + 60 }, SECRET);\nassert.deepEqual(mod.verifyJwt(missing, SECRET, NOW), { ok: false, reason: 'algorithm' });"
+        },
+        {
+         "name": "a token expires in the second its exp is reached (boundary)",
+         "code": "const { createHmac } = await import('node:crypto');\nconst part = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');\nconst sign = (header, payload, secret, hash = 'sha256') => {\n  const body = part(header) + '.' + part(payload);\n  return body + '.' + createHmac(hash, secret).update(body).digest('base64url');\n};\nconst SECRET = 'correct horse battery staple';\nconst NOW = 1800000000;\nconst HS256 = { alg: 'HS256', typ: 'JWT' };\nconst good = sign(HS256, { sub: 'u1', role: 'member', exp: NOW + 60 }, SECRET);\nassert.equal(typeof mod.verifyJwt, 'function', 'export function verifyJwt');\nconst token = sign(HS256, { sub: 'u1', exp: NOW }, SECRET);\nassert.deepEqual(mod.verifyJwt(token, SECRET, NOW - 1), { ok: true, payload: { sub: 'u1', exp: NOW } });\nassert.deepEqual(mod.verifyJwt(token, SECRET, NOW), { ok: false, reason: 'expired' });\nassert.deepEqual(mod.verifyJwt(token, SECRET, NOW + 5000), { ok: false, reason: 'expired' });"
+        },
+        {
+         "name": "a correctly signed token without a numeric exp counts as expired",
+         "code": "const { createHmac } = await import('node:crypto');\nconst part = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');\nconst sign = (header, payload, secret, hash = 'sha256') => {\n  const body = part(header) + '.' + part(payload);\n  return body + '.' + createHmac(hash, secret).update(body).digest('base64url');\n};\nconst SECRET = 'correct horse battery staple';\nconst NOW = 1800000000;\nconst HS256 = { alg: 'HS256', typ: 'JWT' };\nconst good = sign(HS256, { sub: 'u1', role: 'member', exp: NOW + 60 }, SECRET);\nassert.equal(typeof mod.verifyJwt, 'function', 'export function verifyJwt');\nassert.deepEqual(mod.verifyJwt(sign(HS256, { sub: 'u1' }, SECRET), SECRET, NOW), { ok: false, reason: 'expired' });\nassert.deepEqual(mod.verifyJwt(sign(HS256, { sub: 'u1', exp: 'never' }, SECRET), SECRET, NOW), { ok: false, reason: 'expired' });"
+        },
+        {
+         "name": "the signature is checked before the expiry is believed",
+         "code": "const { createHmac } = await import('node:crypto');\nconst part = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');\nconst sign = (header, payload, secret, hash = 'sha256') => {\n  const body = part(header) + '.' + part(payload);\n  return body + '.' + createHmac(hash, secret).update(body).digest('base64url');\n};\nconst SECRET = 'correct horse battery staple';\nconst NOW = 1800000000;\nconst HS256 = { alg: 'HS256', typ: 'JWT' };\nconst good = sign(HS256, { sub: 'u1', role: 'member', exp: NOW + 60 }, SECRET);\nassert.equal(typeof mod.verifyJwt, 'function', 'export function verifyJwt');\nconst forgedOld = sign(HS256, { sub: 'u1', exp: NOW - 10 }, 'some other secret');\nassert.deepEqual(mod.verifyJwt(forgedOld, SECRET, NOW), { ok: false, reason: 'signature' });"
+        },
+        {
+         "name": "a signature of the wrong length is rejected without throwing",
+         "code": "const { createHmac } = await import('node:crypto');\nconst part = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');\nconst sign = (header, payload, secret, hash = 'sha256') => {\n  const body = part(header) + '.' + part(payload);\n  return body + '.' + createHmac(hash, secret).update(body).digest('base64url');\n};\nconst SECRET = 'correct horse battery staple';\nconst NOW = 1800000000;\nconst HS256 = { alg: 'HS256', typ: 'JWT' };\nconst good = sign(HS256, { sub: 'u1', role: 'member', exp: NOW + 60 }, SECRET);\nassert.equal(typeof mod.verifyJwt, 'function', 'export function verifyJwt');\nassert.deepEqual(mod.verifyJwt(good + 'AAAA', SECRET, NOW), { ok: false, reason: 'signature' });\nassert.deepEqual(mod.verifyJwt(good.slice(0, -8), SECRET, NOW), { ok: false, reason: 'signature' });\nconst [h, p] = good.split('.');\nassert.deepEqual(mod.verifyJwt(h + '.' + p + '.', SECRET, NOW), { ok: false, reason: 'signature' });"
+        },
+        {
+         "name": "garbage is reported as malformed and never throws",
+         "code": "const { createHmac } = await import('node:crypto');\nconst part = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');\nconst sign = (header, payload, secret, hash = 'sha256') => {\n  const body = part(header) + '.' + part(payload);\n  return body + '.' + createHmac(hash, secret).update(body).digest('base64url');\n};\nconst SECRET = 'correct horse battery staple';\nconst NOW = 1800000000;\nconst HS256 = { alg: 'HS256', typ: 'JWT' };\nconst good = sign(HS256, { sub: 'u1', role: 'member', exp: NOW + 60 }, SECRET);\nassert.equal(typeof mod.verifyJwt, 'function', 'export function verifyJwt');\nconst malformed = { ok: false, reason: 'malformed' };\nfor (const input of ['', 'abc', 'a.b', good + '.extra', null, undefined, 42, 'not-json.' + part({ exp: NOW + 60 }) + '.sig']) {\n  assert.deepEqual(mod.verifyJwt(input, SECRET, NOW), malformed, `input ${String(input).slice(0, 20)}`);\n}\nconst body = part(HS256) + '.' + part('just a string');\nassert.deepEqual(mod.verifyJwt(body + '.' + createHmac('sha256', SECRET).update(body).digest('base64url'), SECRET, NOW), malformed);"
+        }
+       ],
+       "timeoutMs": 8000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "33-authentication-sessions-and-tokens/01-verify-hs256-jwt",
+    "type": "code",
+    "module": "33-authentication-sessions-and-tokens",
+    "lesson": "drills",
+    "position": 0,
+    "skills": [
+     "HMAC-SHA256",
+     "JWT verification",
+     "constant-time comparison"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "fund-js/33-authentication-sessions-and-tokens/02-session-rotation-on-login",
+    "track": "js",
+    "kind": "drill",
+    "title": "Rotate the session id on login",
+    "phase": "33-authentication-sessions-and-tokens",
+    "difficulty": 2,
+    "competencies": [
+     "language-fluency"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-js",
+       "language": "js",
+       "tests": [
+        {
+         "name": "login returns a new id whose session belongs to the user",
+         "code": "assert.equal(typeof mod.createSessionStore, 'function', 'export function createSessionStore');\nlet clock = 1000000;\nlet counter = 0;\nconst issued = [];\nconst store = mod.createSessionStore({\n  newId: () => {\n    const id = `sid-${++counter}`;\n    issued.push(id);\n    return id;\n  },\n  now: () => clock,\n  ttlMs: 60000,\n});\nconst anonymous = store.create({});\nassert.deepEqual(store.get(anonymous), { userId: null, data: {} });\nconst loggedIn = store.login(anonymous, 'ada');\nassert.notEqual(loggedIn, anonymous);\nassert.equal(loggedIn, issued[issued.length - 1], 'the id comes from newId()');\nassert.equal(store.get(loggedIn)?.userId, 'ada');"
+        },
+        {
+         "name": "fixation: the id from before the login is dead afterwards (trap)",
+         "code": "assert.equal(typeof mod.createSessionStore, 'function', 'export function createSessionStore');\nlet clock = 1000000;\nlet counter = 0;\nconst issued = [];\nconst store = mod.createSessionStore({\n  newId: () => {\n    const id = `sid-${++counter}`;\n    issued.push(id);\n    return id;\n  },\n  now: () => clock,\n  ttlMs: 60000,\n});\nconst planted = store.create({});\nconst victims = store.login(planted, 'victim');\nassert.equal(store.get(planted), null, 'the attacker still holds this id');\nassert.equal(store.get(victims)?.userId, 'victim');"
+        },
+        {
+         "name": "login carries the data of a valid session over",
+         "code": "assert.equal(typeof mod.createSessionStore, 'function', 'export function createSessionStore');\nlet clock = 1000000;\nlet counter = 0;\nconst issued = [];\nconst store = mod.createSessionStore({\n  newId: () => {\n    const id = `sid-${++counter}`;\n    issued.push(id);\n    return id;\n  },\n  now: () => clock,\n  ttlMs: 60000,\n});\nconst anonymous = store.create({ cart: ['book', 'pen'] });\nconst loggedIn = store.login(anonymous, 'ada');\nassert.deepEqual(store.get(loggedIn), { userId: 'ada', data: { cart: ['book', 'pen'] } });"
+        },
+        {
+         "name": "login with an unknown or expired id starts with empty data",
+         "code": "assert.equal(typeof mod.createSessionStore, 'function', 'export function createSessionStore');\nlet clock = 1000000;\nlet counter = 0;\nconst issued = [];\nconst store = mod.createSessionStore({\n  newId: () => {\n    const id = `sid-${++counter}`;\n    issued.push(id);\n    return id;\n  },\n  now: () => clock,\n  ttlMs: 60000,\n});\nconst fromNowhere = store.login('sid-does-not-exist', 'ada');\nassert.deepEqual(store.get(fromNowhere), { userId: 'ada', data: {} });\nconst stale = store.create({ cart: ['someone else left this'] });\nclock += 60000;\nconst fromStale = store.login(stale, 'ben');\nassert.notEqual(fromStale, stale);\nassert.deepEqual(store.get(fromStale), { userId: 'ben', data: {} });\nassert.equal(store.get(stale), null);"
+        },
+        {
+         "name": "the new session gets a full ttl counted from the login (boundary)",
+         "code": "assert.equal(typeof mod.createSessionStore, 'function', 'export function createSessionStore');\nlet clock = 1000000;\nlet counter = 0;\nconst issued = [];\nconst store = mod.createSessionStore({\n  newId: () => {\n    const id = `sid-${++counter}`;\n    issued.push(id);\n    return id;\n  },\n  now: () => clock,\n  ttlMs: 60000,\n});\nconst anonymous = store.create({});\nclock += 59999;\nconst loggedIn = store.login(anonymous, 'ada');\nclock += 59999;\nassert.equal(store.get(loggedIn)?.userId, 'ada', 'one millisecond before its own ttl');\nclock += 1;\nassert.equal(store.get(loggedIn), null, 'gone exactly at its ttl');"
+        },
+        {
+         "name": "logout destroys only that session, and a second login rotates again",
+         "code": "assert.equal(typeof mod.createSessionStore, 'function', 'export function createSessionStore');\nlet clock = 1000000;\nlet counter = 0;\nconst issued = [];\nconst store = mod.createSessionStore({\n  newId: () => {\n    const id = `sid-${++counter}`;\n    issued.push(id);\n    return id;\n  },\n  now: () => clock,\n  ttlMs: 60000,\n});\nconst first = store.login(store.create({}), 'ada');\nconst other = store.login(store.create({}), 'ben');\nconst second = store.login(first, 'ada');\nassert.notEqual(second, first);\nassert.equal(store.get(first), null);\nstore.logout(second);\nassert.equal(store.get(second), null);\nassert.equal(store.get(other)?.userId, 'ben');"
+        }
+       ],
+       "timeoutMs": 8000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "33-authentication-sessions-and-tokens/02-session-rotation-on-login",
+    "type": "code",
+    "module": "33-authentication-sessions-and-tokens",
+    "lesson": "drills",
+    "position": 1,
+    "skills": [
+     "session fixation",
+     "session store",
+     "injected clock"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "fund-js/33-authentication-sessions-and-tokens/03-refresh-token-rotation",
+    "track": "js",
+    "kind": "drill",
+    "title": "Refresh-token rotation with reuse detection",
+    "phase": "33-authentication-sessions-and-tokens",
+    "difficulty": 3,
+    "competencies": [
+     "language-fluency"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-js",
+       "language": "js",
+       "tests": [
+        {
+         "name": "issue returns a token and rotate exchanges it for a new one",
+         "code": "assert.equal(typeof mod.createRefreshTokens, 'function', 'export function createRefreshTokens');\nlet clock = 5000000;\nlet counter = 0;\nconst tokens = mod.createRefreshTokens({ newToken: () => `rt-${++counter}`, now: () => clock, ttlMs: 1000 });\nconst first = tokens.issue('ada');\nassert.equal(first, 'rt-1');\nassert.deepEqual(tokens.rotate(first), { ok: true, userId: 'ada', token: 'rt-2' });\nassert.deepEqual(tokens.rotate('rt-2'), { ok: true, userId: 'ada', token: 'rt-3' });"
+        },
+        {
+         "name": "a token that was never issued is unknown",
+         "code": "assert.equal(typeof mod.createRefreshTokens, 'function', 'export function createRefreshTokens');\nlet clock = 5000000;\nlet counter = 0;\nconst tokens = mod.createRefreshTokens({ newToken: () => `rt-${++counter}`, now: () => clock, ttlMs: 1000 });\ntokens.issue('ada');\nassert.deepEqual(tokens.rotate('rt-999'), { ok: false, reason: 'unknown' });\nassert.deepEqual(tokens.rotate('rt-1'), { ok: true, userId: 'ada', token: 'rt-2' }, 'a wrong guess does not hurt real tokens');"
+        },
+        {
+         "name": "presenting an exchanged token again is reported as reuse (trap)",
+         "code": "assert.equal(typeof mod.createRefreshTokens, 'function', 'export function createRefreshTokens');\nlet clock = 5000000;\nlet counter = 0;\nconst tokens = mod.createRefreshTokens({ newToken: () => `rt-${++counter}`, now: () => clock, ttlMs: 1000 });\nconst first = tokens.issue('ada');\ntokens.rotate(first);\nassert.deepEqual(tokens.rotate(first), { ok: false, reason: 'reuse' });"
+        },
+        {
+         "name": "reuse revokes the whole family: the newest token stops working",
+         "code": "assert.equal(typeof mod.createRefreshTokens, 'function', 'export function createRefreshTokens');\nlet clock = 5000000;\nlet counter = 0;\nconst tokens = mod.createRefreshTokens({ newToken: () => `rt-${++counter}`, now: () => clock, ttlMs: 1000 });\nconst first = tokens.issue('ada');\nconst second = tokens.rotate(first).token;\nconst third = tokens.rotate(second).token;\nassert.deepEqual(tokens.rotate(first), { ok: false, reason: 'reuse' });\nassert.deepEqual(tokens.rotate(third), { ok: false, reason: 'revoked' });\nassert.deepEqual(tokens.rotate(second), { ok: false, reason: 'revoked' });\nassert.deepEqual(tokens.rotate(first), { ok: false, reason: 'revoked' });"
+        },
+        {
+         "name": "other families are untouched: another login of the same user, and other users",
+         "code": "assert.equal(typeof mod.createRefreshTokens, 'function', 'export function createRefreshTokens');\nlet clock = 5000000;\nlet counter = 0;\nconst tokens = mod.createRefreshTokens({ newToken: () => `rt-${++counter}`, now: () => clock, ttlMs: 1000 });\nconst phone = tokens.issue('ada');\nconst laptop = tokens.issue('ada');\nconst ben = tokens.issue('ben');\nconst phone2 = tokens.rotate(phone).token;\nassert.equal(tokens.rotate(phone).reason, 'reuse');\nassert.equal(tokens.rotate(phone2).reason, 'revoked');\nassert.equal(tokens.rotate(laptop).ok, true, \"ada's laptop login is a different family\");\nassert.deepEqual(tokens.rotate(ben).userId, 'ben');"
+        },
+        {
+         "name": "a token expires exactly at its ttl, and rotation starts a new ttl (boundary)",
+         "code": "assert.equal(typeof mod.createRefreshTokens, 'function', 'export function createRefreshTokens');\nlet clock = 5000000;\nlet counter = 0;\nconst tokens = mod.createRefreshTokens({ newToken: () => `rt-${++counter}`, now: () => clock, ttlMs: 1000 });\nconst first = tokens.issue('ada');\nclock += 999;\nconst second = tokens.rotate(first).token;\nassert.equal(typeof second, 'string', 'still valid one millisecond before expiry');\nclock += 999;\nconst third = tokens.rotate(second).token;\nassert.equal(typeof third, 'string', 'the rotated token has its own full ttl');\nclock += 1000;\nassert.deepEqual(tokens.rotate(third), { ok: false, reason: 'expired' });"
+        }
+       ],
+       "timeoutMs": 8000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "33-authentication-sessions-and-tokens/03-refresh-token-rotation",
+    "type": "code",
+    "module": "33-authentication-sessions-and-tokens",
+    "lesson": "drills",
+    "position": 2,
+    "skills": [
+     "refresh tokens",
+     "reuse detection",
+     "token families"
+    ]
+   }
+  }
+ ],
+ "content": {
+  "fund-js/33-authentication-sessions-and-tokens/01-verify-hs256-jwt": {
+   "instructions": "**Skills:** HMAC-SHA256 · JWT verification · constant-time comparison  \n**Level:** ★★★\n\n**Interview prompt.** \"Verify this JWT without a library. Then tell me three ways a home-made verifier gets fooled.\"\n\n**Why it matters.** Every part of a token is attacker-controlled until the signature has been checked, and that includes the header that names the algorithm. Verifiers that read claims first, or let the token choose how it is checked, accept forged tokens.\n\n**The format.** A token is three base64url parts joined by dots: header, payload, signature. For HS256 the signature is the HMAC-SHA256 of the text `header.payload` (the two encoded parts with their dot), keyed with the secret.\n\n**Your task.** Export `verifyJwt(token, secret, nowSeconds)` using `node:crypto` only. It never throws. It returns `{ ok: true, payload }` for a valid token, otherwise `{ ok: false, reason }` where `reason` is the first of these that applies:\n- `'malformed'`: not a string, not exactly three parts, or a header or payload that does not decode to a JSON object\n- `'algorithm'`: the header's `alg` is anything other than `'HS256'`\n- `'signature'`: the signature does not match, whatever its length\n- `'expired'`: the payload has no numeric `exp`, or the clock has reached it (`exp` and `nowSeconds` are both in seconds)\n\n**Worked example.** A correctly signed token whose `exp` equals `nowSeconds` returns `{ ok: false, reason: 'expired' }`. One second earlier it returns the payload.\n",
+   "starter": "import { createHmac, timingSafeEqual } from 'node:crypto';\n\nexport function verifyJwt(token, secret, nowSeconds) {\n  // TODO: this trusts whatever the token says. Check structure, algorithm, signature and expiry.\n  const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));\n  return { ok: true, payload };\n}\n",
+   "solution": "import { createHmac, timingSafeEqual } from 'node:crypto';\n\nconst decodeObject = (part) => {\n  try {\n    const value = JSON.parse(Buffer.from(part, 'base64url').toString('utf8'));\n    return value !== null && typeof value === 'object' && !Array.isArray(value) ? value : null;\n  } catch {\n    return null;\n  }\n};\n\nconst fail = (reason) => ({ ok: false, reason });\n\nexport function verifyJwt(token, secret, nowSeconds) {\n  if (typeof token !== 'string') return fail('malformed');\n  const parts = token.split('.');\n  if (parts.length !== 3) return fail('malformed');\n  const header = decodeObject(parts[0]);\n  const payload = decodeObject(parts[1]);\n  if (!header || !payload) return fail('malformed');\n  if (header.alg !== 'HS256') return fail('algorithm');\n  const expected = createHmac('sha256', secret).update(parts[0] + '.' + parts[1]).digest();\n  const given = Buffer.from(parts[2], 'base64url');\n  if (given.length !== expected.length || !timingSafeEqual(given, expected)) return fail('signature');\n  if (typeof payload.exp !== 'number' || nowSeconds >= payload.exp) return fail('expired');\n  return { ok: true, payload };\n}\n",
+   "explanation": "```js\nif (header.alg !== 'HS256') return fail('algorithm');\nconst expected = createHmac('sha256', secret).update(parts[0] + '.' + parts[1]).digest();\nconst given = Buffer.from(parts[2], 'base64url');\nif (given.length !== expected.length || !timingSafeEqual(given, expected)) return fail('signature');\nif (typeof payload.exp !== 'number' || nowSeconds >= payload.exp) return fail('expired');\nreturn { ok: true, payload };\n```\n\nThe order is the lesson: structure, algorithm, signature, and only then the claims.\n\nThe plausible wrong answer is the \"flexible\" verifier that reads `header.alg` to decide how to check, with a branch that skips the signature for `none`. That is the historical bug in several JWT libraries: anyone can write a header saying `none`, leave the signature empty and claim any role. The trap test sends exactly that token. The verifier owns the algorithm; the header is only compared against it.\n\nThree more details the tests pin down. `timingSafeEqual` throws a RangeError when the two buffers differ in length, so compare lengths first (a truncated signature must be a clean `'signature'` result). Expiry uses `>=`: the token is dead in the second its `exp` is reached. And the signature is computed over the encoded parts exactly as received; decoding and re-encoding the JSON would change the bytes.\n\nA real service also checks issuer and audience, tolerates a few seconds of clock skew, and uses a maintained library. Write this once so that you can read what the library does.",
+   "hints": [
+    "Nothing inside a token can be trusted until its signature has been verified with an algorithm that you chose.",
+    "Work in a fixed order: shape first, then the declared algorithm against the one you expect, then recompute the signature over the first two parts as received and compare without leaking timing, and only then look at the expiry.",
+    "Split on dots and require three parts, decode the first two as JSON objects inside a try block, require the algorithm to be HS256, compute the HMAC with SHA-256 over the first two parts joined by a dot, compare byte lengths before the constant-time comparison, and treat a missing expiry or a clock at or past it as expired."
+   ]
+  },
+  "fund-js/33-authentication-sessions-and-tokens/02-session-rotation-on-login": {
+   "instructions": "**Skills:** session fixation · session store · injected clock  \n**Level:** ★★☆\n\n**Interview prompt.** \"A visitor has an anonymous session with a cart in it. They sign in. What happens to the session id, and why?\"\n\n**Why it matters.** If the id stays the same across login, anyone who knew it beforehand is logged in afterwards. Planting a known id in a victim's browser is easy (a link, a subdomain cookie); the defence is that the id from before the login stops working.\n\n**The store.** `createSessionStore({ newId, now, ttlMs })` receives its dependencies: `newId()` returns a fresh unique id, `now()` returns the time in milliseconds. The starter implements:\n- `create(data)`: starts an anonymous session (`userId` is `null`) and returns its id\n- `get(id)`: returns `{ userId, data }`, or `null` when the id is unknown or the session has expired. A session expires `ttlMs` after it was created: it is still valid one millisecond before that moment and gone at it\n- `logout(id)`: destroys the session\n\n**Your task.** Fix `login(id, userId)` in the exported `createSessionStore`. It must:\n- return a NEW id from `newId()` whose session belongs to `userId`\n- carry the old session's `data` over when the old session is still valid, and start with an empty object when it is unknown or expired\n- destroy the old id, so that `get` on it returns `null`\n- give the new session a full `ttlMs` counted from the login\n\n**Worked example.** `create({ cart: ['book'] })` returns `sid-1`. `login('sid-1', 'ada')` returns `sid-2`; `get('sid-2')` is `{ userId: 'ada', data: { cart: ['book'] } }` and `get('sid-1')` is `null`.\n",
+   "starter": "export function createSessionStore({ newId, now, ttlMs }) {\n  const sessions = new Map(); // id -> { userId, data, expiresAt }\n\n  const live = (id) => {\n    const session = sessions.get(id);\n    if (!session) return null;\n    if (now() >= session.expiresAt) {\n      sessions.delete(id);\n      return null;\n    }\n    return session;\n  };\n\n  const start = (userId, data) => {\n    const id = newId();\n    sessions.set(id, { userId, data, expiresAt: now() + ttlMs });\n    return id;\n  };\n\n  return {\n    create(data = {}) {\n      return start(null, data);\n    },\n    get(id) {\n      const session = live(id);\n      return session ? { userId: session.userId, data: session.data } : null;\n    },\n    login(id, userId) {\n      // TODO: this keeps the id the visitor had before logging in (session fixation). Rotate it.\n      const session = live(id);\n      if (!session) return start(userId, {});\n      session.userId = userId;\n      return id;\n    },\n    logout(id) {\n      sessions.delete(id);\n    },\n  };\n}\n",
+   "solution": "export function createSessionStore({ newId, now, ttlMs }) {\n  const sessions = new Map(); // id -> { userId, data, expiresAt }\n\n  const live = (id) => {\n    const session = sessions.get(id);\n    if (!session) return null;\n    if (now() >= session.expiresAt) {\n      sessions.delete(id);\n      return null;\n    }\n    return session;\n  };\n\n  const start = (userId, data) => {\n    const id = newId();\n    sessions.set(id, { userId, data, expiresAt: now() + ttlMs });\n    return id;\n  };\n\n  return {\n    create(data = {}) {\n      return start(null, data);\n    },\n    get(id) {\n      const session = live(id);\n      return session ? { userId: session.userId, data: session.data } : null;\n    },\n    login(id, userId) {\n      const old = live(id);\n      sessions.delete(id);\n      return start(userId, old ? old.data : {});\n    },\n    logout(id) {\n      sessions.delete(id);\n    },\n  };\n}\n",
+   "explanation": "```js\nlogin(id, userId) {\n  const old = live(id);\n  sessions.delete(id);\n  return start(userId, old ? old.data : {});\n},\n```\n\nThree things happen at the moment of login: the old id dies, a new id is minted, and the useful anonymous state moves across. The privilege change and the id change are one step.\n\nThe plausible wrong answer mints the new id and forgets to delete the old entry (or marks the old session as logged in \"to be safe\"). The user's own browser works perfectly, so nothing looks broken. But the attacker who planted the old id still holds a valid session, now for the victim's account: the fixation test catches it by reading the old id after the login.\n\nTwo smaller points the tests pin down. `live(id)` is used for the hand-over, not `sessions.get(id)`, so the data of an expired session is not revived into a new login. And the new session is created by `start`, which gives it its own expiry; copying the old `expiresAt` would log the user out moments after signing in.\n\nIn a web app the same step also sends a fresh `Set-Cookie` with `HttpOnly`, `Secure` and `SameSite`. Rotate again whenever privileges change, for example after a password change.",
+   "hints": [
+    "Session fixation: an identifier that was known before authentication must not survive it.",
+    "At login, treat the old session as a source of data only. Mint a fresh identifier for the authenticated session, move across what is still valid, and make sure the previous identifier no longer resolves to anything.",
+    "Look up the old session through the helper that respects expiry, delete the old id from the map, and hand back the id of a session started for the user with the old data when there was a valid one and an empty object otherwise."
+   ]
+  },
+  "fund-js/33-authentication-sessions-and-tokens/03-refresh-token-rotation": {
+   "instructions": "**Skills:** refresh tokens · reuse detection · token families  \n**Level:** ★★★\n\n**Interview prompt.** \"A refresh token leaks from a phone backup. With rotation in place, how does the server find out, and what does it do?\"\n\n**Why it matters.** A stolen refresh token is as good as a password until it expires. One-time use turns the theft into a detectable event: the thief and the real user will both present the same token, and the second presentation gives the game away. The response has to shut out both, because the server cannot tell which one is the user.\n\n**Your task.** Export `createRefreshTokens({ newToken, now, ttlMs })`, where `newToken()` returns a fresh unique string and `now()` the time in milliseconds. It returns an object with:\n- `issue(userId)`: called at login. Returns a new refresh token that starts a new family\n- `rotate(token)`: exchanges a token. On success returns `{ ok: true, userId, token }` with a new token of the same family, valid for `ttlMs` from now, and retires the presented one\n\n`rotate` fails with `{ ok: false, reason }`, using the first reason that applies:\n- `'unknown'`: the token was never issued\n- `'revoked'`: its family has been revoked\n- `'reuse'`: the token was already exchanged once. This revokes its whole family\n- `'expired'`: the clock has reached the token's expiry (it is still valid one millisecond earlier)\n\nA different login of the same user is a different family and is not affected.\n\n**Worked example.** `issue('ada')` gives `rt-1`; `rotate('rt-1')` gives `rt-2`. Presenting `rt-1` again returns `reuse`, and after that `rotate('rt-2')` returns `revoked`.\n",
+   "starter": "export function createRefreshTokens({ newToken, now, ttlMs }) {\n  const tokens = new Map(); // token -> { userId, expiresAt }\n\n  const add = (userId) => {\n    const token = newToken();\n    tokens.set(token, { userId, expiresAt: now() + ttlMs });\n    return token;\n  };\n\n  return {\n    issue(userId) {\n      return add(userId);\n    },\n    rotate(token) {\n      // TODO: one-time use, families, reuse detection, expiry\n      const entry = tokens.get(token);\n      if (!entry) return { ok: false, reason: 'unknown' };\n      return { ok: true, userId: entry.userId, token: add(entry.userId) };\n    },\n  };\n}\n",
+   "solution": "export function createRefreshTokens({ newToken, now, ttlMs }) {\n  const tokens = new Map(); // token -> { userId, family, used, expiresAt }\n  const revokedFamilies = new Set();\n  let nextFamily = 1;\n\n  const add = (userId, family) => {\n    const token = newToken();\n    tokens.set(token, { userId, family, used: false, expiresAt: now() + ttlMs });\n    return token;\n  };\n\n  return {\n    issue(userId) {\n      return add(userId, nextFamily++);\n    },\n    rotate(token) {\n      const entry = tokens.get(token);\n      if (!entry) return { ok: false, reason: 'unknown' };\n      if (revokedFamilies.has(entry.family)) return { ok: false, reason: 'revoked' };\n      if (entry.used) {\n        revokedFamilies.add(entry.family);\n        return { ok: false, reason: 'reuse' };\n      }\n      if (now() >= entry.expiresAt) return { ok: false, reason: 'expired' };\n      entry.used = true;\n      return { ok: true, userId: entry.userId, token: add(entry.userId, entry.family) };\n    },\n  };\n}\n",
+   "explanation": "```js\nconst entry = tokens.get(token);\nif (!entry) return { ok: false, reason: 'unknown' };\nif (revokedFamilies.has(entry.family)) return { ok: false, reason: 'revoked' };\nif (entry.used) {\n  revokedFamilies.add(entry.family);\n  return { ok: false, reason: 'reuse' };\n}\nif (now() >= entry.expiresAt) return { ok: false, reason: 'expired' };\nentry.used = true;\nreturn { ok: true, userId: entry.userId, token: add(entry.userId, entry.family) };\n```\n\nEvery token remembers its family, and a retired token is kept, marked as used, so the server can recognise it later.\n\nThe plausible wrong answer deletes the old token on rotation. It feels tidy and it does make each token single-use. But a replayed token is then indistinguishable from a random guess: the server answers `unknown`, revokes nothing, and whoever rotated first (possibly the thief) keeps a working chain for as long as they keep refreshing. The trap test expects `reuse`, and the test after it expects the newest token of that family to be dead.\n\nRevoking by user is too broad for this drill's rule: it logs out the laptop because the phone's token leaked. Revoking by family removes exactly the chain that is known to be compromised. A real system would also raise a security event, since reuse is evidence of theft.\n\nIn production the map is a table, tokens are stored as hashes, and rotation is one transaction, so two simultaneous exchanges of one token cannot both succeed.",
+   "hints": [
+    "A refresh token is valid once. A second appearance is a signal, and the response to it concerns every token of that login.",
+    "Keep retired tokens on record, and tag every token with the login it descends from. Decide the outcome in the order the task lists, and let a repeat presentation poison the whole lineage.",
+    "Store for each token its user, a family number, a used flag and an expiry. On rotate reject unknown tokens, then tokens of a revoked family, then used tokens while adding their family to the revoked set, then expired ones. Otherwise mark the token used and issue a new one in the same family."
+   ]
+  }
+ }
+}

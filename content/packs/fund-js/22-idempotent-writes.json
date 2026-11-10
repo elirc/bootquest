@@ -1,0 +1,242 @@
+{
+ "format": "bootquest-pack@1",
+ "source": "fund-js",
+ "course": {
+  "id": "22-idempotent-writes",
+  "order": 22,
+  "title": "Idempotent writes",
+  "description": "Why writes get repeated, idempotency keys and replayed responses, 422 for a reused key, concurrent duplicates and in-flight maps, and deduplicating redelivered webhooks.",
+  "prerequisites": []
+ },
+ "modules": [
+  {
+   "id": "22-idempotent-writes",
+   "title": "Idempotent writes",
+   "lessons": [
+    {
+     "id": "drills",
+     "title": "Idempotent writes",
+     "explanation": "Why writes get repeated, idempotency keys and replayed responses, 422 for a reused key, concurrent duplicates and in-flight maps, and deduplicating redelivered webhooks."
+    }
+   ]
+  }
+ ],
+ "units": [
+  {
+   "unit": {
+    "key": "fund-js/22-idempotent-writes/01-create-order-with-idempotency-key",
+    "track": "js",
+    "kind": "drill",
+    "title": "createOrder: same key, same order",
+    "phase": "22-idempotent-writes",
+    "difficulty": 2,
+    "competencies": [
+     "language-fluency"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-js",
+       "language": "js",
+       "tests": [
+        {
+         "name": "the first use of a key creates the order",
+         "code": "const makeStore = () => {\n  const keys = new Map();\n  const orders = [];\n  const log = [];\n  return {\n    log,\n    orders,\n    async findKey(key) { await null; log.push('find'); return keys.get(key) ?? null; },\n    async insertOrder(body) { await null; log.push('insert'); const order = { id: 'ord_' + (orders.length + 1), ...body }; orders.push(order); return { ...order }; },\n    async saveKey(key, record) { await null; log.push('save'); keys.set(key, record); },\n  };\n};\nassert.equal(typeof mod.createOrder, 'function', 'export createOrder');\nconst store = makeStore();\nconst r = await mod.createOrder(store, 'k1', { sku: 'A', qty: 2 });\nassert.equal(r.status, 201);\nassert.equal(r.replayed, false);\nassert.deepEqual(r.order, { id: 'ord_1', sku: 'A', qty: 2 });\nassert.equal(store.orders.length, 1);"
+        },
+        {
+         "name": "the same key and body replays the original order without inserting",
+         "code": "const makeStore = () => {\n  const keys = new Map();\n  const orders = [];\n  const log = [];\n  return {\n    log,\n    orders,\n    async findKey(key) { await null; log.push('find'); return keys.get(key) ?? null; },\n    async insertOrder(body) { await null; log.push('insert'); const order = { id: 'ord_' + (orders.length + 1), ...body }; orders.push(order); return { ...order }; },\n    async saveKey(key, record) { await null; log.push('save'); keys.set(key, record); },\n  };\n};\nconst store = makeStore();\nconst first = await mod.createOrder(store, 'k1', { sku: 'A', qty: 2 });\nconst again = await mod.createOrder(store, 'k1', { sku: 'A', qty: 2 });\nassert.equal(again.status, 201);\nassert.equal(again.replayed, true);\nassert.deepEqual(again.order, first.order);\nassert.equal(store.orders.length, 1);\nassert.equal(store.log.filter((e) => e === 'insert').length, 1);"
+        },
+        {
+         "name": "the same key with a different body is a 422 and the original still replays",
+         "code": "const makeStore = () => {\n  const keys = new Map();\n  const orders = [];\n  const log = [];\n  return {\n    log,\n    orders,\n    async findKey(key) { await null; log.push('find'); return keys.get(key) ?? null; },\n    async insertOrder(body) { await null; log.push('insert'); const order = { id: 'ord_' + (orders.length + 1), ...body }; orders.push(order); return { ...order }; },\n    async saveKey(key, record) { await null; log.push('save'); keys.set(key, record); },\n  };\n};\nconst store = makeStore();\nconst first = await mod.createOrder(store, 'k1', { sku: 'A', qty: 2 });\nconst clash = await mod.createOrder(store, 'k1', { sku: 'A', qty: 3 });\nassert.equal(clash.status, 422);\nassert.equal(clash.order, undefined);\nassert.equal(store.orders.length, 1);\nconst again = await mod.createOrder(store, 'k1', { sku: 'A', qty: 2 });\nassert.equal(again.status, 201, 'the 422 must not replace the saved record');\nassert.equal(again.replayed, true);\nassert.deepEqual(again.order, first.order);"
+        },
+        {
+         "name": "property order does not make a body different (trap)",
+         "code": "const makeStore = () => {\n  const keys = new Map();\n  const orders = [];\n  const log = [];\n  return {\n    log,\n    orders,\n    async findKey(key) { await null; log.push('find'); return keys.get(key) ?? null; },\n    async insertOrder(body) { await null; log.push('insert'); const order = { id: 'ord_' + (orders.length + 1), ...body }; orders.push(order); return { ...order }; },\n    async saveKey(key, record) { await null; log.push('save'); keys.set(key, record); },\n  };\n};\nconst store = makeStore();\nconst first = await mod.createOrder(store, 'k1', { sku: 'A', qty: 2, note: 'gift' });\nconst again = await mod.createOrder(store, 'k1', { note: 'gift', qty: 2, sku: 'A' });\nassert.equal(again.status, 201);\nassert.equal(again.replayed, true);\nassert.deepEqual(again.order, first.order);\nconst typed = await mod.createOrder(store, 'k1', { sku: 'A', qty: '2', note: 'gift' });\nassert.equal(typed.status, 422, 'the string \"2\" is not the number 2');"
+        },
+        {
+         "name": "different keys with identical bodies are two orders",
+         "code": "const makeStore = () => {\n  const keys = new Map();\n  const orders = [];\n  const log = [];\n  return {\n    log,\n    orders,\n    async findKey(key) { await null; log.push('find'); return keys.get(key) ?? null; },\n    async insertOrder(body) { await null; log.push('insert'); const order = { id: 'ord_' + (orders.length + 1), ...body }; orders.push(order); return { ...order }; },\n    async saveKey(key, record) { await null; log.push('save'); keys.set(key, record); },\n  };\n};\nconst store = makeStore();\nconst a = await mod.createOrder(store, 'k1', { sku: 'A', qty: 1 });\nconst b = await mod.createOrder(store, 'k2', { sku: 'A', qty: 1 });\nassert.equal(a.replayed, false);\nassert.equal(b.replayed, false);\nassert.notEqual(a.order.id, b.order.id);\nassert.equal(store.orders.length, 2);"
+        },
+        {
+         "name": "a missing key is a 400 and the store is never called",
+         "code": "const makeStore = () => {\n  const keys = new Map();\n  const orders = [];\n  const log = [];\n  return {\n    log,\n    orders,\n    async findKey(key) { await null; log.push('find'); return keys.get(key) ?? null; },\n    async insertOrder(body) { await null; log.push('insert'); const order = { id: 'ord_' + (orders.length + 1), ...body }; orders.push(order); return { ...order }; },\n    async saveKey(key, record) { await null; log.push('save'); keys.set(key, record); },\n  };\n};\nconst store = makeStore();\nassert.deepEqual(await mod.createOrder(store, undefined, { sku: 'A', qty: 1 }), { status: 400 });\nassert.deepEqual(await mod.createOrder(store, '', { sku: 'A', qty: 1 }), { status: 400 });\nassert.deepEqual(store.log, []);"
+        }
+       ],
+       "timeoutMs": 8000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "22-idempotent-writes/01-create-order-with-idempotency-key",
+    "type": "code",
+    "module": "22-idempotent-writes",
+    "lesson": "drills",
+    "position": 0,
+    "skills": [
+     "idempotency key",
+     "request fingerprint"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "fund-js/22-idempotent-writes/02-single-flight-per-key",
+    "track": "js",
+    "kind": "drill",
+    "title": "makeCreateOrder: concurrent duplicates share one attempt",
+    "phase": "22-idempotent-writes",
+    "difficulty": 3,
+    "competencies": [
+     "language-fluency"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-js",
+       "language": "js",
+       "tests": [
+        {
+         "name": "a single call inserts once and resolves to the order",
+         "code": "const makeStore = (failInserts = 0) => {\n  const keys = new Map();\n  const orders = [];\n  const log = [];\n  return {\n    log,\n    orders,\n    async findKey(key) { await null; log.push('find'); return keys.get(key) ?? null; },\n    async insertOrder(body) {\n      await null;\n      log.push('insert');\n      if (failInserts > 0) { failInserts--; throw new Error('insert failed'); }\n      const order = { id: 'ord_' + (orders.length + 1), ...body };\n      orders.push(order);\n      return { ...order };\n    },\n    async saveKey(key, order) { await null; log.push('save'); keys.set(key, order); },\n  };\n};\nconst inserts = (store) => store.log.filter((e) => e === 'insert').length;\nassert.equal(typeof mod.makeCreateOrder, 'function', 'export makeCreateOrder');\nconst store = makeStore();\nconst createOrder = mod.makeCreateOrder(store);\nassert.deepEqual(await createOrder('k1', { sku: 'A' }), { id: 'ord_1', sku: 'A' });\nassert.equal(inserts(store), 1);"
+        },
+        {
+         "name": "two overlapping calls with one key cause one insert and share the order",
+         "code": "const makeStore = (failInserts = 0) => {\n  const keys = new Map();\n  const orders = [];\n  const log = [];\n  return {\n    log,\n    orders,\n    async findKey(key) { await null; log.push('find'); return keys.get(key) ?? null; },\n    async insertOrder(body) {\n      await null;\n      log.push('insert');\n      if (failInserts > 0) { failInserts--; throw new Error('insert failed'); }\n      const order = { id: 'ord_' + (orders.length + 1), ...body };\n      orders.push(order);\n      return { ...order };\n    },\n    async saveKey(key, order) { await null; log.push('save'); keys.set(key, order); },\n  };\n};\nconst inserts = (store) => store.log.filter((e) => e === 'insert').length;\nconst store = makeStore();\nconst createOrder = mod.makeCreateOrder(store);\nconst [a, b] = await Promise.all([createOrder('k1', { sku: 'A' }), createOrder('k1', { sku: 'A' })]);\nassert.equal(inserts(store), 1, 'inserts: ' + inserts(store));\nassert.deepEqual(a, { id: 'ord_1', sku: 'A' });\nassert.deepEqual(b, a);\nassert.equal(store.orders.length, 1);"
+        },
+        {
+         "name": "ten overlapping calls still cause one insert",
+         "code": "const makeStore = (failInserts = 0) => {\n  const keys = new Map();\n  const orders = [];\n  const log = [];\n  return {\n    log,\n    orders,\n    async findKey(key) { await null; log.push('find'); return keys.get(key) ?? null; },\n    async insertOrder(body) {\n      await null;\n      log.push('insert');\n      if (failInserts > 0) { failInserts--; throw new Error('insert failed'); }\n      const order = { id: 'ord_' + (orders.length + 1), ...body };\n      orders.push(order);\n      return { ...order };\n    },\n    async saveKey(key, order) { await null; log.push('save'); keys.set(key, order); },\n  };\n};\nconst inserts = (store) => store.log.filter((e) => e === 'insert').length;\nconst store = makeStore();\nconst createOrder = mod.makeCreateOrder(store);\nconst results = await Promise.all(Array.from({ length: 10 }, () => createOrder('k1', { sku: 'A' })));\nassert.equal(inserts(store), 1);\nassert.deepEqual([...new Set(results.map((o) => o.id))], ['ord_1']);"
+        },
+        {
+         "name": "overlapping calls with different keys get their own orders",
+         "code": "const makeStore = (failInserts = 0) => {\n  const keys = new Map();\n  const orders = [];\n  const log = [];\n  return {\n    log,\n    orders,\n    async findKey(key) { await null; log.push('find'); return keys.get(key) ?? null; },\n    async insertOrder(body) {\n      await null;\n      log.push('insert');\n      if (failInserts > 0) { failInserts--; throw new Error('insert failed'); }\n      const order = { id: 'ord_' + (orders.length + 1), ...body };\n      orders.push(order);\n      return { ...order };\n    },\n    async saveKey(key, order) { await null; log.push('save'); keys.set(key, order); },\n  };\n};\nconst inserts = (store) => store.log.filter((e) => e === 'insert').length;\nconst store = makeStore();\nconst createOrder = mod.makeCreateOrder(store);\nconst [a, b] = await Promise.all([createOrder('k1', { sku: 'A' }), createOrder('k2', { sku: 'B' })]);\nassert.equal(inserts(store), 2);\nassert.equal(a.sku, 'A');\nassert.equal(b.sku, 'B');\nassert.notEqual(a.id, b.id);"
+        },
+        {
+         "name": "a later call with a finished key replays the saved order",
+         "code": "const makeStore = (failInserts = 0) => {\n  const keys = new Map();\n  const orders = [];\n  const log = [];\n  return {\n    log,\n    orders,\n    async findKey(key) { await null; log.push('find'); return keys.get(key) ?? null; },\n    async insertOrder(body) {\n      await null;\n      log.push('insert');\n      if (failInserts > 0) { failInserts--; throw new Error('insert failed'); }\n      const order = { id: 'ord_' + (orders.length + 1), ...body };\n      orders.push(order);\n      return { ...order };\n    },\n    async saveKey(key, order) { await null; log.push('save'); keys.set(key, order); },\n  };\n};\nconst inserts = (store) => store.log.filter((e) => e === 'insert').length;\nconst store = makeStore();\nconst createOrder = mod.makeCreateOrder(store);\nconst first = await createOrder('k1', { sku: 'A' });\nconst again = await createOrder('k1', { sku: 'A' });\nassert.deepEqual(again, first);\nassert.equal(inserts(store), 1);"
+        },
+        {
+         "name": "a failed attempt rejects every waiter and does not poison the key (trap)",
+         "code": "const makeStore = (failInserts = 0) => {\n  const keys = new Map();\n  const orders = [];\n  const log = [];\n  return {\n    log,\n    orders,\n    async findKey(key) { await null; log.push('find'); return keys.get(key) ?? null; },\n    async insertOrder(body) {\n      await null;\n      log.push('insert');\n      if (failInserts > 0) { failInserts--; throw new Error('insert failed'); }\n      const order = { id: 'ord_' + (orders.length + 1), ...body };\n      orders.push(order);\n      return { ...order };\n    },\n    async saveKey(key, order) { await null; log.push('save'); keys.set(key, order); },\n  };\n};\nconst inserts = (store) => store.log.filter((e) => e === 'insert').length;\nconst store = makeStore(1);\nconst createOrder = mod.makeCreateOrder(store);\nconst settled = await Promise.allSettled([createOrder('k1', { sku: 'A' }), createOrder('k1', { sku: 'A' })]);\nassert.deepEqual(settled.map((s) => s.status), ['rejected', 'rejected']);\nassert.match(String(settled[0].reason.message), /insert failed/);\nassert.equal(inserts(store), 1, 'the two overlapping calls shared one failed attempt');\nconst retry = await createOrder('k1', { sku: 'A' });\nassert.deepEqual(retry, { id: 'ord_1', sku: 'A' });\nassert.equal(store.orders.length, 1);"
+        }
+       ],
+       "timeoutMs": 8000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "22-idempotent-writes/02-single-flight-per-key",
+    "type": "code",
+    "module": "22-idempotent-writes",
+    "lesson": "drills",
+    "position": 1,
+    "skills": [
+     "in-flight map",
+     "promises"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "fund-js/22-idempotent-writes/03-dedupe-webhook-deliveries",
+    "track": "js",
+    "kind": "drill",
+    "title": "dedupeWebhook: redeliveries inside a TTL",
+    "phase": "22-idempotent-writes",
+    "difficulty": 2,
+    "competencies": [
+     "language-fluency"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-js",
+       "language": "js",
+       "tests": [
+        {
+         "name": "the first delivery is processed and remembered",
+         "code": "assert.equal(typeof mod.dedupeWebhook, 'function', 'export dedupeWebhook');\nconst seen = new Map();\nassert.equal(mod.dedupeWebhook(seen, { id: 'evt_1', type: 'payment.succeeded' }, 5000, 1000), 'process');\nassert.deepEqual([...seen], [['evt_1', 5000]]);"
+        },
+        {
+         "name": "a redelivery inside the window is a duplicate",
+         "code": "const seen = new Map();\nmod.dedupeWebhook(seen, { id: 'evt_1' }, 0, 1000);\nassert.equal(mod.dedupeWebhook(seen, { id: 'evt_1' }, 1, 1000), 'duplicate');\nassert.equal(mod.dedupeWebhook(seen, { id: 'evt_1' }, 500, 1000), 'duplicate');"
+        },
+        {
+         "name": "the record expires at exactly ttlMs, not one millisecond later (boundary)",
+         "code": "const seen = new Map();\nassert.equal(mod.dedupeWebhook(seen, { id: 'evt_1' }, 2000, 1000), 'process');\nassert.equal(mod.dedupeWebhook(seen, { id: 'evt_1' }, 2999, 1000), 'duplicate');\nassert.equal(mod.dedupeWebhook(seen, { id: 'evt_1' }, 3000, 1000), 'process');\nassert.equal(seen.get('evt_1'), 3000);"
+        },
+        {
+         "name": "duplicates do not extend the window (trap)",
+         "code": "const seen = new Map();\nmod.dedupeWebhook(seen, { id: 'evt_1' }, 0, 1000);\nassert.equal(mod.dedupeWebhook(seen, { id: 'evt_1' }, 600, 1000), 'duplicate');\nassert.equal(seen.get('evt_1'), 0, 'a duplicate must not move the recorded time');\nassert.equal(mod.dedupeWebhook(seen, { id: 'evt_1' }, 1200, 1000), 'process');\nassert.equal(seen.get('evt_1'), 1200);"
+        },
+        {
+         "name": "only the id identifies an event",
+         "code": "const seen = new Map();\nmod.dedupeWebhook(seen, { id: 'evt_1', type: 'payment.succeeded', attempt: 1 }, 0, 1000);\nassert.equal(mod.dedupeWebhook(seen, { id: 'evt_1', type: 'payment.succeeded', attempt: 2, sentAt: 40 }, 50, 1000), 'duplicate');\nassert.equal(mod.dedupeWebhook(seen, { id: 'evt_2', type: 'payment.succeeded', attempt: 1 }, 60, 1000), 'process');"
+        },
+        {
+         "name": "every expired record is purged while live ones stay",
+         "code": "const seen = new Map([['old_1', 0], ['old_2', 100], ['edge', 500], ['live', 501]]);\nassert.equal(mod.dedupeWebhook(seen, { id: 'evt_9' }, 1500, 1000), 'process');\nassert.deepEqual([...seen.keys()].sort(), ['evt_9', 'live']);\nassert.equal(seen.get('live'), 501);"
+        }
+       ],
+       "timeoutMs": 8000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "22-idempotent-writes/03-dedupe-webhook-deliveries",
+    "type": "code",
+    "module": "22-idempotent-writes",
+    "lesson": "drills",
+    "position": 2,
+    "skills": [
+     "deduplication",
+     "TTL boundary",
+     "injected clock"
+    ]
+   }
+  }
+ ],
+ "content": {
+  "fund-js/22-idempotent-writes/01-create-order-with-idempotency-key": {
+   "instructions": "**Skills:** idempotency key · request fingerprint  \n**Level:** ★★☆\n\n**Interview prompt.** \"The mobile app retries POST /orders on a timeout. Make the endpoint safe to retry.\"\n\n**Why it matters.** The retry and the original are the same purchase. The server has to recognise the second one, hand back the first answer, and refuse a key that is being reused for something else.\n\n**Your task.** Export `async createOrder(store, key, body)`. The injected `store` has three async methods:\n- `store.findKey(key)` resolves to the record you saved for that key, or `null`\n- `store.insertOrder(body)` creates an order and resolves to it (the body's fields plus an `id`)\n- `store.saveKey(key, record)` remembers any `record` object you choose under the key\n\nResolve to:\n- `{ status: 400 }` when `key` is not a non-empty string, without calling the store\n- first use of a key: insert the order, save the key, `{ status: 201, order, replayed: false }`\n- the same key with the same body again: `{ status: 201, order, replayed: true }` carrying the ORIGINAL order, with no insert\n- the same key with a different body: `{ status: 422 }`, with no insert and the saved record left as it was\n\nBodies are flat objects of strings and numbers. Two bodies are the same request when they have the same fields with the same values, in ANY property order. Different keys are always different orders, even when the bodies are identical.\n\n**Worked example.** `createOrder(store, 'k1', { sku: 'A', qty: 2 })` twice gives the order with id `ord_1` both times, the second marked `replayed: true`, and the store holds one order. `createOrder(store, 'k1', { sku: 'A', qty: 3 })` after that gives status 422.\n",
+   "starter": "// store.findKey(key)         -> Promise<record | null>   (whatever you saved for the key)\n// store.insertOrder(body)    -> Promise<order>           ({ id, ...body })\n// store.saveKey(key, record) -> Promise<void>\nexport async function createOrder(store, key, body) {\n  // TODO: 400 without a key; replay the saved order for a repeated key; 422 when the body differs\n}\n",
+   "solution": "const fingerprint = (body) => JSON.stringify(Object.keys(body).sort().map((field) => [field, body[field]]));\n\nexport async function createOrder(store, key, body) {\n  if (typeof key !== 'string' || key === '') return { status: 400 };\n  const print = fingerprint(body);\n  const saved = await store.findKey(key);\n  if (saved) {\n    if (saved.print !== print) return { status: 422 };\n    return { status: 201, order: saved.order, replayed: true };\n  }\n  const order = await store.insertOrder(body);\n  await store.saveKey(key, { print, order });\n  return { status: 201, order, replayed: false };\n}\n",
+   "explanation": "Save a fingerprint of the body next to the order, and compare it before replaying:\n\n```js\nconst fingerprint = (body) => JSON.stringify(Object.keys(body).sort().map((field) => [field, body[field]]));\n\nconst saved = await store.findKey(key);\nif (saved) {\n  if (saved.print !== print) return { status: 422 };\n  return { status: 201, order: saved.order, replayed: true };\n}\nconst order = await store.insertOrder(body);\nawait store.saveKey(key, { print, order });\n```\n\nSorting the field names makes the fingerprint independent of property order, and keeping the values inside `JSON.stringify` keeps the number 2 different from the string `'2'`. In production the insert and the key record are written in one transaction, with a unique constraint on the key.\n\n**What the tests catch.** The plausible wrong answer replays whatever is stored for the key without comparing bodies, so a reused key silently returns the wrong order instead of 422. Comparing `JSON.stringify(body)` directly turns a re-serialised retry into a false 422. Deduplicating on the body merges two genuine orders made with different keys, and re-saving the record on a mismatch breaks the next honest retry.",
+   "hints": [
+    "The key identifies the attempt; a fingerprint of the body tells a retry apart from a reused key.",
+    "Save something comparable about the body next to the order when you first handle a key, and build it so that property order cannot change it. On a later call compare before you decide between replaying and refusing.",
+    "Refuse a missing key first. Build a fingerprint from the body's entries sorted by field name, look the key up, and when a record exists answer 422 on a different fingerprint or replay its order. With no record, insert the order and save the fingerprint and the order under the key."
+   ]
+  },
+  "fund-js/22-idempotent-writes/02-single-flight-per-key": {
+   "instructions": "**Skills:** in-flight map · promises  \n**Level:** ★★★\n\n**Interview prompt.** \"A double-click sends two identical POSTs a millisecond apart. Your lookup finds no key for either. Now what?\"\n\n**Why it matters.** Looking the key up and then inserting has an `await` in the middle. Overlapping calls both miss and both insert. Within one process the cure is to let the second caller wait for the first caller's attempt.\n\n**Your task.** Export `makeCreateOrder(store)`. It returns a function `createOrder(key, body)` that returns a promise of the order. The async `store` offers `findKey(key)` (the saved order or `null`), `insertOrder(body)` (creates and resolves to the order) and `saveKey(key, order)`.\n- a key that is already saved: resolve to the saved order, with no insert\n- otherwise: insert the order, save it under the key, resolve to it\n- calls with the SAME key that overlap share one attempt: one insert, and every caller gets the same order\n- calls with different keys never wait for each other and never share a result\n- when an attempt rejects, every caller waiting on it sees that rejection, and the NEXT call with that key starts a fresh attempt\n\nEvery call for one key carries the same body in this drill; comparing bodies was the previous drill.\n\n**Worked example.** Ten overlapping calls for key `'k1'` cause one `insertOrder` and all resolve to the order with id `ord_1`. If that insert had failed, all ten would reject, and an eleventh call afterwards would insert normally.\n",
+   "starter": "// store.findKey(key)        -> Promise<order | null>\n// store.insertOrder(body)   -> Promise<order>   ({ id, ...body })\n// store.saveKey(key, order) -> Promise<void>\nexport function makeCreateOrder(store) {\n  return function createOrder(key, body) {\n    // TODO: overlapping calls with one key must share a single attempt\n  };\n}\n",
+   "solution": "export function makeCreateOrder(store) {\n  const inFlight = new Map();\n\n  const attempt = async (key, body) => {\n    const saved = await store.findKey(key);\n    if (saved) return saved;\n    const order = await store.insertOrder(body);\n    await store.saveKey(key, order);\n    return order;\n  };\n\n  return function createOrder(key, body) {\n    const running = inFlight.get(key);\n    if (running) return running;\n    const work = attempt(key, body).finally(() => inFlight.delete(key));\n    inFlight.set(key, work);\n    return work;\n  };\n}\n",
+   "explanation": "Keep the running attempt per key, and put it in the map before anything is awaited:\n\n```js\nreturn function createOrder(key, body) {\n  const running = inFlight.get(key);\n  if (running) return running;\n  const work = attempt(key, body).finally(() => inFlight.delete(key));\n  inFlight.set(key, work);\n  return work;\n};\n```\n\n`createOrder` is deliberately not `async`: the check and the `set` happen in one synchronous step, so no second call can slip between them. `finally` removes the entry whether the attempt fulfilled or rejected. After a success the saved key takes over; after a failure the next call is free to try again. This protects one process only. Across servers the unique constraint on the key is what holds.\n\n**What the tests catch.** The plausible wrong answer is the sequential logic from the previous drill (look up, then insert): two overlapping calls both miss and insert twice. Keeping every promise forever, or removing the entry only on success, hands the old rejection to each retry after one failed insert. A single shared promise for all keys gives the second customer the first customer's order.",
+   "hints": [
+    "Looking the key up and then inserting is a check-then-act race: two overlapping calls both find nothing.",
+    "Remember the work that is currently running for each key, so a second caller can wait for that same work instead of starting its own. Forget it as soon as it settles, whether it succeeded or failed.",
+    "Keep a map from key to the promise of the running attempt. A call first hands back the promise already in the map. Otherwise it starts the lookup-then-insert work, stores that promise under the key before anything is awaited, and removes the entry when the promise settles either way."
+   ]
+  },
+  "fund-js/22-idempotent-writes/03-dedupe-webhook-deliveries": {
+   "instructions": "**Skills:** deduplication · TTL boundary · injected clock  \n**Level:** ★★☆\n\n**Interview prompt.** \"The payment provider redelivers webhooks until it gets a 200. How do you make sure a parcel ships once?\"\n\n**Why it matters.** At-least-once delivery means the consumer does the deduplicating. The memory of handled ids needs an expiry, and expiry boundaries are where these handlers go wrong.\n\n**Your task.** Export `dedupeWebhook(seen, event, now, ttlMs)`. `seen` is a `Map` from event id to the time in milliseconds at which that id was processed; you update it in place. `now` is the current time in milliseconds (injected, never read a clock). Return `'process'` or `'duplicate'`:\n- an id that is not in `seen`: record it with `now` and return `'process'`\n- an id processed less than `ttlMs` ago: return `'duplicate'` and leave its recorded time unchanged\n- a record that is `ttlMs` old or older has expired: at exactly that age the event is processed again and recorded with the new time\n- only `event.id` identifies an event; its other fields may differ between deliveries\n- every call first removes ALL expired records from `seen`, not only this event's\n\n**Worked example.** With `ttlMs` 1000: an event with id `'evt_1'` at time 0 is `'process'`; the same id at 999 is `'duplicate'`; at 1000 it is `'process'` again and `seen` now maps `'evt_1'` to 1000.\n",
+   "starter": "// seen: Map<eventId, processedAtMs>   now, ttlMs: milliseconds\nexport function dedupeWebhook(seen, event, now, ttlMs) {\n  // TODO: 'process' the first delivery of an id, 'duplicate' while its record is younger than ttlMs\n}\n",
+   "solution": "export function dedupeWebhook(seen, event, now, ttlMs) {\n  for (const [id, processedAt] of seen) {\n    if (now - processedAt >= ttlMs) seen.delete(id);\n  }\n  if (seen.has(event.id)) return 'duplicate';\n  seen.set(event.id, now);\n  return 'process';\n}\n",
+   "explanation": "Purge first, then the question is only whether the id is still remembered:\n\n```js\nfor (const [id, processedAt] of seen) {\n  if (now - processedAt >= ttlMs) seen.delete(id);\n}\nif (seen.has(event.id)) return 'duplicate';\nseen.set(event.id, now);\nreturn 'process';\n```\n\nDeleting from a `Map` while iterating it is safe in JavaScript. The record is written only on the `'process'` branch, so the window always runs from the first processing. In production `seen` is a table with a unique event id and an expiry job, and the window is longer than the sender's whole retry schedule.\n\n**What the tests catch.** The plausible wrong answer expires with `>` instead of `>=`, so a delivery at exactly `ttlMs` is still called a duplicate. Refreshing the time on every delivery lets a steady trickle of duplicates keep an id alive forever. Comparing the whole payload processes a redelivery whose attempt counter changed, and expiring only the incoming id lets `seen` grow without bound.",
+   "hints": [
+    "A consumer remembers which event ids it handled, but only for a retention window.",
+    "Decide first which remembered ids are too old and drop them all, then the question for the incoming event is simply whether its id is still remembered. A duplicate changes nothing.",
+    "Walk the map and delete every entry whose age is the full window or more. Then answer duplicate when the event id is still present, and otherwise record the id with the current time and answer process."
+   ]
+  }
+ }
+}

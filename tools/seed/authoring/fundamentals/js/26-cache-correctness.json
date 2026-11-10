@@ -1,0 +1,261 @@
+{
+  "format": "fundamentals-authoring@1",
+  "track": "js",
+  "topic": "26-cache-correctness",
+  "title": "Cache correctness",
+  "level": "advanced",
+  "summary": "Cache-aside with TTLs and an injected clock, keys that include every input and cannot collide, stampedes and single-flight loading, and invalidating on write without re-caching stale rows.",
+  "lesson": "## What a cache promises\n\nCache-aside is the common pattern: read the cache; on a miss, load from the database, store the value with a TTL and return it. Every cached value is a copy that may be stale. The TTL bounds how stale it can get; it does not make it correct. Test TTLs with an injected clock: pick a boundary rule (here, an entry is fresh while its age is below the TTL) and assert the exact expiry instant instead of sleeping.\n\n## Keys: everything that changes the answer\n\nA key must include every input that changes the response: the tenant, the user or role when permissions shape the result, the locale, and the query parameters in a normalised order.\n\nFailure story: a reporting endpoint cached `'dashboard:' + reportId`. Report ids were shared templates, so the first tenant to load a dashboard after each expiry decided what every other tenant saw for the next five minutes, revenue figures included.\n\nBuild keys from an unambiguous encoding. Joining with a separator collides: tenant `a:b` with user `c` and tenant `a` with user `b:c` both join to `a:b:c`. Serialise an array as JSON instead. Sort object keys at every depth, and beware `JSON.stringify(params, Object.keys(params).sort())`: an array replacer filters keys at every level, so nested objects serialise as `{}` and different filters share one key.\n\n## Stampedes and single-flight\n\nWhen a hot key expires, every concurrent request misses at once and runs the same load: a stampede.\n\nFailure story: the home feed had a 60-second TTL. At each expiry about 2,000 requests ran the same 300 ms query together, the connection pool ran dry and the whole API timed out for a few seconds every minute.\n\nSingle-flight fixes it: keep a map from key to the load in progress, and let a miss await that promise instead of starting another. Remove the entry once it settles, and never store a rejection, or one timeout is served to everyone for a whole TTL. Random jitter on TTLs keeps many keys from expiring together.\n\n## Invalidation on write\n\nWrite the database first, then delete the key; the next miss loads the new row. Deleting first opens a window: a reader that misses between the delete and the commit loads the old row and puts it straight back.\n\nFailure story: a profile service deleted the cache entry, then updated the row. Under load, a concurrent read re-cached the old email after almost every change, and users saw it for the full ten-minute TTL, so support logged \"my change did not save\" all week.\n\nWrite-then-delete still has a gap: a slow read that began before the write can finish after the delete and store the old row. Guard it with a per-key version: note the number of finished writes before reading, and store the result only if it is unchanged.",
+  "quiz": [
+    {
+      "prompt": "`GET /reports/:id` returns figures for the caller's tenant and hides cost columns from non-managers; report ids are templates shared by all tenants. Which inputs must its cache key include?",
+      "choices": [
+        "The report id, since the URL already names the resource uniquely",
+        "The report id and tenant, since roles only matter for writes",
+        "The report id, tenant and role, since all three shape the result",
+        "The report id and role, since the id already implies the tenant too"
+      ],
+      "answer": 2,
+      "explanation": "Any input that changes the response belongs in the key. Leaving out the tenant serves one tenant's figures to another; leaving out the role serves a manager's view to everyone else."
+    },
+    {
+      "prompt": "Why is `[tenant, user].join(':')` an unsafe part of a cache key?",
+      "choices": [
+        "Tenant a:b with user c and tenant a with user b:c give the same string",
+        "join turns numeric ids into strings, so 7 and '7' produce different keys",
+        "join drops empty strings, so tenant '' with user x produces just x",
+        "join sorts its elements first, so swapping tenant and user collides"
+      ],
+      "answer": 0,
+      "explanation": "A separator that can appear inside a part lets one input forge another. JSON-encode an array of the parts instead. join keeps order and empty strings, and 7 and '7' both become '7'."
+    },
+    {
+      "prompt": "What does `JSON.stringify({ b: 1, a: { z: 1 } }, ['a', 'b'])` return?",
+      "choices": [
+        "`'{\"a\":{\"z\":1},\"b\":1}'`",
+        "`'{\"a\":{},\"b\":1}'`",
+        "`'{\"b\":1,\"a\":{\"z\":1}}'`",
+        "`'{\"b\":1,\"a\":{}}'`"
+      ],
+      "answer": 1,
+      "explanation": "An array replacer is an allow-list applied at every depth, so the nested z is dropped. Sorting keys this way makes different nested filters share one cache key."
+    },
+    {
+      "prompt": "A hot key expires and 2,000 concurrent requests miss it at once. What does single-flight loading do?",
+      "choices": [
+        "Lets the first request load and fails the others with 503 until it is done",
+        "Puts every cache read behind one global lock until the key has reloaded",
+        "Gives each waiting request its own load but spreads them out over time",
+        "Makes the concurrent misses for that key await one shared in-flight load"
+      ],
+      "answer": 3,
+      "explanation": "The first miss starts the load and registers its promise; later misses for the same key await that promise, so the database sees one query instead of 2,000."
+    },
+    {
+      "prompt": "A single-flight cache's load for a key rejects with a timeout. What should the cache do with that key?",
+      "choices": [
+        "Store the rejection, so callers get that error until the TTL runs out",
+        "Drop the in-flight entry and store nothing, so the next call loads again",
+        "Keep the rejected promise registered, so later callers wait on it too",
+        "Store undefined for the whole TTL, so all callers fall back to the database"
+      ],
+      "answer": 1,
+      "explanation": "Callers already waiting share the rejection; after that the key must be loadable again. Caching a failure turns one transient error into an outage the length of the TTL."
+    },
+    {
+      "prompt": "An update handler runs `cache.delete(key)` and then `await db.update(id, patch)`. What can go wrong?",
+      "choices": [
+        "A read between the two steps puts the old row back until its TTL ends",
+        "The delete is refused, since the row is locked until the update commits",
+        "The update is rolled back, since the cache and database briefly disagree",
+        "The database write is skipped, since the key is already gone from cache"
+      ],
+      "answer": 0,
+      "explanation": "Between the delete and the commit, a miss loads the old row and stores it again. Write first, then delete."
+    },
+    {
+      "prompt": "With write-then-delete, why can a per-key version check still be needed?",
+      "choices": [
+        "A delete that runs before the commit makes the database lose the update",
+        "Cache deletes are queued, so they can run before the write is even sent",
+        "Two deletes of one key cancel each other out, so the old cache entry survives",
+        "A read that began before the write can store the old row after the delete"
+      ],
+      "answer": 3,
+      "explanation": "The slow read loaded the old row, the write committed and deleted the key, then the read stored what it had. Count finished writes per key and skip the store if the count moved."
+    },
+    {
+      "prompt": "A read-through cache treats entries as fresh while their age is below the TTL. A value stored at t = 1000 ms with a 500 ms TTL is read at t = 1500 ms. What happens?",
+      "choices": [
+        "It is served from the cache, since 1500 ms is still inside the window",
+        "It is served stale while a background refresh starts for the next reader",
+        "It has expired, so the read loads the value again and stores the result",
+        "It has expired, and the read returns undefined until a later load runs"
+      ],
+      "answer": 2,
+      "explanation": "Its age is exactly 500 ms, which is not below the TTL. An injected clock lets a test hit 1499 and 1500 exactly."
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "What is cache-aside?",
+      "back": "Read the cache; on a miss load from the database, store the value with a TTL and return it. Writes go to the database and then invalidate the key."
+    },
+    {
+      "front": "What belongs in a cache key?",
+      "back": "Every input that changes the response: tenant, user or role when permissions shape it, locale, and the query parameters in a normalised order."
+    },
+    {
+      "front": "What is a cache stampede?",
+      "back": "Many requests miss the same hot key at the same moment, often right after it expires, and every one of them runs the expensive load."
+    },
+    {
+      "front": "How is single-flight loading built?",
+      "back": "A map from key to the pending promise: a miss checks it first, so concurrent callers await one load. The entry is removed once the promise settles."
+    },
+    {
+      "front": "Should a cache keep a failed load?",
+      "back": "No. Waiting callers share the error, then the key becomes loadable again; keeping it would repeat one transient failure for a whole TTL."
+    },
+    {
+      "front": "Why invalidate after the database write rather than before?",
+      "back": "Invalidating first leaves a window in which a reader re-caches the old row; after the commit, the next miss reads the new one."
+    }
+  ],
+  "drills": [
+    {
+      "slug": "01-single-flight-ttl-cache",
+      "title": "cached: TTL cache with single-flight loads",
+      "difficulty": 3,
+      "skills": [
+        "caching",
+        "single-flight",
+        "promises"
+      ],
+      "instructions": "**Interview prompt.** \"Our home-feed query takes 300 ms, and every time its cache entry expires the database falls over. Write the cache wrapper.\"\n\n**Why it matters.** A plain \"check the cache, else load\" lets every concurrent miss run the same expensive load: a stampede. Single-flight makes concurrent misses share one load, the TTL bounds staleness, and a failed load must never be cached.\n\n**Your task.** Export `cached(fn, { ttl, clock })`. `fn(key)` returns a promise of the value and `clock.now()` returns the current time in ms. Return a function `get(key)` that returns a promise of the value:\n- a stored value is fresh while its age is less than `ttl` ms, its age counting from when its load resolved; at an age of exactly `ttl` it has expired\n- any resolved value, including `0` and `null`, is stored\n- concurrent calls for a key without a fresh value share ONE call of `fn(key)`\n- a rejected load is not stored: every caller waiting on it rejects with its error, and the next call loads again\n- different keys never share loads or values\n\n**Worked example.** With a `ttl` of 500, a value loaded at time 1000 is served from the cache at 1499 and loaded again at 1500.",
+      "starter": "export function cached(fn, { ttl, clock }) {\n  // TODO: store values with their load time, and share one in-flight load per key\n  return (key) => fn(key);\n}\n",
+      "solution": "export function cached(fn, { ttl, clock }) {\n  const values = new Map();\n  const inflight = new Map();\n  return function get(key) {\n    const hit = values.get(key);\n    if (hit && clock.now() - hit.storedAt < ttl) return Promise.resolve(hit.value);\n    const pending = inflight.get(key);\n    if (pending) return pending;\n    const load = Promise.resolve()\n      .then(() => fn(key))\n      .then((value) => {\n        values.set(key, { value, storedAt: clock.now() });\n        return value;\n      })\n      .finally(() => inflight.delete(key));\n    inflight.set(key, load);\n    return load;\n  };\n}\n",
+      "tests": [
+        {
+          "name": "a repeated read within the TTL loads once",
+          "code": "assert.equal(typeof mod.cached, 'function', 'export cached');\nlet t = 0;\nconst clock = { now: () => t };\nlet calls = 0;\nconst get = mod.cached(async (k) => { calls++; return 'feed:' + k; }, { ttl: 1000, clock });\nassert.equal(await get('home'), 'feed:home');\nt = 400;\nassert.equal(await get('home'), 'feed:home');\nassert.equal(calls, 1);"
+        },
+        {
+          "name": "50 concurrent misses share one load (stampede)",
+          "code": "let t = 0;\nconst clock = { now: () => t };\nlet calls = 0;\nlet release;\nconst gate = new Promise((r) => { release = r; });\nconst get = mod.cached(async () => { calls++; return gate; }, { ttl: 60000, clock });\nconst all = Array.from({ length: 50 }, () => get('home'));\nrelease(['post-1', 'post-2']);\nconst values = await Promise.all(all);\nassert.equal(calls, 1, '50 concurrent misses must share one load');\nassert.ok(values.every((v) => v.length === 2 && v[0] === 'post-1'));"
+        },
+        {
+          "name": "an entry expires exactly when its age reaches the TTL (boundary)",
+          "code": "let t = 1000;\nconst clock = { now: () => t };\nlet calls = 0;\nconst get = mod.cached(async (k) => { calls++; return k + calls; }, { ttl: 500, clock });\nassert.equal(await get('a'), 'a1');\nt = 1499;\nassert.equal(await get('a'), 'a1', 'age 499 is below the ttl of 500: still fresh');\nt = 1500;\nassert.equal(await get('a'), 'a2', 'age 500 has reached the ttl: expired');\nassert.equal(calls, 2);"
+        },
+        {
+          "name": "a failed load is shared by its waiters and never cached",
+          "code": "let t = 0;\nconst clock = { now: () => t };\nlet calls = 0;\nlet fail;\nconst gate = new Promise((_, reject) => { fail = reject; });\ngate.catch(() => {});\nconst fn = (k) => {\n  calls++;\n  return calls === 1 ? gate : Promise.resolve('ok:' + k);\n};\nconst get = mod.cached(fn, { ttl: 1000, clock });\nconst waiters = [get('k'), get('k'), get('k')];\nfail(new Error('db timeout'));\nconst settled = await Promise.allSettled(waiters);\nassert.deepEqual(settled.map((s) => s.status), ['rejected', 'rejected', 'rejected']);\nassert.ok(settled.every((s) => /db timeout/.test(s.reason.message)));\nassert.equal(calls, 1, 'the three waiters shared one load');\nassert.equal(await get('k'), 'ok:k', 'the next call must load again');\nassert.equal(calls, 2);"
+        },
+        {
+          "name": "0 and null are stored like any other value (trap)",
+          "code": "let t = 0;\nconst clock = { now: () => t };\nlet calls = 0;\nconst get = mod.cached(async (k) => { calls++; return k === 'count' ? 0 : null; }, { ttl: 1000, clock });\nassert.equal(await get('count'), 0);\nassert.equal(await get('count'), 0);\nassert.equal(await get('missing'), null);\nassert.equal(await get('missing'), null);\nassert.equal(calls, 2, 'a falsy value is still a cached value');"
+        },
+        {
+          "name": "different keys load and cache separately",
+          "code": "let t = 0;\nconst clock = { now: () => t };\nconst seen = [];\nconst get = mod.cached(async (k) => { seen.push(k); return k.toUpperCase(); }, { ttl: 1000, clock });\nassert.deepEqual(await Promise.all([get('a'), get('b'), get('a')]), ['A', 'B', 'A']);\nassert.deepEqual([...seen].sort(), ['a', 'b']);"
+        }
+      ],
+      "explanation": "Keep finished values with their load time, and a second map of loads still running:\n\n```js\nconst hit = values.get(key);\nif (hit && clock.now() - hit.storedAt < ttl) return Promise.resolve(hit.value);\nconst pending = inflight.get(key);\nif (pending) return pending;\nconst load = Promise.resolve()\n  .then(() => fn(key))\n  .then((value) => { values.set(key, { value, storedAt: clock.now() }); return value; })\n  .finally(() => inflight.delete(key));\ninflight.set(key, load);\nreturn load;\n```\n\nOnly a success reaches `values`; `finally` unregisters the load either way, so a failure is shared by its waiters and then forgotten. Starting `fn` inside `.then` also turns a loader that throws synchronously into a rejection instead of a stuck entry.\n\nThe tests catch three plausible-wrong versions: a cache without an in-flight map (50 concurrent misses run 50 loads), caching the promise itself (single-flight, but a rejection is then served for the whole TTL), and a truthy hit check with `<=` (reloads `0` and `null` on every call and serves a value one millisecond too long).",
+      "hints": [
+        "Single-flight: concurrent misses for the same key should wait on one shared load instead of each starting their own.",
+        "Keep two maps, one for finished values with the time they were stored and one for loads still running. A hit must be younger than the TTL. On a miss, reuse a running load if there is one, and otherwise start it and register it, store only a success, and unregister it when it settles either way.",
+        "Check the stored entry first and serve it while its age is strictly below the ttl, then hand back the pending promise for that key if one exists, and otherwise start the loader, record its promise, store the value with the current clock time on success, and remove the pending record whether it succeeded or failed."
+      ]
+    },
+    {
+      "slug": "02-invalidate-on-write",
+      "title": "createUserService: fresh reads after writes",
+      "difficulty": 3,
+      "skills": [
+        "cache invalidation",
+        "race conditions"
+      ],
+      "instructions": "**Interview prompt.** \"Users change their email and keep seeing the old one for ten minutes. Fix the profile cache.\"\n\n**Why it matters.** Cache-aside reads are easy; writes are where caches go stale. Deleting the key before the database write lets a concurrent reader put the old row straight back, and even write-then-delete has a gap: a slow read that began before the write can store the old row after the delete.\n\n**Your task.** Export `createUserService({ db, cache })` returning `{ getUser(id), updateUser(id, patch) }`, both async. `db.get(id)` resolves to the user row or `null`, `db.update(id, patch)` resolves once the row is written, and `cache` is a `Map` whose keys are `user:` followed by the id.\n- `getUser` returns the cached row when there is one; otherwise it reads the database, stores the row and returns it\n- `updateUser` writes the database first, and removes that user's cache entry once the write has finished\n- if an update of the same user finished while a read was waiting on the database, that read still returns its row but must NOT store it\n- other users' entries are never touched\n\n**Worked example.** `getUser(1)`, then `updateUser(1, { email: 'new@x.io' })`, then `getUser(1)`: the last call reads the database again and returns the new email.",
+      "starter": "export function createUserService({ db, cache }) {\n  // TODO: cache-aside reads; writes that leave no stale row behind\n  return {\n    async getUser(id) {\n      return db.get(id);\n    },\n    async updateUser(id, patch) {\n      await db.update(id, patch);\n    },\n  };\n}\n",
+      "solution": "export function createUserService({ db, cache }) {\n  const finishedWrites = new Map();\n  const keyOf = (id) => `user:${id}`;\n  const version = (id) => finishedWrites.get(id) ?? 0;\n  return {\n    async getUser(id) {\n      const key = keyOf(id);\n      if (cache.has(key)) return cache.get(key);\n      const before = version(id);\n      const row = await db.get(id);\n      if (version(id) === before) cache.set(key, row);\n      return row;\n    },\n    async updateUser(id, patch) {\n      await db.update(id, patch);\n      finishedWrites.set(id, version(id) + 1);\n      cache.delete(keyOf(id));\n    },\n  };\n}\n",
+      "tests": [
+        {
+          "name": "a second read is served from the cache",
+          "code": "assert.equal(typeof mod.createUserService, 'function', 'export createUserService');\nconst makeDb = (rows) => {\n  const data = new Map(rows.map((r) => [r.id, { ...r }]));\n  const db = { gets: 0, getHolds: [], updateHolds: [] };\n  db.get = async (id) => { db.gets++; const snap = data.has(id) ? { ...data.get(id) } : null; const hold = db.getHolds.shift(); if (hold) await hold; return snap; };\n  db.update = async (id, patch) => { const hold = db.updateHolds.shift(); if (hold) await hold; data.set(id, { ...data.get(id), ...patch }); };\n  return db;\n};\nconst db = makeDb([{ id: 1, email: 'old@x.io' }]);\nconst cache = new Map();\nconst svc = mod.createUserService({ db, cache });\nassert.deepEqual(await svc.getUser(1), { id: 1, email: 'old@x.io' });\nassert.deepEqual(await svc.getUser(1), { id: 1, email: 'old@x.io' });\nassert.equal(db.gets, 1);\nassert.ok(cache.has('user:1'), 'rows are cached under user:<id>');"
+        },
+        {
+          "name": "a read after a write returns the new row",
+          "code": "const makeDb = (rows) => {\n  const data = new Map(rows.map((r) => [r.id, { ...r }]));\n  const db = { gets: 0, getHolds: [], updateHolds: [] };\n  db.get = async (id) => { db.gets++; const snap = data.has(id) ? { ...data.get(id) } : null; const hold = db.getHolds.shift(); if (hold) await hold; return snap; };\n  db.update = async (id, patch) => { const hold = db.updateHolds.shift(); if (hold) await hold; data.set(id, { ...data.get(id), ...patch }); };\n  return db;\n};\nconst db = makeDb([{ id: 1, email: 'old@x.io' }]);\nconst svc = mod.createUserService({ db, cache: new Map() });\nawait svc.getUser(1);\nawait svc.updateUser(1, { email: 'new@x.io' });\nassert.equal((await svc.getUser(1)).email, 'new@x.io');"
+        },
+        {
+          "name": "a read during an unfinished write does not leave the old row cached",
+          "code": "const makeDb = (rows) => {\n  const data = new Map(rows.map((r) => [r.id, { ...r }]));\n  const db = { gets: 0, getHolds: [], updateHolds: [] };\n  db.get = async (id) => { db.gets++; const snap = data.has(id) ? { ...data.get(id) } : null; const hold = db.getHolds.shift(); if (hold) await hold; return snap; };\n  db.update = async (id, patch) => { const hold = db.updateHolds.shift(); if (hold) await hold; data.set(id, { ...data.get(id), ...patch }); };\n  return db;\n};\nconst db = makeDb([{ id: 1, email: 'old@x.io' }]);\nconst svc = mod.createUserService({ db, cache: new Map() });\nawait svc.getUser(1);\nlet commit;\ndb.updateHolds.push(new Promise((r) => { commit = r; }));\nconst writing = svc.updateUser(1, { email: 'new@x.io' });\nawait svc.getUser(1);\ncommit();\nawait writing;\nassert.equal((await svc.getUser(1)).email, 'new@x.io', 'the row read before the commit must not survive the write');"
+        },
+        {
+          "name": "a slow read that began before a write does not cache its old row (trap)",
+          "code": "const makeDb = (rows) => {\n  const data = new Map(rows.map((r) => [r.id, { ...r }]));\n  const db = { gets: 0, getHolds: [], updateHolds: [] };\n  db.get = async (id) => { db.gets++; const snap = data.has(id) ? { ...data.get(id) } : null; const hold = db.getHolds.shift(); if (hold) await hold; return snap; };\n  db.update = async (id, patch) => { const hold = db.updateHolds.shift(); if (hold) await hold; data.set(id, { ...data.get(id), ...patch }); };\n  return db;\n};\nconst db = makeDb([{ id: 1, email: 'old@x.io' }]);\nconst svc = mod.createUserService({ db, cache: new Map() });\nlet finishRead;\ndb.getHolds.push(new Promise((r) => { finishRead = r; }));\nconst slowRead = svc.getUser(1);\nawait svc.updateUser(1, { email: 'new@x.io' });\nfinishRead();\nawait slowRead;\nassert.equal((await svc.getUser(1)).email, 'new@x.io', 'the slow read stored the row it saw before the write');"
+        },
+        {
+          "name": "updating one user leaves other users cached",
+          "code": "const makeDb = (rows) => {\n  const data = new Map(rows.map((r) => [r.id, { ...r }]));\n  const db = { gets: 0, getHolds: [], updateHolds: [] };\n  db.get = async (id) => { db.gets++; const snap = data.has(id) ? { ...data.get(id) } : null; const hold = db.getHolds.shift(); if (hold) await hold; return snap; };\n  db.update = async (id, patch) => { const hold = db.updateHolds.shift(); if (hold) await hold; data.set(id, { ...data.get(id), ...patch }); };\n  return db;\n};\nconst db = makeDb([{ id: 1, email: 'a@x.io' }, { id: 2, email: 'b@x.io' }]);\nconst svc = mod.createUserService({ db, cache: new Map() });\nawait svc.getUser(1);\nawait svc.getUser(2);\nawait svc.updateUser(1, { email: 'a2@x.io' });\nawait svc.getUser(2);\nassert.equal(db.gets, 2, 'user 2 is still served from the cache');"
+        },
+        {
+          "name": "a missing user reads as null",
+          "code": "const makeDb = (rows) => {\n  const data = new Map(rows.map((r) => [r.id, { ...r }]));\n  const db = { gets: 0, getHolds: [], updateHolds: [] };\n  db.get = async (id) => { db.gets++; const snap = data.has(id) ? { ...data.get(id) } : null; const hold = db.getHolds.shift(); if (hold) await hold; return snap; };\n  db.update = async (id, patch) => { const hold = db.updateHolds.shift(); if (hold) await hold; data.set(id, { ...data.get(id), ...patch }); };\n  return db;\n};\nconst svc = mod.createUserService({ db: makeDb([]), cache: new Map() });\nassert.equal(await svc.getUser(42), null);"
+        }
+      ],
+      "explanation": "Write first, then delete; and let a read store its row only if no write of that user finished while it was waiting:\n\n```js\nasync getUser(id) {\n  const key = keyOf(id);\n  if (cache.has(key)) return cache.get(key);\n  const before = version(id);\n  const row = await db.get(id);\n  if (version(id) === before) cache.set(key, row);   // no write finished meanwhile\n  return row;\n},\nasync updateUser(id, patch) {\n  await db.update(id, patch);\n  finishedWrites.set(id, version(id) + 1);\n  cache.delete(keyOf(id));\n},\n```\n\nThe version check and `cache.set` run in the same synchronous step, so no write can slip between them.\n\nThe tests catch two plausible-wrong versions. Deleting the key BEFORE the write lets the read that arrives during the write miss, load the not-yet-updated row and cache it after the delete has already happened. Plain write-then-delete passes that test but fails the trap: a read that started before the write and finished after it stores the old row once the delete is over, and it stays for a full TTL.",
+      "hints": [
+        "Invalidate after the write commits, and protect the cache from slow reads that saw the data before the write.",
+        "Write first and drop the cached entry afterwards. To spot a slow read, keep a per-user count of finished writes: note it before reading, and store the row only if it has not changed when the read comes back.",
+        "In the update, await the database write, then bump that user's finished-write counter and delete the user's key. In the read, serve a cached hit, otherwise remember the counter, await the database, and set the key only if the counter still has the remembered value."
+      ]
+    },
+    {
+      "slug": "03-collision-free-cache-key",
+      "title": "cacheKey: no collisions, normalised params",
+      "difficulty": 2,
+      "skills": [
+        "cache keys",
+        "multi-tenancy",
+        "normalisation"
+      ],
+      "instructions": "**Interview prompt.** \"Tenant B just saw tenant A's dashboard: the cache key was the report id. Write the key builder every cached endpoint must use.\"\n\n**Why it matters.** A cache key must contain every input that changes the response, and two different requests must never produce the same string. Gluing parts together with a separator lets one part forge another, and query parameters arrive in any order, so equal requests must still meet on one key.\n\n**Your task.** Export `cacheKey(tenant, user, params)` returning a string. `tenant` and `user` are strings; `params` is a plain object whose values are strings, numbers, booleans, `null`, arrays or nested plain objects.\n- equal inputs give equal keys, whatever the order of object keys at any depth\n- any difference in the tenant, the user or a param value gives a different key, including values that contain separator characters such as `:`, `|`, `&` or `=`\n- array order matters\n- a property whose value is `undefined` counts as absent\n\n**Worked example.** `cacheKey('t1', 'u9', { sort: 'name', page: 2 })` equals `cacheKey('t1', 'u9', { page: 2, sort: 'name' })`, and differs from `cacheKey('t2', 'u9', { page: 2, sort: 'name' })`.",
+      "starter": "export function cacheKey(tenant, user, params) {\n  // TODO: an unambiguous encoding of tenant, user and the normalised params\n  return 'key';\n}\n",
+      "solution": "const normalize = (value) => {\n  if (Array.isArray(value)) return value.map(normalize);\n  if (value !== null && typeof value === 'object') {\n    const out = {};\n    for (const k of Object.keys(value).sort()) {\n      if (value[k] !== undefined) out[k] = normalize(value[k]);\n    }\n    return out;\n  }\n  return value;\n};\n\nexport function cacheKey(tenant, user, params) {\n  return JSON.stringify([tenant, user, normalize(params)]);\n}\n",
+      "tests": [
+        {
+          "name": "the same request with params in another order gives the same key",
+          "code": "assert.equal(typeof mod.cacheKey, 'function', 'export cacheKey');\nconst a = mod.cacheKey('t1', 'u9', { sort: 'name', page: 2 });\nassert.equal(typeof a, 'string');\nassert.equal(a, mod.cacheKey('t1', 'u9', { page: 2, sort: 'name' }));"
+        },
+        {
+          "name": "tenant and user are both part of the key",
+          "code": "const keys = new Set([\n  mod.cacheKey('t1', 'u1', { page: 1 }),\n  mod.cacheKey('t2', 'u1', { page: 1 }),\n  mod.cacheKey('t1', 'u2', { page: 1 }),\n  mod.cacheKey('t1', 'u1', { page: 2 }),\n]);\nassert.equal(keys.size, 4);"
+        },
+        {
+          "name": "a separator inside an id cannot forge another tenant's key",
+          "code": "assert.notEqual(mod.cacheKey('a:b', 'c', {}), mod.cacheKey('a', 'b:c', {}));\nassert.notEqual(mod.cacheKey('a|b', 'c', {}), mod.cacheKey('a', 'b|c', {}));\nassert.notEqual(mod.cacheKey('acme', '', { q: 'x' }), mod.cacheKey('acme:', '', { q: 'x' }));"
+        },
+        {
+          "name": "a param value cannot forge extra params",
+          "code": "assert.notEqual(mod.cacheKey('t', 'u', { q: 'a&z=1' }), mod.cacheKey('t', 'u', { q: 'a', z: '1' }));\nassert.notEqual(mod.cacheKey('t', 'u', { q: 'a=b' }), mod.cacheKey('t', 'u', { 'q=a': 'b' }));"
+        },
+        {
+          "name": "nested objects are normalised and still tell keys apart (trap)",
+          "code": "const open = mod.cacheKey('t', 'u', { filter: { status: 'open', owner: 'me' }, page: 1 });\nassert.equal(open, mod.cacheKey('t', 'u', { page: 1, filter: { owner: 'me', status: 'open' } }), 'nested key order must not matter');\nassert.notEqual(open, mod.cacheKey('t', 'u', { filter: { status: 'closed', owner: 'me' }, page: 1 }), 'different nested filters must not share a key');"
+        },
+        {
+          "name": "array order matters and undefined params count as absent",
+          "code": "assert.notEqual(mod.cacheKey('t', 'u', { ids: [1, 2] }), mod.cacheKey('t', 'u', { ids: [2, 1] }));\nassert.equal(mod.cacheKey('t', 'u', { page: 1, q: undefined }), mod.cacheKey('t', 'u', { page: 1 }));"
+        }
+      ],
+      "explanation": "Normalise the value recursively, then let JSON do the quoting:\n\n```js\nconst normalize = (value) => {\n  if (Array.isArray(value)) return value.map(normalize);\n  if (value !== null && typeof value === 'object') {\n    const out = {};\n    for (const k of Object.keys(value).sort()) if (value[k] !== undefined) out[k] = normalize(value[k]);\n    return out;\n  }\n  return value;\n};\nreturn JSON.stringify([tenant, user, normalize(params)]);\n```\n\nJSON quotes and escapes every string, so no part can contain a \"separator\" that forges another part.\n\nThe tests catch two plausible-wrong versions. Sorting with `JSON.stringify(params, Object.keys(params).sort())` passes the flat tests, but an array replacer is an allow-list applied at EVERY depth: `{ filter: { status: 'open' } }` serialises as `{\"filter\":{}}`, so every filter shares one key, and one user's filtered results are served for another filter. Joining with `:` and `&` lets `a:b` + `c` collide with `a` + `b:c`, and a value such as `a&z=1` forge an extra param.",
+      "hints": [
+        "A safe key is an unambiguous encoding of a normalised value, not a string glued together with separators.",
+        "Put the tenant, the user and the params into one structure, rebuild every nested object with its keys in sorted order and its undefined properties dropped, keep arrays in their order, and serialise the result with an encoding that quotes and escapes strings.",
+        "Write a recursive normaliser that maps arrays element by element and rebuilds plain objects from their sorted keys while skipping undefined values, then serialise an array of tenant, user and the normalised params as JSON."
+      ]
+    }
+  ]
+}

@@ -1,0 +1,246 @@
+{
+ "format": "bootquest-pack@1",
+ "source": "fund-js",
+ "course": {
+  "id": "23-pagination-that-does-not-drift",
+  "order": 23,
+  "title": "Pagination that does not drift",
+  "description": "Why offset pages repeat and skip rows, keyset pagination on (createdAt, id), opaque cursors treated as untrusted input, and hasMore without a count query.",
+  "prerequisites": []
+ },
+ "modules": [
+  {
+   "id": "23-pagination-that-does-not-drift",
+   "title": "Pagination that does not drift",
+   "lessons": [
+    {
+     "id": "drills",
+     "title": "Pagination that does not drift",
+     "explanation": "Why offset pages repeat and skip rows, keyset pagination on (createdAt, id), opaque cursors treated as untrusted input, and hasMore without a count query."
+    }
+   ]
+  }
+ ],
+ "units": [
+  {
+   "unit": {
+    "key": "fund-js/23-pagination-that-does-not-drift/01-keyset-page",
+    "track": "js",
+    "kind": "drill",
+    "title": "page: keyset pagination over a changing table",
+    "phase": "23-pagination-that-does-not-drift",
+    "difficulty": 2,
+    "competencies": [
+     "language-fluency"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-js",
+       "language": "js",
+       "tests": [
+        {
+         "name": "the first page is newest first with ties broken by id, and the input is left alone",
+         "code": "const table = () => [\n  { id: 3, createdAt: 100 }, { id: 9, createdAt: 300 }, { id: 1, createdAt: 100 }, { id: 7, createdAt: 200 },\n  { id: 2, createdAt: 100 }, { id: 8, createdAt: 300 }, { id: 5, createdAt: 200 }, { id: 4, createdAt: 100 },\n  { id: 6, createdAt: 200 },\n];\nconst ids = (list) => list.map((r) => r.id);\nconst cursor = (list) => ({ createdAt: list[list.length - 1].createdAt, id: list[list.length - 1].id });\nconst walk = (rows, limit, between = () => {}) => {\n  const out = [];\n  let after = null;\n  for (let guard = 0; guard < 50; guard++) {\n    const got = mod.page(rows, { limit, after });\n    if (got.length === 0) break;\n    out.push(...ids(got));\n    after = cursor(got);\n    between(out.length);\n  }\n  return out;\n};\nassert.equal(typeof mod.page, 'function', 'export page');\nconst rows = table();\nconst before = JSON.stringify(rows);\nassert.deepEqual(ids(mod.page(rows, { limit: 4 })), [9, 8, 7, 6]);\nassert.deepEqual(ids(mod.page(rows, { limit: 4, after: null })), [9, 8, 7, 6]);\nassert.equal(JSON.stringify(rows), before, 'rows was reordered or modified');"
+        },
+        {
+         "name": "walking every page returns each row once when timestamps tie across page boundaries (trap)",
+         "code": "const table = () => [\n  { id: 3, createdAt: 100 }, { id: 9, createdAt: 300 }, { id: 1, createdAt: 100 }, { id: 7, createdAt: 200 },\n  { id: 2, createdAt: 100 }, { id: 8, createdAt: 300 }, { id: 5, createdAt: 200 }, { id: 4, createdAt: 100 },\n  { id: 6, createdAt: 200 },\n];\nconst ids = (list) => list.map((r) => r.id);\nconst cursor = (list) => ({ createdAt: list[list.length - 1].createdAt, id: list[list.length - 1].id });\nconst walk = (rows, limit, between = () => {}) => {\n  const out = [];\n  let after = null;\n  for (let guard = 0; guard < 50; guard++) {\n    const got = mod.page(rows, { limit, after });\n    if (got.length === 0) break;\n    out.push(...ids(got));\n    after = cursor(got);\n    between(out.length);\n  }\n  return out;\n};\nassert.deepEqual(walk(table(), 2), [9, 8, 7, 6, 5, 4, 3, 2, 1]);\nassert.deepEqual(walk(table(), 4), [9, 8, 7, 6, 5, 4, 3, 2, 1]);"
+        },
+        {
+         "name": "rows inserted at the top between pages cause no duplicate",
+         "code": "const table = () => [\n  { id: 3, createdAt: 100 }, { id: 9, createdAt: 300 }, { id: 1, createdAt: 100 }, { id: 7, createdAt: 200 },\n  { id: 2, createdAt: 100 }, { id: 8, createdAt: 300 }, { id: 5, createdAt: 200 }, { id: 4, createdAt: 100 },\n  { id: 6, createdAt: 200 },\n];\nconst ids = (list) => list.map((r) => r.id);\nconst cursor = (list) => ({ createdAt: list[list.length - 1].createdAt, id: list[list.length - 1].id });\nconst walk = (rows, limit, between = () => {}) => {\n  const out = [];\n  let after = null;\n  for (let guard = 0; guard < 50; guard++) {\n    const got = mod.page(rows, { limit, after });\n    if (got.length === 0) break;\n    out.push(...ids(got));\n    after = cursor(got);\n    between(out.length);\n  }\n  return out;\n};\nconst rows = table();\nconst seen = walk(rows, 3, (count) => { if (count === 3) rows.push({ id: 10, createdAt: 400 }, { id: 11, createdAt: 400 }); });\nassert.deepEqual(seen, [9, 8, 7, 6, 5, 4, 3, 2, 1]);"
+        },
+        {
+         "name": "a row deleted from an earlier page causes no gap",
+         "code": "const table = () => [\n  { id: 3, createdAt: 100 }, { id: 9, createdAt: 300 }, { id: 1, createdAt: 100 }, { id: 7, createdAt: 200 },\n  { id: 2, createdAt: 100 }, { id: 8, createdAt: 300 }, { id: 5, createdAt: 200 }, { id: 4, createdAt: 100 },\n  { id: 6, createdAt: 200 },\n];\nconst ids = (list) => list.map((r) => r.id);\nconst cursor = (list) => ({ createdAt: list[list.length - 1].createdAt, id: list[list.length - 1].id });\nconst walk = (rows, limit, between = () => {}) => {\n  const out = [];\n  let after = null;\n  for (let guard = 0; guard < 50; guard++) {\n    const got = mod.page(rows, { limit, after });\n    if (got.length === 0) break;\n    out.push(...ids(got));\n    after = cursor(got);\n    between(out.length);\n  }\n  return out;\n};\nconst rows = table();\nconst seen = walk(rows, 3, (count) => { if (count === 3) rows.splice(rows.findIndex((r) => r.id === 8), 1); });\nassert.deepEqual(seen, [9, 8, 7, 6, 5, 4, 3, 2, 1]);"
+        },
+        {
+         "name": "the page continues when the cursor's own row has been deleted (trap)",
+         "code": "const table = () => [\n  { id: 3, createdAt: 100 }, { id: 9, createdAt: 300 }, { id: 1, createdAt: 100 }, { id: 7, createdAt: 200 },\n  { id: 2, createdAt: 100 }, { id: 8, createdAt: 300 }, { id: 5, createdAt: 200 }, { id: 4, createdAt: 100 },\n  { id: 6, createdAt: 200 },\n];\nconst ids = (list) => list.map((r) => r.id);\nconst cursor = (list) => ({ createdAt: list[list.length - 1].createdAt, id: list[list.length - 1].id });\nconst walk = (rows, limit, between = () => {}) => {\n  const out = [];\n  let after = null;\n  for (let guard = 0; guard < 50; guard++) {\n    const got = mod.page(rows, { limit, after });\n    if (got.length === 0) break;\n    out.push(...ids(got));\n    after = cursor(got);\n    between(out.length);\n  }\n  return out;\n};\nconst rows = table();\nconst first = mod.page(rows, { limit: 3 });\nassert.deepEqual(ids(first), [9, 8, 7]);\nconst after = cursor(first);\nrows.splice(rows.findIndex((r) => r.id === 7), 1);\nassert.deepEqual(ids(mod.page(rows, { limit: 3, after })), [6, 5, 4]);"
+        },
+        {
+         "name": "a newer row with a lower id still sorts first, and the end of the list is an empty page",
+         "code": "const table = () => [\n  { id: 3, createdAt: 100 }, { id: 9, createdAt: 300 }, { id: 1, createdAt: 100 }, { id: 7, createdAt: 200 },\n  { id: 2, createdAt: 100 }, { id: 8, createdAt: 300 }, { id: 5, createdAt: 200 }, { id: 4, createdAt: 100 },\n  { id: 6, createdAt: 200 },\n];\nconst ids = (list) => list.map((r) => r.id);\nconst cursor = (list) => ({ createdAt: list[list.length - 1].createdAt, id: list[list.length - 1].id });\nconst walk = (rows, limit, between = () => {}) => {\n  const out = [];\n  let after = null;\n  for (let guard = 0; guard < 50; guard++) {\n    const got = mod.page(rows, { limit, after });\n    if (got.length === 0) break;\n    out.push(...ids(got));\n    after = cursor(got);\n    between(out.length);\n  }\n  return out;\n};\nconst rows = [{ id: 1, createdAt: 900 }, { id: 2, createdAt: 100 }, { id: 3, createdAt: 500 }];\nassert.deepEqual(ids(mod.page(rows, { limit: 2 })), [1, 3]);\nassert.deepEqual(ids(mod.page(rows, { limit: 2, after: { createdAt: 500, id: 3 } })), [2]);\nassert.deepEqual(mod.page(rows, { limit: 2, after: { createdAt: 100, id: 2 } }), []);"
+        }
+       ],
+       "timeoutMs": 8000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "23-pagination-that-does-not-drift/01-keyset-page",
+    "type": "code",
+    "module": "23-pagination-that-does-not-drift",
+    "lesson": "drills",
+    "position": 0,
+    "skills": [
+     "keyset pagination",
+     "tie-breaker"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "fund-js/23-pagination-that-does-not-drift/02-opaque-cursor",
+    "track": "js",
+    "kind": "drill",
+    "title": "encodeCursor and decodeCursor: tampered input is an error result",
+    "phase": "23-pagination-that-does-not-drift",
+    "difficulty": 2,
+    "competencies": [
+     "language-fluency"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-js",
+       "language": "js",
+       "tests": [
+        {
+         "name": "a cursor survives the round trip",
+         "code": "const token = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');\nconst INVALID = { ok: false, error: 'invalid cursor' };\nassert.equal(typeof mod.encodeCursor, 'function', 'export encodeCursor');\nassert.equal(typeof mod.decodeCursor, 'function', 'export decodeCursor');\nconst position = { createdAt: 1700000000000, id: 42 };\nassert.deepEqual(mod.decodeCursor(mod.encodeCursor(position)), { ok: true, value: position });\nassert.deepEqual(mod.decodeCursor(mod.encodeCursor({ createdAt: 0, id: 1 })), { ok: true, value: { createdAt: 0, id: 1 } });"
+        },
+        {
+         "name": "the token is URL-safe and carries only the two position fields",
+         "code": "const token = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');\nconst INVALID = { ok: false, error: 'invalid cursor' };\nconst encoded = mod.encodeCursor({ createdAt: 1700000000000, id: 42, title: 'Quarterly numbers', tenantId: 't1' });\nassert.equal(typeof encoded, 'string');\nassert.match(encoded, /^[A-Za-z0-9_-]+$/);\nassert.deepEqual(JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')), { createdAt: 1700000000000, id: 42 });"
+        },
+        {
+         "name": "garbage and truncated tokens are an error result, not an exception",
+         "code": "const token = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');\nconst INVALID = { ok: false, error: 'invalid cursor' };\nconst good = mod.encodeCursor({ createdAt: 1700000000000, id: 42 });\nfor (const bad of ['%%%', 'not a cursor', 'abc', good.slice(0, -3), good.slice(4)]) {\n  assert.deepEqual(mod.decodeCursor(bad), INVALID, 'token: ' + bad);\n}"
+        },
+        {
+         "name": "well-formed JSON that is not a position object is rejected (trap)",
+         "code": "const token = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');\nconst INVALID = { ok: false, error: 'invalid cursor' };\nfor (const value of [null, 42, 'x', true, [1, 2], {}]) {\n  assert.deepEqual(mod.decodeCursor(token(value)), INVALID, 'decoded JSON: ' + JSON.stringify(value));\n}"
+        },
+        {
+         "name": "fields of the wrong type are rejected",
+         "code": "const token = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');\nconst INVALID = { ok: false, error: 'invalid cursor' };\nconst tampered = [\n  { createdAt: '1; DROP TABLE posts', id: 7 },\n  { createdAt: 1.5, id: 7 },\n  { createdAt: 10, id: '7' },\n  { createdAt: 10, id: null },\n  { createdAt: 10 },\n  { createdAt: 1e400, id: 7 },\n];\nfor (const value of tampered) {\n  assert.deepEqual(mod.decodeCursor(token(value)), INVALID, 'decoded JSON: ' + JSON.stringify(value));\n}"
+        },
+        {
+         "name": "extra fields smuggled into a token are dropped",
+         "code": "const token = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');\nconst INVALID = { ok: false, error: 'invalid cursor' };\nassert.deepEqual(mod.decodeCursor(token({ createdAt: 5, id: 9, tenantId: 'other', limit: 100000 })), { ok: true, value: { createdAt: 5, id: 9 } });"
+        },
+        {
+         "name": "a missing or non-string token is an error result",
+         "code": "const token = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');\nconst INVALID = { ok: false, error: 'invalid cursor' };\nfor (const bad of [undefined, null, '', 12, {}, ['x']]) {\n  assert.deepEqual(mod.decodeCursor(bad), INVALID);\n}"
+        }
+       ],
+       "timeoutMs": 8000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "23-pagination-that-does-not-drift/02-opaque-cursor",
+    "type": "code",
+    "module": "23-pagination-that-does-not-drift",
+    "lesson": "drills",
+    "position": 1,
+    "skills": [
+     "cursor encoding",
+     "input validation"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "fund-js/23-pagination-that-does-not-drift/03-limit-clamp-and-has-more",
+    "track": "js",
+    "kind": "drill",
+    "title": "listPage: clamp the limit and probe for hasMore",
+    "phase": "23-pagination-that-does-not-drift",
+    "difficulty": 2,
+    "competencies": [
+     "language-fluency"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-js",
+       "language": "js",
+       "tests": [
+        {
+         "name": "a full page with more behind it: items, hasMore and a next position",
+         "code": "const makeDb = (n) => {\n  const rows = Array.from({ length: n }, (_, i) => ({ id: n - i, createdAt: 1000 + Math.floor((n - i) / 2), title: 'post ' + (n - i) }));\n  const log = [];\n  return {\n    log,\n    async query({ after, take }) {\n      await null;\n      log.push({ op: 'query', take });\n      const rest = after ? rows.filter((r) => r.createdAt < after.createdAt || (r.createdAt === after.createdAt && r.id < after.id)) : rows;\n      return rest.slice(0, take).map((r) => ({ ...r }));\n    },\n    async count() { await null; log.push({ op: 'count' }); return rows.length; },\n  };\n};\nconst ids = (list) => list.map((r) => r.id);\nassert.equal(typeof mod.listPage, 'function', 'export listPage');\nconst db = makeDb(25);\nconst r = await mod.listPage(db, { limit: 10 });\nassert.deepEqual(ids(r.items), [25, 24, 23, 22, 21, 20, 19, 18, 17, 16], 'the probe row must not be returned');\nassert.equal(r.hasMore, true);\nassert.deepEqual(r.next, { createdAt: 1008, id: 16 });"
+        },
+        {
+         "name": "one query for one row more than the page, and no count",
+         "code": "const makeDb = (n) => {\n  const rows = Array.from({ length: n }, (_, i) => ({ id: n - i, createdAt: 1000 + Math.floor((n - i) / 2), title: 'post ' + (n - i) }));\n  const log = [];\n  return {\n    log,\n    async query({ after, take }) {\n      await null;\n      log.push({ op: 'query', take });\n      const rest = after ? rows.filter((r) => r.createdAt < after.createdAt || (r.createdAt === after.createdAt && r.id < after.id)) : rows;\n      return rest.slice(0, take).map((r) => ({ ...r }));\n    },\n    async count() { await null; log.push({ op: 'count' }); return rows.length; },\n  };\n};\nconst ids = (list) => list.map((r) => r.id);\nconst db = makeDb(25);\nawait mod.listPage(db, { limit: 10 });\nassert.deepEqual(db.log, [{ op: 'query', take: 11 }]);"
+        },
+        {
+         "name": "a last page that is exactly full has hasMore false (trap)",
+         "code": "const makeDb = (n) => {\n  const rows = Array.from({ length: n }, (_, i) => ({ id: n - i, createdAt: 1000 + Math.floor((n - i) / 2), title: 'post ' + (n - i) }));\n  const log = [];\n  return {\n    log,\n    async query({ after, take }) {\n      await null;\n      log.push({ op: 'query', take });\n      const rest = after ? rows.filter((r) => r.createdAt < after.createdAt || (r.createdAt === after.createdAt && r.id < after.id)) : rows;\n      return rest.slice(0, take).map((r) => ({ ...r }));\n    },\n    async count() { await null; log.push({ op: 'count' }); return rows.length; },\n  };\n};\nconst ids = (list) => list.map((r) => r.id);\nconst db = makeDb(10);\nconst r = await mod.listPage(db, { limit: 10 });\nassert.equal(r.items.length, 10);\nassert.equal(r.hasMore, false);\nassert.equal(r.next, null);"
+        },
+        {
+         "name": "following next walks every row once in three queries",
+         "code": "const makeDb = (n) => {\n  const rows = Array.from({ length: n }, (_, i) => ({ id: n - i, createdAt: 1000 + Math.floor((n - i) / 2), title: 'post ' + (n - i) }));\n  const log = [];\n  return {\n    log,\n    async query({ after, take }) {\n      await null;\n      log.push({ op: 'query', take });\n      const rest = after ? rows.filter((r) => r.createdAt < after.createdAt || (r.createdAt === after.createdAt && r.id < after.id)) : rows;\n      return rest.slice(0, take).map((r) => ({ ...r }));\n    },\n    async count() { await null; log.push({ op: 'count' }); return rows.length; },\n  };\n};\nconst ids = (list) => list.map((r) => r.id);\nconst db = makeDb(25);\nconst seen = [];\nlet after = null;\nlet pages = 0;\nfor (;;) {\n  const r = await mod.listPage(db, { limit: '10', after });\n  seen.push(...ids(r.items));\n  pages++;\n  if (!r.hasMore || pages > 10) break;\n  after = r.next;\n}\nassert.equal(pages, 3);\nassert.deepEqual(seen, Array.from({ length: 25 }, (_, i) => 25 - i));\nassert.deepEqual(db.log.map((e) => e.op), ['query', 'query', 'query']);"
+        },
+        {
+         "name": "the limit is clamped to 1..100 and defaults to 20",
+         "code": "const makeDb = (n) => {\n  const rows = Array.from({ length: n }, (_, i) => ({ id: n - i, createdAt: 1000 + Math.floor((n - i) / 2), title: 'post ' + (n - i) }));\n  const log = [];\n  return {\n    log,\n    async query({ after, take }) {\n      await null;\n      log.push({ op: 'query', take });\n      const rest = after ? rows.filter((r) => r.createdAt < after.createdAt || (r.createdAt === after.createdAt && r.id < after.id)) : rows;\n      return rest.slice(0, take).map((r) => ({ ...r }));\n    },\n    async count() { await null; log.push({ op: 'count' }); return rows.length; },\n  };\n};\nconst ids = (list) => list.map((r) => r.id);\nconst takeFor = async (limit) => {\n  const db = makeDb(3);\n  await mod.listPage(db, limit === 'omit' ? {} : { limit });\n  return db.log[0].take - 1;\n};\nassert.equal(await takeFor('omit'), 20);\nassert.equal(await takeFor('abc'), 20);\nassert.equal(await takeFor(2.5), 20);\nassert.equal(await takeFor('10'), 10);\nassert.equal(await takeFor(100), 100);\nassert.equal(await takeFor(100000), 100);\nassert.equal(await takeFor(0), 1);\nassert.equal(await takeFor(-5), 1);"
+        },
+        {
+         "name": "an empty table is an empty last page",
+         "code": "const makeDb = (n) => {\n  const rows = Array.from({ length: n }, (_, i) => ({ id: n - i, createdAt: 1000 + Math.floor((n - i) / 2), title: 'post ' + (n - i) }));\n  const log = [];\n  return {\n    log,\n    async query({ after, take }) {\n      await null;\n      log.push({ op: 'query', take });\n      const rest = after ? rows.filter((r) => r.createdAt < after.createdAt || (r.createdAt === after.createdAt && r.id < after.id)) : rows;\n      return rest.slice(0, take).map((r) => ({ ...r }));\n    },\n    async count() { await null; log.push({ op: 'count' }); return rows.length; },\n  };\n};\nconst ids = (list) => list.map((r) => r.id);\nconst db = makeDb(0);\nassert.deepEqual(await mod.listPage(db, { limit: 5 }), { items: [], hasMore: false, next: null });\nassert.deepEqual(db.log, [{ op: 'query', take: 6 }]);"
+        }
+       ],
+       "timeoutMs": 8000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "23-pagination-that-does-not-drift/03-limit-clamp-and-has-more",
+    "type": "code",
+    "module": "23-pagination-that-does-not-drift",
+    "lesson": "drills",
+    "position": 2,
+    "skills": [
+     "limit clamp",
+     "hasMore",
+     "query budget"
+    ]
+   }
+  }
+ ],
+ "content": {
+  "fund-js/23-pagination-that-does-not-drift/01-keyset-page": {
+   "instructions": "**Skills:** keyset pagination · tie-breaker  \n**Level:** ★★☆\n\n**Interview prompt.** \"Our feed shows the same post twice when people scroll while others are posting. Fix the paging.\"\n\n**Why it matters.** A page number is a position in a list that keeps changing. A cursor names the last row the client saw, and \"everything after that row\" stays well defined while rows come and go.\n\n**Your task.** Export `page(rows, { limit, after })`. `rows` is the table as it is NOW: an unordered array of objects with numeric `id` (unique) and numeric `createdAt` (may repeat). Return an array of at most `limit` rows:\n- order is newest first: `createdAt` descending, ties broken by `id` descending\n- `after` absent or `null`: start from the top\n- `after` is `{ createdAt, id }` of the last row the client saw: return only rows that sort strictly after that position\n- the row `after` was taken from may no longer be in `rows`; the page must continue from the same position anyway\n- do not reorder or modify `rows`\n\n**Worked example.** Rows with (createdAt, id) of (50, 4), (50, 3), (40, 2), (40, 1) and limit 2: the first page is ids 4, 3. With `after` set to `{ createdAt: 50, id: 3 }` the next page is ids 2, 1.\n",
+   "starter": "// rows: [{ id, createdAt, ... }] in no particular order\n// after: null/undefined, or { createdAt, id } of the last row already seen\nexport function page(rows, { limit, after }) {\n  // TODO: newest first (createdAt desc, id desc), only rows strictly after `after`, at most `limit`\n}\n",
+   "solution": "const newestFirst = (a, b) => b.createdAt - a.createdAt || b.id - a.id;\n\nexport function page(rows, { limit, after }) {\n  const sorted = [...rows].sort(newestFirst);\n  const rest = after\n    ? sorted.filter((r) => r.createdAt < after.createdAt || (r.createdAt === after.createdAt && r.id < after.id))\n    : sorted;\n  return rest.slice(0, limit);\n}\n",
+   "explanation": "Sort a copy on the full key, then keep what lies strictly after the cursor on that same key:\n\n```js\nconst newestFirst = (a, b) => b.createdAt - a.createdAt || b.id - a.id;\n\nconst sorted = [...rows].sort(newestFirst);\nconst rest = after\n  ? sorted.filter((r) => r.createdAt < after.createdAt || (r.createdAt === after.createdAt && r.id < after.id))\n  : sorted;\nreturn rest.slice(0, limit);\n```\n\nThe filter is the JavaScript form of `WHERE created_at < ? OR (created_at = ? AND id < ?)`. It compares values, so it gives the same answer whether or not the cursor's row still exists, and inserts above the cursor cannot push rows back into view.\n\n**What the tests catch.** The plausible wrong answer filters on `createdAt` alone: when rows that share a timestamp straddle a page boundary, the rest of that group is never returned. Finding the cursor's row by id and slicing after it restarts from the top once that row has been deleted. Paging by id alone breaks when a newer row has a lower id, and sorting `rows` in place changes the caller's array.",
+   "hints": [
+    "Remember the last row you returned, not how many rows you have returned.",
+    "Sort a copy by time and then by id, and keep the rows that come strictly after the remembered position when both parts of the sort key are compared together. Do not search for the remembered row itself.",
+    "Sort a copy newest first with id as the tie-breaker. When a position is given, keep a row if its time is lower, or if its time is equal and its id is lower. Then take the first limit rows."
+   ]
+  },
+  "fund-js/23-pagination-that-does-not-drift/02-opaque-cursor": {
+   "instructions": "**Skills:** cursor encoding · input validation  \n**Level:** ★★☆\n\n**Interview prompt.** \"The next-page token comes back in a query string. What do you put in it, and what happens when someone edits it?\"\n\n**Why it matters.** A cursor leaves your server and returns as user input. Clients should not need to understand it, and a mangled one must end as a clean 400 from your handler, not as an exception in your logs.\n\n**Your task.** Export `encodeCursor(position)` and `decodeCursor(token)`.\n- `encodeCursor({ createdAt, id })` returns a string made only of letters, digits, `-` and `_`: the base64url form (no padding) of a JSON object holding exactly those two fields\n- `decodeCursor(token)` returns `{ ok: true, value: { createdAt, id } }` for a token that `encodeCursor` produced\n- for anything else it returns `{ ok: false, error: 'invalid cursor' }` and never throws: a non-string, an empty string, text that does not decode to JSON, JSON that is not a plain object, or a `createdAt` or `id` that is not a safe integer\n- `value` holds exactly `createdAt` and `id`; any other field found in the token is dropped\n\n**Worked example.** `decodeCursor(encodeCursor({ createdAt: 1700000000000, id: 42 }))` is `{ ok: true, value: { createdAt: 1700000000000, id: 42 } }`. `decodeCursor('%%%')` is `{ ok: false, error: 'invalid cursor' }`.\n",
+   "starter": "export function encodeCursor(position) {\n  // TODO: base64url of JSON holding only createdAt and id\n}\n\nexport function decodeCursor(token) {\n  // TODO: { ok: true, value: { createdAt, id } } or { ok: false, error: 'invalid cursor' }; never throw\n}\n",
+   "solution": "const invalid = () => ({ ok: false, error: 'invalid cursor' });\n\nexport function encodeCursor({ createdAt, id }) {\n  return Buffer.from(JSON.stringify({ createdAt, id })).toString('base64url');\n}\n\nexport function decodeCursor(token) {\n  if (typeof token !== 'string' || token === '') return invalid();\n  let parsed;\n  try {\n    parsed = JSON.parse(Buffer.from(token, 'base64url').toString('utf8'));\n  } catch {\n    return invalid();\n  }\n  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return invalid();\n  const { createdAt, id } = parsed;\n  if (!Number.isSafeInteger(createdAt) || !Number.isSafeInteger(id)) return invalid();\n  return { ok: true, value: { createdAt, id } };\n}\n",
+   "explanation": "Encoding is one line. Decoding is a chain of checks in which every link can fail:\n\n```js\nif (typeof token !== 'string' || token === '') return invalid();\nlet parsed;\ntry {\n  parsed = JSON.parse(Buffer.from(token, 'base64url').toString('utf8'));\n} catch {\n  return invalid();\n}\nif (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return invalid();\nconst { createdAt, id } = parsed;\nif (!Number.isSafeInteger(createdAt) || !Number.isSafeInteger(id)) return invalid();\nreturn { ok: true, value: { createdAt, id } };\n```\n\n`Buffer.from(text, 'base64url')` does not throw on junk; it returns whatever bytes it could read, and `JSON.parse` is the step that throws. `JSON.parse` also happily returns `null`, a number or an array, so parsing without throwing proves nothing about the shape. Building `value` from the two named fields is an allow-list: nothing else in the token reaches your query.\n\n**What the tests catch.** The plausible wrong answer wraps `JSON.parse` in try/catch and returns whatever it parsed: a token of `null`, `42` or `{ \"createdAt\": \"1; DROP TABLE posts\" }` comes back as `ok: true`, and smuggled fields ride along. Validating without the try block throws on `'%%%'`. Plain base64 leaves `=`, `+` or `/` in the token.",
+   "hints": [
+    "A cursor comes back from the client, so decoding it is input validation.",
+    "Every step of decoding can fail or can succeed with the wrong kind of value. Contain the failures, then check the shape and the type of each field before building the result from those fields alone.",
+    "Encode the two fields as JSON in the URL-safe base64 alphabet. To decode, refuse anything that is not a non-empty string, decode and parse inside a try block, refuse values that are not plain objects, refuse fields that are not safe integers, and build the value from the two fields only."
+   ]
+  },
+  "fund-js/23-pagination-that-does-not-drift/03-limit-clamp-and-has-more": {
+   "instructions": "**Skills:** limit clamp · hasMore · query budget  \n**Level:** ★★☆\n\n**Interview prompt.** \"A client sends limit=100000, and the list endpoint also runs COUNT(*) on every request to draw a Next button. Fix both.\"\n\n**Why it matters.** An unbounded page size lets one request pull the whole table, and a count per page scans it again for a number that is already stale. Both can be fixed inside the single page query.\n\n**Your task.** Export `async listPage(db, params)`, where `params` is `{ limit, after }` as it came from the query string. The injected `db` has two async methods:\n- `db.query({ after, take })` resolves to at most `take` rows, newest first, starting after the position `after` (or from the top when `after` is `null`)\n- `db.count()` resolves to the total number of rows by scanning the table\n\nResolve to `{ items, hasMore, next }`:\n- the page size is `limit` read as a whole number (a number or a string of digits); when it is missing or not a whole number use 20; below 1 becomes 1; above 100 becomes 100\n- `items` holds at most one page of rows\n- `hasMore` is `true` exactly when at least one more row exists after `items`\n- `next` is `{ createdAt, id }` of the last item when `hasMore` is true, otherwise `null`\n- make exactly ONE `db.query` call and no `db.count` call\n- pass `after` through to the query, as `null` when it is absent\n\n**Worked example.** With 25 rows and `limit` 10 the query is asked for 11 rows. You return the first 10, `hasMore: true` and `next` built from the tenth. With exactly 10 rows in the table, `hasMore` is `false` and `next` is `null`.\n",
+   "starter": "// db.query({ after, take }) -> Promise<row[]>   at most `take` rows, newest first, after the position `after`\n// db.count()                -> Promise<number>  full scan\nexport async function listPage(db, params) {\n  // TODO: clamp the limit (default 20, 1..100); return { items, hasMore, next } with one query and no count\n}\n",
+   "solution": "const DEFAULT_LIMIT = 20;\nconst MAX_LIMIT = 100;\n\nconst pageSize = (limit) => {\n  const n = typeof limit === 'string' && /^-?\\d+$/.test(limit) ? Number(limit) : limit;\n  if (!Number.isInteger(n)) return DEFAULT_LIMIT;\n  return Math.min(MAX_LIMIT, Math.max(1, n));\n};\n\nexport async function listPage(db, params) {\n  const size = pageSize(params.limit);\n  const rows = await db.query({ after: params.after ?? null, take: size + 1 });\n  const hasMore = rows.length > size;\n  const items = hasMore ? rows.slice(0, size) : rows;\n  const last = items[items.length - 1];\n  return { items, hasMore, next: hasMore ? { createdAt: last.createdAt, id: last.id } : null };\n}\n",
+   "explanation": "Decide the page size, ask for one row more, and use the surplus only as a signal:\n\n```js\nconst size = pageSize(params.limit);            // whole number, default 20, clamped to 1..100\nconst rows = await db.query({ after: params.after ?? null, take: size + 1 });\nconst hasMore = rows.length > size;\nconst items = hasMore ? rows.slice(0, size) : rows;\nconst last = items[items.length - 1];\nreturn { items, hasMore, next: hasMore ? { createdAt: last.createdAt, id: last.id } : null };\n```\n\nThe probe row costs one extra row from an index that is already being read; a count costs a scan of everything. `next` is built from the last row you RETURN, not from the probe row, or the following page would skip one.\n\n**What the tests catch.** The plausible wrong answer fetches exactly one page and sets `hasMore` when the page came back full: when the table holds exactly one full page it promises a next page that is empty. Calling `db.count()` fails the query-log assertion, an unclamped limit asks the database for 100,001 rows, and returning the probe row hands the client eleven items.",
+   "hints": [
+    "You can learn whether another page exists from the page query itself.",
+    "Settle the page size first, forcing it into the allowed range. Then ask the database for slightly more than a page and use the surplus only as a signal, never as data.",
+    "Turn the limit into a number, fall back to 20 when it is not whole, and clamp it between 1 and 100. Query once for one row more than that size. There is more when the surplus row came back. Drop it from the items and build the next position from the last item kept."
+   ]
+  }
+ }
+}

@@ -1,0 +1,261 @@
+{
+  "format": "fundamentals-authoring@1",
+  "track": "js",
+  "topic": "29-sql-queries-nulls-and-joins",
+  "title": "SQL queries: NULLs and joins",
+  "level": "advanced",
+  "summary": "Three-valued logic and the rows it silently drops, deterministic ORDER BY and LIMIT, inner versus left joins, GROUP BY and HAVING, and the fan-out that double-counts totals.",
+  "lesson": "## NULL means unknown\n\nSQL logic has three values: true, false and unknown. Any comparison with NULL (`= NULL`, `<> 'void'`, `< 5`) is unknown, and `WHERE` keeps only rows that are true. So `WHERE status <> 'void'` silently drops every row whose status is NULL. Test with `IS NULL` / `IS NOT NULL`, or spell it out: `(status IS NULL OR status <> 'void')`. Postgres and SQLite 3.39+ also have `IS DISTINCT FROM`; SQLite also spells it `IS NOT`.\n\n**Failure story.** A support queue listed tickets `WHERE assigned_to <> 42`, meaning \"not mine\". Every unassigned ticket (NULL) vanished from the screen, and nobody picked them up for a week.\n\n`x NOT IN (1, NULL)` can never be true, so `NOT IN (subquery)` returns nothing as soon as the subquery yields one NULL. Prefer `NOT EXISTS`.\n\n## ORDER BY and LIMIT\n\nWithout `ORDER BY`, row order is undefined. With a sort key that is not unique, the order of the ties is undefined too, so `ORDER BY due_date LIMIT 20` can show a row on two pages or on none. End the sort with a unique column: `ORDER BY due_date, id`. Ascending order puts NULLs first in SQLite and last in Postgres; write `NULLS FIRST` or `NULLS LAST` when it matters.\n\n## Joins\n\n- `INNER JOIN` keeps only the pairs that match.\n- `LEFT JOIN` keeps every left row; where nothing matches, the right-hand columns are NULL.\n\nA condition on the right table placed in `WHERE` (`WHERE o.status = 'paid'`) rejects those NULL-padded rows, and the left join behaves like an inner join again. Put that condition in `ON`.\n\n## GROUP BY and HAVING\n\n`WHERE` filters rows before grouping; `HAVING` filters groups afterwards. `COUNT(*)` counts rows; `COUNT(col)` counts non-NULL values. After a left join a customer with no orders still has one row, so `COUNT(*)` says 1 where `COUNT(o.id)` says 0. `SUM` over no rows is NULL, not 0: wrap it in `COALESCE(..., 0)`.\n\n```sql\nSELECT c.name, COUNT(o.id) AS paid_orders\nFROM customers c\nLEFT JOIN orders o ON o.customer_id = c.id AND o.status = 'paid'\nGROUP BY c.id\nHAVING COUNT(o.id) < 3;\n```\n\nGroup by the key, not the name: two customers called Sam are two groups.\n\n## Fan-out\n\nJoining one parent to two child tables multiplies rows. An order with 3 items and 2 payments becomes 6 rows, so `SUM(p.amount)` is tripled and `COUNT(i.id)` is doubled.\n\n**Failure story.** A revenue report joined orders to payments. A sprint later someone joined line items as well, to add one column. Reported revenue more than doubled overnight, and the figure went into the monthly numbers before anyone checked it against the bank.\n\n`SUM(DISTINCT ...)` is not a repair: two real payments of the same amount collapse into one. Aggregate each child table on its own (a subquery or CTE grouped by the parent key) and join those one-row-per-parent results.",
+  "quiz": [
+    {
+      "prompt": "A table has 10 rows: 5 with status 'open', 2 with 'void' and 3 where status is NULL. How many rows does `WHERE status <> 'void'` return?",
+      "choices": [
+        "`5`",
+        "`8`",
+        "`3`",
+        "`10`"
+      ],
+      "answer": 0,
+      "explanation": "The comparison is unknown for the three NULL rows, and WHERE keeps only rows where it is true: the five 'open' rows."
+    },
+    {
+      "prompt": "A query with `WHERE id NOT IN (SELECT manager_id FROM staff)` returns no rows, although several ids are plainly not managers. What is the most likely cause?",
+      "choices": [
+        "The subquery returns duplicate manager_id values",
+        "NOT IN compares against the first subquery row",
+        "NOT IN needs an index on manager_id to match",
+        "The subquery returns at least one NULL manager_id"
+      ],
+      "answer": 3,
+      "explanation": "With a NULL in the list, `id NOT IN (...)` is unknown for every id that is not in it, so no row passes. NOT EXISTS does not have this trap."
+    },
+    {
+      "prompt": "A list is paged with `ORDER BY created_at LIMIT 20 OFFSET 20`, and many rows share one created_at. What can go wrong?",
+      "choices": [
+        "The database rejects LIMIT when the sort key has duplicates",
+        "Tied rows can appear on two pages, or on neither page",
+        "Rows with the same created_at are merged into one row",
+        "OFFSET is applied before the sort, so page two is unsorted"
+      ],
+      "answer": 1,
+      "explanation": "The order among ties is undefined and may differ between two executions. A unique tiebreaker such as the id fixes it."
+    },
+    {
+      "prompt": "A query reads `FROM customers c LEFT JOIN orders o ON o.customer_id = c.id WHERE o.status = 'paid'`. Which customers does it return?",
+      "choices": [
+        "Every customer, with NULL order columns where none is paid",
+        "Customers that have at least one paid order",
+        "Customers that have no paid order at all",
+        "Every customer exactly once, whatever their orders"
+      ],
+      "answer": 1,
+      "explanation": "For a customer without orders o.status is NULL, the WHERE test is unknown and the row is dropped. Moving the status test into ON keeps every customer."
+    },
+    {
+      "prompt": "After `customers c LEFT JOIN orders o ... GROUP BY c.id`, what do `COUNT(*)` and `COUNT(o.id)` report for a customer with no orders?",
+      "choices": [
+        "`0` and `0`",
+        "`1` and `0`",
+        "`1` and `1`",
+        "`NULL` and `0`"
+      ],
+      "answer": 1,
+      "explanation": "The left join still produces one row for that customer, so COUNT(*) is 1. Its o.id is NULL, which COUNT(o.id) does not count."
+    },
+    {
+      "prompt": "What is the difference between WHERE and HAVING?",
+      "choices": [
+        "WHERE filters joined tables; HAVING filters the first table in FROM",
+        "WHERE runs after GROUP BY; HAVING runs before it, on the raw rows",
+        "WHERE filters rows before grouping; HAVING filters the groups",
+        "WHERE accepts any expression; HAVING accepts column names"
+      ],
+      "answer": 2,
+      "explanation": "That is why HAVING can test an aggregate such as COUNT(o.id) < 3 and WHERE cannot."
+    },
+    {
+      "prompt": "An order has 3 line items and 2 payments of 50 each. A query joins orders to both tables, groups by order and selects `SUM(p.amount)`. What does it return for this order?",
+      "choices": [
+        "`100`",
+        "`150`",
+        "`300`",
+        "`600`"
+      ],
+      "answer": 2,
+      "explanation": "The two joins produce 3 x 2 = 6 rows, each carrying a 50: every payment is counted once per line item."
+    },
+    {
+      "prompt": "Why is `SUM(DISTINCT p.amount)` a poor repair for a total inflated by a second join?",
+      "choices": [
+        "DISTINCT is ignored inside aggregates, so the total stays inflated",
+        "It forces a full table scan, because DISTINCT cannot use an index",
+        "It sums each distinct order id in place of the payment amounts",
+        "Two genuine payments of the same amount would be counted once"
+      ],
+      "answer": 3,
+      "explanation": "DISTINCT removes equal values, not duplicated rows. Aggregate the payments per order in a subquery and join that result."
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "Why does `WHERE col <> 'x'` skip rows where col is NULL?",
+      "back": "A comparison with NULL is unknown, and WHERE keeps only rows where the condition is true. Add `OR col IS NULL` when those rows belong in the result."
+    },
+    {
+      "front": "How do you make `ORDER BY ... LIMIT` deterministic?",
+      "back": "End the sort with a unique column such as the primary key, so ties always come out in the same order."
+    },
+    {
+      "front": "LEFT JOIN: where does a condition on the right-hand table go?",
+      "back": "In the ON clause. In WHERE it rejects the NULL-padded rows and the join behaves like an inner join."
+    },
+    {
+      "front": "`COUNT(*)` versus `COUNT(col)`",
+      "back": "COUNT(*) counts rows; COUNT(col) counts rows where col is not NULL. After a left join, count the right table's key to get a real zero."
+    },
+    {
+      "front": "What is join fan-out?",
+      "back": "Joining a parent to two child tables repeats each child row once per row of the other child, so sums and counts come out multiplied."
+    },
+    {
+      "front": "How do you fix a total that fan-out has inflated?",
+      "back": "Aggregate each child table separately by the parent key, then join those one-row-per-parent results to the parent."
+    }
+  ],
+  "drills": [
+    {
+      "slug": "01-overdue-invoices",
+      "title": "Overdue invoices without losing the NULL rows",
+      "difficulty": 2,
+      "skills": [
+        "three-valued logic",
+        "ORDER BY tiebreak"
+      ],
+      "instructions": "**Interview prompt.** \"Finance wants the list of overdue invoices. Write the query.\"\n\n**Why it matters.** A filter that compares a nullable column quietly drops rows, and a sort without a tiebreaker reorders itself between page loads. Both bugs pass a quick look at the data.\n\n**The table.** `invoices(id, customer, due_date, paid_at, status)`. Dates are text in `YYYY-MM-DD` form, which sorts correctly as text. `due_date`, `paid_at` and `status` can each be NULL.\n\n**Your task.** Export `query`, a SQL string with ONE positional parameter (`?`): today's date. The tests run it against a real in-memory SQLite database. It returns the columns `id`, `customer`, `due_date` of every invoice that is overdue:\n- not paid: `paid_at` is NULL\n- not void: `status` is anything except `'void'`. Old rows have a NULL status and they still count\n- due strictly before today. An invoice due today is not overdue yet, and an invoice without a due date is never overdue\n- oldest due date first; invoices with the same due date in ascending `id` order\n\n**Worked example.** With today = `2026-03-10`, an unpaid invoice due `2026-02-20` with a NULL status is returned; an unpaid invoice due `2026-03-10` is not.",
+      "starter": "// TODO: finish the query. One positional parameter (?): today's date as 'YYYY-MM-DD'.\nexport const query = `\n  SELECT id, customer, due_date\n  FROM invoices\n`;\n",
+      "solution": "export const query = `\n  SELECT id, customer, due_date\n  FROM invoices\n  WHERE paid_at IS NULL\n    AND (status IS NULL OR status <> 'void')\n    AND due_date < ?\n  ORDER BY due_date, id\n`;\n",
+      "tests": [
+        {
+          "name": "returns id, customer and due_date of unpaid invoices due before today",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec(`\n  CREATE TABLE invoices (id INTEGER NOT NULL UNIQUE, customer TEXT NOT NULL, due_date TEXT, paid_at TEXT, status TEXT);\n  INSERT INTO invoices (id, customer, due_date, paid_at, status) VALUES\n    (7, 'Acme',   '2026-03-01', NULL, 'sent'),\n    (3, 'Birch',  '2026-03-01', NULL, 'sent'),\n    (5, 'Cobalt', '2026-02-10', NULL, 'sent'),\n    (1, 'Dune',   '2026-03-10', NULL, 'sent'),\n    (2, 'Elm',    '2026-02-01', '2026-02-03', 'paid'),\n    (4, 'Fjord',  NULL,         NULL, 'sent'),\n    (6, 'Grove',  '2026-02-20', NULL, NULL),\n    (8, 'Heath',  '2026-02-15', NULL, 'void'),\n    (9, 'Iris',   '2026-03-11', NULL, 'sent');\n`);\nassert.equal(typeof mod.query, 'string', 'export const query = `...`');\nconst rows = db.prepare(mod.query).all('2026-03-10').map((r) => ({ ...r }));\nconst ids = rows.map((r) => r.id);\nassert.ok(ids.includes(5), 'invoice 5 (due 2026-02-10, unpaid) is overdue');\nassert.deepEqual(rows.find((r) => r.id === 5), { id: 5, customer: 'Cobalt', due_date: '2026-02-10' });\nassert.ok(!ids.includes(9), 'invoice 9 is due tomorrow');"
+        },
+        {
+          "name": "an invoice due today is not overdue yet (boundary)",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec(`\n  CREATE TABLE invoices (id INTEGER NOT NULL UNIQUE, customer TEXT NOT NULL, due_date TEXT, paid_at TEXT, status TEXT);\n  INSERT INTO invoices (id, customer, due_date, paid_at, status) VALUES\n    (7, 'Acme',   '2026-03-01', NULL, 'sent'),\n    (3, 'Birch',  '2026-03-01', NULL, 'sent'),\n    (5, 'Cobalt', '2026-02-10', NULL, 'sent'),\n    (1, 'Dune',   '2026-03-10', NULL, 'sent'),\n    (2, 'Elm',    '2026-02-01', '2026-02-03', 'paid'),\n    (4, 'Fjord',  NULL,         NULL, 'sent'),\n    (6, 'Grove',  '2026-02-20', NULL, NULL),\n    (8, 'Heath',  '2026-02-15', NULL, 'void'),\n    (9, 'Iris',   '2026-03-11', NULL, 'sent');\n`);\nassert.equal(typeof mod.query, 'string', 'export const query = `...`');\nconst rows = db.prepare(mod.query).all('2026-03-10').map((r) => ({ ...r }));\nconst ids = rows.map((r) => r.id);\nassert.ok(ids.length > 0, 'the query returns the overdue invoices');\nassert.ok(!ids.includes(1), 'invoice 1 is due today');"
+        },
+        {
+          "name": "a paid invoice is excluded",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec(`\n  CREATE TABLE invoices (id INTEGER NOT NULL UNIQUE, customer TEXT NOT NULL, due_date TEXT, paid_at TEXT, status TEXT);\n  INSERT INTO invoices (id, customer, due_date, paid_at, status) VALUES\n    (7, 'Acme',   '2026-03-01', NULL, 'sent'),\n    (3, 'Birch',  '2026-03-01', NULL, 'sent'),\n    (5, 'Cobalt', '2026-02-10', NULL, 'sent'),\n    (1, 'Dune',   '2026-03-10', NULL, 'sent'),\n    (2, 'Elm',    '2026-02-01', '2026-02-03', 'paid'),\n    (4, 'Fjord',  NULL,         NULL, 'sent'),\n    (6, 'Grove',  '2026-02-20', NULL, NULL),\n    (8, 'Heath',  '2026-02-15', NULL, 'void'),\n    (9, 'Iris',   '2026-03-11', NULL, 'sent');\n`);\nassert.equal(typeof mod.query, 'string', 'export const query = `...`');\nconst rows = db.prepare(mod.query).all('2026-03-10').map((r) => ({ ...r }));\nconst ids = rows.map((r) => r.id);\nassert.ok(ids.length > 0, 'the query returns the overdue invoices');\nassert.ok(!ids.includes(2), 'invoice 2 was paid');"
+        },
+        {
+          "name": "an invoice with no due date is never overdue",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec(`\n  CREATE TABLE invoices (id INTEGER NOT NULL UNIQUE, customer TEXT NOT NULL, due_date TEXT, paid_at TEXT, status TEXT);\n  INSERT INTO invoices (id, customer, due_date, paid_at, status) VALUES\n    (7, 'Acme',   '2026-03-01', NULL, 'sent'),\n    (3, 'Birch',  '2026-03-01', NULL, 'sent'),\n    (5, 'Cobalt', '2026-02-10', NULL, 'sent'),\n    (1, 'Dune',   '2026-03-10', NULL, 'sent'),\n    (2, 'Elm',    '2026-02-01', '2026-02-03', 'paid'),\n    (4, 'Fjord',  NULL,         NULL, 'sent'),\n    (6, 'Grove',  '2026-02-20', NULL, NULL),\n    (8, 'Heath',  '2026-02-15', NULL, 'void'),\n    (9, 'Iris',   '2026-03-11', NULL, 'sent');\n`);\nassert.equal(typeof mod.query, 'string', 'export const query = `...`');\nconst rows = db.prepare(mod.query).all('2026-03-10').map((r) => ({ ...r }));\nconst ids = rows.map((r) => r.id);\nassert.ok(ids.length > 0, 'the query returns the overdue invoices');\nassert.ok(!ids.includes(4), 'invoice 4 has a NULL due_date');"
+        },
+        {
+          "name": "a NULL status still counts, a void invoice does not (trap)",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec(`\n  CREATE TABLE invoices (id INTEGER NOT NULL UNIQUE, customer TEXT NOT NULL, due_date TEXT, paid_at TEXT, status TEXT);\n  INSERT INTO invoices (id, customer, due_date, paid_at, status) VALUES\n    (7, 'Acme',   '2026-03-01', NULL, 'sent'),\n    (3, 'Birch',  '2026-03-01', NULL, 'sent'),\n    (5, 'Cobalt', '2026-02-10', NULL, 'sent'),\n    (1, 'Dune',   '2026-03-10', NULL, 'sent'),\n    (2, 'Elm',    '2026-02-01', '2026-02-03', 'paid'),\n    (4, 'Fjord',  NULL,         NULL, 'sent'),\n    (6, 'Grove',  '2026-02-20', NULL, NULL),\n    (8, 'Heath',  '2026-02-15', NULL, 'void'),\n    (9, 'Iris',   '2026-03-11', NULL, 'sent');\n`);\nassert.equal(typeof mod.query, 'string', 'export const query = `...`');\nconst rows = db.prepare(mod.query).all('2026-03-10').map((r) => ({ ...r }));\nconst ids = rows.map((r) => r.id);\nassert.ok(ids.includes(6), 'invoice 6 has a NULL status and is overdue');\nassert.ok(!ids.includes(8), 'invoice 8 is void');"
+        },
+        {
+          "name": "oldest due date first, equal due dates in id order",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec(`\n  CREATE TABLE invoices (id INTEGER NOT NULL UNIQUE, customer TEXT NOT NULL, due_date TEXT, paid_at TEXT, status TEXT);\n  INSERT INTO invoices (id, customer, due_date, paid_at, status) VALUES\n    (7, 'Acme',   '2026-03-01', NULL, 'sent'),\n    (3, 'Birch',  '2026-03-01', NULL, 'sent'),\n    (5, 'Cobalt', '2026-02-10', NULL, 'sent'),\n    (1, 'Dune',   '2026-03-10', NULL, 'sent'),\n    (2, 'Elm',    '2026-02-01', '2026-02-03', 'paid'),\n    (4, 'Fjord',  NULL,         NULL, 'sent'),\n    (6, 'Grove',  '2026-02-20', NULL, NULL),\n    (8, 'Heath',  '2026-02-15', NULL, 'void'),\n    (9, 'Iris',   '2026-03-11', NULL, 'sent');\n`);\nassert.equal(typeof mod.query, 'string', 'export const query = `...`');\nconst rows = db.prepare(mod.query).all('2026-03-10').map((r) => ({ ...r }));\nconst ids = rows.map((r) => r.id);\nassert.deepEqual(ids, [5, 6, 3, 7]);"
+        }
+      ],
+      "explanation": "```sql\nSELECT id, customer, due_date\nFROM invoices\nWHERE paid_at IS NULL\n  AND (status IS NULL OR status <> 'void')\n  AND due_date < ?\nORDER BY due_date, id\n```\n\nThree NULL decisions, each made on purpose:\n- `paid_at IS NULL`: \"= NULL\" is never true, so it would return nothing.\n- `status <> 'void'` alone is unknown for a NULL status and drops the legacy rows. That is the plausible wrong answer the trap test catches (invoice 6).\n- `due_date < ?` is unknown for a NULL due date, which here is exactly the rule you want. Wrapping the column in `COALESCE` would let those rows in.\n\n`ORDER BY due_date, id` makes the order of invoices 3 and 7 (same due date) a property of the query, not an accident of storage order. In Postgres you could write `status IS DISTINCT FROM 'void'`; SQLite accepts `status IS NOT 'void'`.",
+      "hints": [
+        "Three-valued logic: a comparison with NULL is neither true nor false, and the filter keeps only true rows.",
+        "Decide separately for each nullable column what a missing value should mean, and give the sort a second key that is unique.",
+        "Test the paid column for being NULL, accept a status that is NULL or different from void, compare the due date with the parameter using a strict less-than, then order by due date followed by id."
+      ]
+    },
+    {
+      "slug": "02-customers-with-zero-orders",
+      "title": "Count paid orders per customer, zeros included",
+      "difficulty": 2,
+      "skills": [
+        "LEFT JOIN",
+        "COUNT",
+        "GROUP BY"
+      ],
+      "instructions": "**Interview prompt.** \"Show every customer with their number of paid orders. Sales wants to call the ones with none.\"\n\n**Why it matters.** The customers you most want on this report are the ones an inner join deletes. And the usual repairs each break something else: a row count that says 1 for nobody, a filter that removes the zeros again, a grouping that merges two people.\n\n**The tables.** `customers(id, name)` and `orders(id, customer_id, status)`, where status is `'paid'` or `'cancelled'`. Names are not unique.\n\n**Your task.** Export `query`, a SQL string without parameters. It returns one row per customer with the columns `name` and `paid_orders`:\n- `paid_orders` is the number of that customer's orders whose status is `'paid'`\n- a customer with no orders, or with cancelled orders only, appears with 0\n- two different customers with the same name are two rows\n- most paid orders first; equal counts in ascending name order\n\n**Worked example.** Ada has two paid orders and one cancelled one, Ben has none: the result starts with `{ name: 'Ada', paid_orders: 2 }` and contains `{ name: 'Ben', paid_orders: 0 }`.",
+      "starter": "// TODO: every customer must appear, with the number of PAID orders (0 when there are none).\nexport const query = `\n  SELECT c.name, COUNT(*) AS paid_orders\n  FROM customers c\n  JOIN orders o ON o.customer_id = c.id\n  GROUP BY c.name\n`;\n",
+      "solution": "export const query = `\n  SELECT c.name, COUNT(o.id) AS paid_orders\n  FROM customers c\n  LEFT JOIN orders o ON o.customer_id = c.id AND o.status = 'paid'\n  GROUP BY c.id\n  ORDER BY paid_orders DESC, c.name\n`;\n",
+      "tests": [
+        {
+          "name": "returns one row per customer with name and paid_orders",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec(`\n  CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT NOT NULL);\n  CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER NOT NULL REFERENCES customers(id), status TEXT NOT NULL);\n  INSERT INTO customers (id, name) VALUES (1, 'Ada'), (2, 'Ben'), (3, 'Cy'), (4, 'Sam'), (5, 'Sam');\n  INSERT INTO orders (id, customer_id, status) VALUES\n    (10, 1, 'paid'), (11, 1, 'cancelled'), (12, 1, 'paid'),\n    (13, 3, 'cancelled'),\n    (14, 4, 'paid');\n`);\nassert.equal(typeof mod.query, 'string', 'export const query = `...`');\nconst rows = db.prepare(mod.query).all().map((r) => ({ ...r }));\nconst count = (name) => rows.filter((r) => r.name === name).map((r) => r.paid_orders);\nassert.equal(rows.length, 5);\nassert.deepEqual(Object.keys(rows[0]).sort(), ['name', 'paid_orders']);"
+        },
+        {
+          "name": "counts paid orders and ignores cancelled ones",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec(`\n  CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT NOT NULL);\n  CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER NOT NULL REFERENCES customers(id), status TEXT NOT NULL);\n  INSERT INTO customers (id, name) VALUES (1, 'Ada'), (2, 'Ben'), (3, 'Cy'), (4, 'Sam'), (5, 'Sam');\n  INSERT INTO orders (id, customer_id, status) VALUES\n    (10, 1, 'paid'), (11, 1, 'cancelled'), (12, 1, 'paid'),\n    (13, 3, 'cancelled'),\n    (14, 4, 'paid');\n`);\nassert.equal(typeof mod.query, 'string', 'export const query = `...`');\nconst rows = db.prepare(mod.query).all().map((r) => ({ ...r }));\nconst count = (name) => rows.filter((r) => r.name === name).map((r) => r.paid_orders);\nassert.deepEqual(count('Ada'), [2]);"
+        },
+        {
+          "name": "a customer with no orders appears with 0",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec(`\n  CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT NOT NULL);\n  CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER NOT NULL REFERENCES customers(id), status TEXT NOT NULL);\n  INSERT INTO customers (id, name) VALUES (1, 'Ada'), (2, 'Ben'), (3, 'Cy'), (4, 'Sam'), (5, 'Sam');\n  INSERT INTO orders (id, customer_id, status) VALUES\n    (10, 1, 'paid'), (11, 1, 'cancelled'), (12, 1, 'paid'),\n    (13, 3, 'cancelled'),\n    (14, 4, 'paid');\n`);\nassert.equal(typeof mod.query, 'string', 'export const query = `...`');\nconst rows = db.prepare(mod.query).all().map((r) => ({ ...r }));\nconst count = (name) => rows.filter((r) => r.name === name).map((r) => r.paid_orders);\nassert.deepEqual(count('Ben'), [0]);"
+        },
+        {
+          "name": "a customer with cancelled orders only appears with 0 (trap)",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec(`\n  CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT NOT NULL);\n  CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER NOT NULL REFERENCES customers(id), status TEXT NOT NULL);\n  INSERT INTO customers (id, name) VALUES (1, 'Ada'), (2, 'Ben'), (3, 'Cy'), (4, 'Sam'), (5, 'Sam');\n  INSERT INTO orders (id, customer_id, status) VALUES\n    (10, 1, 'paid'), (11, 1, 'cancelled'), (12, 1, 'paid'),\n    (13, 3, 'cancelled'),\n    (14, 4, 'paid');\n`);\nassert.equal(typeof mod.query, 'string', 'export const query = `...`');\nconst rows = db.prepare(mod.query).all().map((r) => ({ ...r }));\nconst count = (name) => rows.filter((r) => r.name === name).map((r) => r.paid_orders);\nassert.deepEqual(count('Cy'), [0]);"
+        },
+        {
+          "name": "two customers with the same name stay two rows (boundary)",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec(`\n  CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT NOT NULL);\n  CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER NOT NULL REFERENCES customers(id), status TEXT NOT NULL);\n  INSERT INTO customers (id, name) VALUES (1, 'Ada'), (2, 'Ben'), (3, 'Cy'), (4, 'Sam'), (5, 'Sam');\n  INSERT INTO orders (id, customer_id, status) VALUES\n    (10, 1, 'paid'), (11, 1, 'cancelled'), (12, 1, 'paid'),\n    (13, 3, 'cancelled'),\n    (14, 4, 'paid');\n`);\nassert.equal(typeof mod.query, 'string', 'export const query = `...`');\nconst rows = db.prepare(mod.query).all().map((r) => ({ ...r }));\nconst count = (name) => rows.filter((r) => r.name === name).map((r) => r.paid_orders);\nassert.deepEqual(count('Sam').sort(), [0, 1]);"
+        },
+        {
+          "name": "most paid orders first, then by name",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec(`\n  CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT NOT NULL);\n  CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER NOT NULL REFERENCES customers(id), status TEXT NOT NULL);\n  INSERT INTO customers (id, name) VALUES (1, 'Ada'), (2, 'Ben'), (3, 'Cy'), (4, 'Sam'), (5, 'Sam');\n  INSERT INTO orders (id, customer_id, status) VALUES\n    (10, 1, 'paid'), (11, 1, 'cancelled'), (12, 1, 'paid'),\n    (13, 3, 'cancelled'),\n    (14, 4, 'paid');\n`);\nassert.equal(typeof mod.query, 'string', 'export const query = `...`');\nconst rows = db.prepare(mod.query).all().map((r) => ({ ...r }));\nconst count = (name) => rows.filter((r) => r.name === name).map((r) => r.paid_orders);\nassert.deepEqual(rows, [\n  { name: 'Ada', paid_orders: 2 },\n  { name: 'Sam', paid_orders: 1 },\n  { name: 'Ben', paid_orders: 0 },\n  { name: 'Cy', paid_orders: 0 },\n  { name: 'Sam', paid_orders: 0 },\n]);"
+        }
+      ],
+      "explanation": "```sql\nSELECT c.name, COUNT(o.id) AS paid_orders\nFROM customers c\nLEFT JOIN orders o ON o.customer_id = c.id AND o.status = 'paid'\nGROUP BY c.id\nORDER BY paid_orders DESC, c.name\n```\n\n- `LEFT JOIN` keeps Ben, who has no orders at all.\n- The status test sits in `ON`. In `WHERE` it would be unknown for Ben's NULL-padded row and for Cy (cancelled orders only), and both would disappear: that is the plausible wrong answer the trap test catches.\n- `COUNT(o.id)` skips the NULL of an unmatched row; `COUNT(*)` would report 1 for a customer with nothing.\n- `GROUP BY c.id` keeps the two Sams apart; grouping by name merges them into one row.\n\nA correlated subquery in the select list is an equally correct shape. The join form extends more easily when the report needs a second aggregate from the same table.",
+      "hints": [
+        "An outer join keeps the rows of one side even when the other side has no match.",
+        "Keep every customer, make the paid-only condition part of the matching rule instead of a filter on the joined result, and count something that is missing when there was no match.",
+        "Left join orders on the customer id and the paid status together, count the order id column, group by the customer id, then sort by the count descending and the name."
+      ]
+    },
+    {
+      "slug": "03-fix-the-inflated-total",
+      "title": "Fix a SUM inflated by a second join",
+      "difficulty": 3,
+      "skills": [
+        "fan-out",
+        "pre-aggregation",
+        "COALESCE"
+      ],
+      "instructions": "**Interview prompt.** \"This order report shows more money than we received. Find out why and fix the query.\"\n\n**Why it matters.** Joining a parent to two child tables multiplies every child row by the row count of the other child. The query runs, the numbers look plausible, and they are wrong only for orders that have several rows in both tables.\n\n**The tables.** `orders(id, customer)`, `order_items(id, order_id, qty)` and `payments(id, order_id, amount)`. An order can have any number of items and any number of payments, including none.\n\n**Your task.** Export `query`, a SQL string without parameters, returning one row per order, sorted by `id`, with the columns:\n- `id`\n- `item_count`: how many line items the order has\n- `paid_total`: the sum of its payments\n\nAn order without payments shows a `paid_total` of 0 (a number, not NULL). An order without items still appears, with an `item_count` of 0. The starter is the query from production: it is wrong in more than one way.\n\n**Worked example.** Order 2 has two items and payments of 30 and 70. The correct row is `{ id: 2, item_count: 2, paid_total: 100 }`; the starter reports 4 items and 200.",
+      "starter": "// TODO: this report over-counts, and it loses some orders. Fix the query.\nexport const query = `\n  SELECT o.id, COUNT(i.id) AS item_count, SUM(p.amount) AS paid_total\n  FROM orders o\n  JOIN order_items i ON i.order_id = o.id\n  JOIN payments p ON p.order_id = o.id\n  GROUP BY o.id\n  ORDER BY o.id\n`;\n",
+      "solution": "export const query = `\n  SELECT o.id,\n         COALESCE(i.item_count, 0) AS item_count,\n         COALESCE(p.paid_total, 0) AS paid_total\n  FROM orders o\n  LEFT JOIN (\n    SELECT order_id, COUNT(*) AS item_count FROM order_items GROUP BY order_id\n  ) i ON i.order_id = o.id\n  LEFT JOIN (\n    SELECT order_id, SUM(amount) AS paid_total FROM payments GROUP BY order_id\n  ) p ON p.order_id = o.id\n  ORDER BY o.id\n`;\n",
+      "tests": [
+        {
+          "name": "returns one row per order, sorted by id, with id, item_count and paid_total",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec(`\n  CREATE TABLE orders (id INTEGER PRIMARY KEY, customer TEXT NOT NULL);\n  CREATE TABLE order_items (id INTEGER PRIMARY KEY, order_id INTEGER NOT NULL REFERENCES orders(id), qty INTEGER NOT NULL);\n  CREATE TABLE payments (id INTEGER PRIMARY KEY, order_id INTEGER NOT NULL REFERENCES orders(id), amount INTEGER NOT NULL);\n  INSERT INTO orders (id, customer) VALUES (1, 'Ada'), (2, 'Ben'), (3, 'Cy'), (4, 'Dee'), (5, 'Eli');\n  INSERT INTO order_items (order_id, qty) VALUES (1, 1), (1, 2), (1, 1), (2, 5), (2, 1), (3, 4), (5, 1), (5, 1);\n  INSERT INTO payments (order_id, amount) VALUES (1, 50), (1, 50), (2, 30), (2, 70), (4, 20), (5, 80);\n`);\nassert.equal(typeof mod.query, 'string', 'export const query = `...`');\nconst rows = db.prepare(mod.query).all().map((r) => ({ ...r }));\nconst row = (id) => rows.find((r) => r.id === id);\nassert.deepEqual(rows.map((r) => r.id), [1, 2, 3, 4, 5]);\nassert.deepEqual(Object.keys(rows[0]).sort(), ['id', 'item_count', 'paid_total']);"
+        },
+        {
+          "name": "payments are not multiplied by the number of items",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec(`\n  CREATE TABLE orders (id INTEGER PRIMARY KEY, customer TEXT NOT NULL);\n  CREATE TABLE order_items (id INTEGER PRIMARY KEY, order_id INTEGER NOT NULL REFERENCES orders(id), qty INTEGER NOT NULL);\n  CREATE TABLE payments (id INTEGER PRIMARY KEY, order_id INTEGER NOT NULL REFERENCES orders(id), amount INTEGER NOT NULL);\n  INSERT INTO orders (id, customer) VALUES (1, 'Ada'), (2, 'Ben'), (3, 'Cy'), (4, 'Dee'), (5, 'Eli');\n  INSERT INTO order_items (order_id, qty) VALUES (1, 1), (1, 2), (1, 1), (2, 5), (2, 1), (3, 4), (5, 1), (5, 1);\n  INSERT INTO payments (order_id, amount) VALUES (1, 50), (1, 50), (2, 30), (2, 70), (4, 20), (5, 80);\n`);\nassert.equal(typeof mod.query, 'string', 'export const query = `...`');\nconst rows = db.prepare(mod.query).all().map((r) => ({ ...r }));\nconst row = (id) => rows.find((r) => r.id === id);\nassert.equal(row(2)?.paid_total, 100);\nassert.equal(row(5)?.paid_total, 80);"
+        },
+        {
+          "name": "items are not multiplied by the number of payments",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec(`\n  CREATE TABLE orders (id INTEGER PRIMARY KEY, customer TEXT NOT NULL);\n  CREATE TABLE order_items (id INTEGER PRIMARY KEY, order_id INTEGER NOT NULL REFERENCES orders(id), qty INTEGER NOT NULL);\n  CREATE TABLE payments (id INTEGER PRIMARY KEY, order_id INTEGER NOT NULL REFERENCES orders(id), amount INTEGER NOT NULL);\n  INSERT INTO orders (id, customer) VALUES (1, 'Ada'), (2, 'Ben'), (3, 'Cy'), (4, 'Dee'), (5, 'Eli');\n  INSERT INTO order_items (order_id, qty) VALUES (1, 1), (1, 2), (1, 1), (2, 5), (2, 1), (3, 4), (5, 1), (5, 1);\n  INSERT INTO payments (order_id, amount) VALUES (1, 50), (1, 50), (2, 30), (2, 70), (4, 20), (5, 80);\n`);\nassert.equal(typeof mod.query, 'string', 'export const query = `...`');\nconst rows = db.prepare(mod.query).all().map((r) => ({ ...r }));\nconst row = (id) => rows.find((r) => r.id === id);\nassert.equal(row(2)?.item_count, 2);\nassert.equal(row(1)?.item_count, 3);"
+        },
+        {
+          "name": "an order without payments shows a paid_total of 0, not NULL",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec(`\n  CREATE TABLE orders (id INTEGER PRIMARY KEY, customer TEXT NOT NULL);\n  CREATE TABLE order_items (id INTEGER PRIMARY KEY, order_id INTEGER NOT NULL REFERENCES orders(id), qty INTEGER NOT NULL);\n  CREATE TABLE payments (id INTEGER PRIMARY KEY, order_id INTEGER NOT NULL REFERENCES orders(id), amount INTEGER NOT NULL);\n  INSERT INTO orders (id, customer) VALUES (1, 'Ada'), (2, 'Ben'), (3, 'Cy'), (4, 'Dee'), (5, 'Eli');\n  INSERT INTO order_items (order_id, qty) VALUES (1, 1), (1, 2), (1, 1), (2, 5), (2, 1), (3, 4), (5, 1), (5, 1);\n  INSERT INTO payments (order_id, amount) VALUES (1, 50), (1, 50), (2, 30), (2, 70), (4, 20), (5, 80);\n`);\nassert.equal(typeof mod.query, 'string', 'export const query = `...`');\nconst rows = db.prepare(mod.query).all().map((r) => ({ ...r }));\nconst row = (id) => rows.find((r) => r.id === id);\nassert.deepEqual(row(3), { id: 3, item_count: 1, paid_total: 0 });"
+        },
+        {
+          "name": "an order without items still appears, with item_count 0 (boundary)",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec(`\n  CREATE TABLE orders (id INTEGER PRIMARY KEY, customer TEXT NOT NULL);\n  CREATE TABLE order_items (id INTEGER PRIMARY KEY, order_id INTEGER NOT NULL REFERENCES orders(id), qty INTEGER NOT NULL);\n  CREATE TABLE payments (id INTEGER PRIMARY KEY, order_id INTEGER NOT NULL REFERENCES orders(id), amount INTEGER NOT NULL);\n  INSERT INTO orders (id, customer) VALUES (1, 'Ada'), (2, 'Ben'), (3, 'Cy'), (4, 'Dee'), (5, 'Eli');\n  INSERT INTO order_items (order_id, qty) VALUES (1, 1), (1, 2), (1, 1), (2, 5), (2, 1), (3, 4), (5, 1), (5, 1);\n  INSERT INTO payments (order_id, amount) VALUES (1, 50), (1, 50), (2, 30), (2, 70), (4, 20), (5, 80);\n`);\nassert.equal(typeof mod.query, 'string', 'export const query = `...`');\nconst rows = db.prepare(mod.query).all().map((r) => ({ ...r }));\nconst row = (id) => rows.find((r) => r.id === id);\nassert.deepEqual(row(4), { id: 4, item_count: 0, paid_total: 20 });"
+        },
+        {
+          "name": "two payments of the same amount both count (trap)",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec(`\n  CREATE TABLE orders (id INTEGER PRIMARY KEY, customer TEXT NOT NULL);\n  CREATE TABLE order_items (id INTEGER PRIMARY KEY, order_id INTEGER NOT NULL REFERENCES orders(id), qty INTEGER NOT NULL);\n  CREATE TABLE payments (id INTEGER PRIMARY KEY, order_id INTEGER NOT NULL REFERENCES orders(id), amount INTEGER NOT NULL);\n  INSERT INTO orders (id, customer) VALUES (1, 'Ada'), (2, 'Ben'), (3, 'Cy'), (4, 'Dee'), (5, 'Eli');\n  INSERT INTO order_items (order_id, qty) VALUES (1, 1), (1, 2), (1, 1), (2, 5), (2, 1), (3, 4), (5, 1), (5, 1);\n  INSERT INTO payments (order_id, amount) VALUES (1, 50), (1, 50), (2, 30), (2, 70), (4, 20), (5, 80);\n`);\nassert.equal(typeof mod.query, 'string', 'export const query = `...`');\nconst rows = db.prepare(mod.query).all().map((r) => ({ ...r }));\nconst row = (id) => rows.find((r) => r.id === id);\nassert.equal(row(1)?.paid_total, 100);"
+        }
+      ],
+      "explanation": "The starter joins both child tables to the order before aggregating. Order 2 (2 items, 2 payments) becomes 4 rows, so its item count and its total are both doubled, and the inner joins drop orders 3 and 4 entirely.\n\nAggregate each child table to one row per order first, then join:\n\n```sql\nSELECT o.id,\n       COALESCE(i.item_count, 0) AS item_count,\n       COALESCE(p.paid_total, 0) AS paid_total\nFROM orders o\nLEFT JOIN (SELECT order_id, COUNT(*) AS item_count FROM order_items GROUP BY order_id) i\n       ON i.order_id = o.id\nLEFT JOIN (SELECT order_id, SUM(amount) AS paid_total FROM payments GROUP BY order_id) p\n       ON p.order_id = o.id\nORDER BY o.id\n```\n\nThe plausible wrong answer is the quick patch: keep the double join and write `COUNT(DISTINCT i.id)` and `SUM(DISTINCT p.amount)`. The count happens to work because ids are unique, but amounts are not: order 1 was paid in two instalments of 50, and the patch reports 50. The trap test catches exactly that. `COALESCE` turns the NULL of an unmatched left join into 0. Scalar subqueries in the select list are an equally valid fix.",
+      "hints": [
+        "Fan-out: each extra one-to-many join repeats the rows that the previous join produced.",
+        "Reduce each child table to a single row per order before it meets the orders table, and keep orders that have no rows in one of them.",
+        "Write one grouped subquery that counts items per order and another that sums payments per order, left join both to orders on the order id, and replace missing values with zero."
+      ]
+    }
+  ]
+}
