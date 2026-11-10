@@ -191,3 +191,28 @@ describe('dashboard hero (rendered)', () => {
     await waitFor(() => expect(document.querySelector('.due-now')).toHaveClass('due-now-quiet'));
   });
 });
+
+describe('competencies on day one (f52 U8)', () => {
+  const fresh = () => api({ dash: (d) => ({ ...d, competencies: d.competencies.map((c) => ({ ...c, rating: 1, lastEvidence: null })) }) });
+
+  it('all at rating 1 with no evidence: a one-line summary; Show opens the table of "Not started" rows', async () => {
+    const { user } = renderApp('/', fresh());
+    const summary = await screen.findByTestId('comp-summary', {}, { timeout: 15_000 });
+    expect(summary).toHaveTextContent('8 competencies · not started yet.');
+    expect(screen.queryByRole('table')).toBeNull();
+    const toggle = within(summary).getByRole('button', { name: 'Show' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(toggle).toHaveTextContent('Hide');
+    const table = screen.getByRole('table');
+    expect(within(table).getAllByText('Not started')).toHaveLength(8);
+    expect(table.querySelector('.evidence-cell svg')).toBeNull();
+  });
+
+  it('one competency above rating 1 keeps the table open', async () => {
+    renderApp('/', api({ dash: (d) => ({ ...d, competencies: d.competencies.map((c, i) => ({ ...c, rating: i === 0 ? 2 : 1, lastEvidence: null })) }) }));
+    await screen.findByRole('table', {}, { timeout: 15_000 });
+    expect(screen.queryByTestId('comp-summary')).toBeNull();
+  });
+});

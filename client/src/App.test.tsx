@@ -21,7 +21,10 @@ describe('routing + global keyboard navigation', () => {
     const rows = within(screen.getByRole('table')).getAllByRole('row');
     expect(rows).toHaveLength(9); // header + 8 competencies
     // agentic-engineering + the freshly seeded system-design (migration 014) have no evidence yet
-    expect(screen.getAllByText('Evidence missing')).toHaveLength(2);
+    // f52 U8: "Not started", with no warning icon (there is no "lost a leg" state)
+    expect(screen.getAllByText('Not started')).toHaveLength(2);
+    expect(screen.getByRole('table').querySelector('.evidence-cell svg')).toBeNull();
+    expect(screen.queryByTestId('comp-summary')).toBeNull(); // some competencies have evidence: no collapse
     expect(screen.getByLabelText('1 of 2 freeze tokens banked')).toBeInTheDocument();
     expect(screen.getByRole('figure', { name: /Activity over the last 90 days/ })).toBeInTheDocument();
     expect(screen.getByText('+64 today')).toBeInTheDocument(); // today's heatmap row

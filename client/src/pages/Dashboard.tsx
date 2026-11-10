@@ -345,9 +345,7 @@ function DashboardBody({
         </ul>
       </Panel>
 
-      <Panel title="Competencies" labelledBy="p-comp" aside={<span className="muted">rated 1–5 · never averaged · promotion = artifact + explain-back ≥80% + retest ≥2 days later</span>}>
-        <CompetencyTable rows={d.competencies} today={d.today} dueRetestUnits={dueRetestUnits} />
-      </Panel>
+      <CompetencyPanel rows={d.competencies} today={d.today} dueRetestUnits={dueRetestUnits} />
 
       <Panel title="Activity" labelledBy="p-activity" className="dash-heat" aside={<span className="muted">last {d.heatmap.length} days</span>}>
         <Heatmap days={d.heatmap} today={d.today} />
@@ -560,6 +558,39 @@ function PromotionLegs({ p, dueRetestUnits }: { p: PromotionProgress; dueRetestU
   );
 }
 
+/** Nothing to show yet: every competency at rating 1 (or unrated) with no evidence at all. */
+export const competenciesUntouched = (rows: readonly CompetencyRow[]): boolean => rows.every((r) => (r.rating ?? 1) <= 1 && !r.lastEvidence);
+
+/**
+ * f52 U8: on day one the table is eight empty rows, so the panel collapses to a one-line summary
+ * with a Show toggle until any competency has evidence (or a rating above 1).
+ */
+function CompetencyPanel({ rows, today, dueRetestUnits }: { rows: CompetencyRow[]; today: string; dueRetestUnits: ReadonlySet<number> }) {
+  const untouched = competenciesUntouched(rows);
+  const [shown, setShown] = useState(false);
+  const open = !untouched || shown;
+  return (
+    <Panel
+      title="Competencies"
+      labelledBy="p-comp"
+      className={open ? undefined : 'comp-quiet'}
+      aside={<span className="muted">rated 1–5 · never averaged · promotion = artifact + explain-back ≥80% + retest ≥2 days later</span>}
+    >
+      {untouched && (
+        <p className="comp-summary small" data-testid="comp-summary">
+          <span className="muted">{plural(rows.length, 'competency', 'competencies')} · not started yet. Passing units earns the first evidence.</span>{' '}
+          <button type="button" className="link-btn" aria-expanded={open} aria-controls="comp-table" onClick={() => setShown((s) => !s)}>
+            {open ? 'Hide' : 'Show'}
+          </button>
+        </p>
+      )}
+      <div id="comp-table" hidden={!open}>
+        {open && <CompetencyTable rows={rows} today={today} dueRetestUnits={dueRetestUnits} />}
+      </div>
+    </Panel>
+  );
+}
+
 export function CompetencyTable({ rows, today, dueRetestUnits = new Set() }: { rows: CompetencyRow[]; today: string; dueRetestUnits?: ReadonlySet<number> }) {
   return (
     <div className="table-wrap">
@@ -589,9 +620,8 @@ export function CompetencyTable({ rows, today, dueRetestUnits = new Set() }: { r
                     <span className="evidence-meta">{fmtRelative(today, dayOfMs(r.lastEvidence.createdAt))}</span>
                   </Link>
                 ) : (
-                  <span className="evidence-missing">
-                    <Icon name="warn" size={14} /> Evidence missing
-                  </span>
+                  // f52 U8: no evidence yet is a starting point, not a warning
+                  <span className="evidence-none muted">Not started</span>
                 )}
               </td>
             </tr>
