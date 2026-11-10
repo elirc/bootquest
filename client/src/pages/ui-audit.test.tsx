@@ -113,7 +113,11 @@ describe('#2 quiz prompt: original case, real code block', () => {
     const pre = document.querySelector('.player-work pre.code-block');
     expect(pre?.textContent).toBe('const x = 1;\nx = 2;');
     expect(document.body.textContent).not.toContain('```');
-    expect(screen.getByText('The question is in the answer pane.')).toBeInTheDocument();
+    // f52 U9: a quiz is one column; no "the question is in the answer pane" placeholder pane
+    expect(screen.queryByText('The question is in the answer pane.')).not.toBeInTheDocument();
+    expect(document.querySelector('.player')).toHaveAttribute('data-layout', 'single');
+    // the reveal flow moved under the question
+    expect(screen.getByRole('button', { name: /Reveal solution/ })).toBeInTheDocument();
   });
 });
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { useApi } from '../api/context';
 import { errorText } from '../api/errors';
@@ -19,7 +19,7 @@ import { NextStep } from './Player/NextStep';
  * (question on the front, keyed answer + source on the back) that arrive in the review queue
  * the next day. Submits are free and repeatable; the 50 XP is paid once.
  */
-export function StudyQuestPane({ detail }: { detail: UnitDetail }) {
+export function StudyQuestPane({ detail, lesson = null }: { detail: UnitDetail; lesson?: ReactNode }) {
   const sq = detail.studyQuest ?? null;
   if (!sq) {
     return (
@@ -30,15 +30,39 @@ export function StudyQuestPane({ detail }: { detail: UnitDetail }) {
       </section>
     );
   }
-  return <StudyQuest detail={detail} sq={sq} />;
+  return <StudyQuest detail={detail} sq={sq} lesson={lesson} />;
 }
 
-function StudyQuest({ detail, sq }: { detail: UnitDetail; sq: StudyQuestPublic }) {
+/**
+ * U2 (ruling 2): a Fundamentals quiz gate is closed-book. While the gate is open (started, not yet
+ * submitted) the lesson is not rendered at all; "Show lesson" brings it back for THIS try and marks
+ * the try as assisted ("I had help" ticked and locked). A retry hides the lesson again.
+ */
+function LessonHidden({ onShow }: { onShow: () => void }) {
+  return (
+    <section className="panel lesson-hidden" aria-label="Lesson" data-testid="lesson-hidden">
+      <p>
+        <Icon name="lock" size={14} /> <strong>Lesson hidden while you answer.</strong>{' '}
+        <span className="muted">The quiz gate is closed-book.</span>
+      </p>
+      <p className="lesson-hidden-actions">
+        <button type="button" className="btn btn-sm" onClick={onShow}>
+          Show lesson
+        </button>
+        <span className="muted small">Showing it marks this attempt as &ldquo;I had help&rdquo;.</span>
+      </p>
+    </section>
+  );
+}
+
+function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuestPublic; lesson: ReactNode }) {
   const api = useApi();
   const unitId = detail.unit.id;
   const [started, setStarted] = useState(false);
   const [answers, setAnswers] = useState<(number | null)[]>(() => sq.questions.map(() => null));
   const [assisted, setAssisted] = useState(false);
+  // U2: the learner opened the lesson during this try (locks "I had help" on until the try ends)
+  const [lessonShown, setLessonShown] = useState(false);
   const [busy, setBusy] = useState(false);
   const [submit, setSubmit] = useState<SubmitResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -75,12 +99,29 @@ function StudyQuest({ detail, sq }: { detail: UnitDetail; sq: StudyQuestPublic }
   const retry = () => {
     setSubmit(null);
     setAnswers(sq.questions.map(() => null));
+    // a new try is closed-book again
+    setLessonShown(false);
+    setAssisted(false);
   };
 
   // fund wave: a Fundamentals topic has no repo and no reading list; its lesson is the Lesson pane
   const fund = isFundTopicKey(detail.unit.key);
 
+  // the gate is open from "Start quiz" until the submit is recorded
+  const gateOpen = started && submit === null;
+  const showLesson = () => {
+    setLessonShown(true);
+    setAssisted(true);
+  };
+
   return (
+    <>
+    {lesson !== null && (gateOpen && !lessonShown ? <LessonHidden onShow={showLesson} /> : lesson)}
+    {lesson !== null && gateOpen && lessonShown && (
+      <p className="muted small lesson-shown-note" data-testid="lesson-shown">
+        Lesson shown: this attempt is marked &ldquo;I had help&rdquo;.
+      </p>
+    )}
     <section className="panel player-work" aria-label={fund ? 'Quiz gate' : 'Study quest'}>
       {fund ? (
         <>
@@ -182,7 +223,7 @@ function StudyQuest({ detail, sq }: { detail: UnitDetail; sq: StudyQuestPublic }
           })}
           <div className="toolbar">
             <label className="check">
-              <input type="checkbox" checked={assisted} onChange={(e) => setAssisted(e.target.checked)} disabled={submit !== null} />I had help
+              <input type="checkbox" checked={assisted} onChange={(e) => setAssisted(e.target.checked)} disabled={submit !== null || lessonShown} />I had help
             </label>
             <span className="toolbar-spacer" />
             <span className="muted small">
@@ -215,6 +256,7 @@ function StudyQuest({ detail, sq }: { detail: UnitDetail; sq: StudyQuestPublic }
         Back to campaign
       </Link>
     </section>
+    </>
   );
 }
 

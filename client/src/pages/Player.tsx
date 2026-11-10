@@ -92,6 +92,74 @@ function Player({ detail }: { detail: UnitDetail }) {
   // "opens <date>"). One closed-retest view instead.
   if (detail.retestGate && !detail.retestGate.open) return <RetestClosedView detail={detail} gate={detail.retestGate} />;
   const promptOnRight = prose.prompt !== null && (spec?.type === 'quiz' || spec?.type === 'predict-output');
+  const hasProse = !isWritten && prose.instructions.trim() !== '';
+  // the work pane itself carries the task (question, reading list, patch, questions): nothing to say here
+  const paneCarriesTask =
+    isWritten ||
+    promptOnRight ||
+    (answerFirst && spec !== null && Boolean(spec.type === 'study-quiz' ? detail.studyQuest : spec.type === 'patch-kata' ? detail.kata : detail.explainBack));
+  // U9: the layout follows the unit kind. Two columns only where both hold real content side by
+  // side (a code drill, a predict-output with its own instructions); everything else is ONE
+  // column, and study / reading units get a centred reading column.
+  const isCode = spec !== null && !answerFirst && spec.type !== 'quiz' && spec.type !== 'predict-output' && !isReading && !isWritten;
+  const twoCol = isCode || (spec?.type === 'predict-output' && hasProse && !isReading && !isWritten);
+  const readingColumn = isReading || spec?.type === 'study-quiz';
+  const hasRefs = (detail.refs ?? []).length > 0;
+  const hasLegs = (detail.uncoveredLegs ?? []).length > 0;
+  const practiceRetest = detail.retestGate?.reason === 'practice';
+
+  const competencies = unit.competencies.length > 0 && (
+    <span className="chips">
+      {unit.competencies.map((c) => (
+        <Chip key={c}>{c}</Chip>
+      ))}
+    </span>
+  );
+  // a closed retest never reaches here (RetestClosedView): the server refuses its reveal
+  const reveal = check && !isReading && !answerFirst && (
+    <RevealPanel
+      unitId={unit.id}
+      leg={promotionLeg(detail)}
+      competencies={unit.competencies}
+      revealed={revealed}
+      solution={solution}
+      onRevealed={(s) => {
+        setRevealed(true);
+        setSolution(s);
+      }}
+    />
+  );
+  const insMain = hasProse ? (
+    <Prose text={prose.instructions} className="ins-prose" headings={isFundTopic} />
+  ) : paneCarriesTask ? null : isReading && !hasRefs ? (
+    <ReadingEmpty unitId={unit.id} unitKey={unit.key} trackId={unit.trackId} />
+  ) : (
+    <p className="muted">No written instructions are served for this unit yet.</p>
+  );
+  // a single-column page shows this panel only when it has something of its own to say
+  const showIns = twoCol || insMain !== null || hasRefs || hasLegs || practiceRetest;
+  const insPanel = showIns && (
+    <section className="panel player-instructions" aria-labelledby="ins-title">
+      <h2 className="panel-title" id="ins-title">
+        {isFundTopic ? 'Lesson' : 'Instructions'}
+      </h2>
+      {insMain}
+      {detail.refs && hasRefs && <RefList refs={detail.refs} />}
+      {detail.uncoveredLegs && hasLegs && <UncoveredLegs legs={detail.uncoveredLegs} />}
+      {practiceRetest && (
+        <p className="muted small" data-testid="retest-practice">
+          Practice retest: the artifact&apos;s solution was revealed, so attempts here are guided and never count as the retest leg.
+        </p>
+      )}
+      {twoCol && competencies && (
+        <div className="ins-foot">
+          <span className="muted">Competencies</span>
+          {competencies}
+        </div>
+      )}
+      {twoCol && reveal}
+    </section>
+  );
 
   return (
     <>
@@ -108,6 +176,13 @@ function Player({ detail }: { detail: UnitDetail }) {
           <span className="chips">
             <Chip>{unit.kind}</Chip>
             {unit.difficulty !== null && <Chip>difficulty {unit.difficulty}</Chip>}
+            {/* U9: single-column kinds carry their competencies in the header row */}
+            {!twoCol && competencies && (
+              <span className="header-competencies" data-testid="header-competencies">
+                <span className="sr-only">Competencies</span>
+                {competencies}
+              </span>
+            )}
             {revealed && (
               <span data-testid="zero-xp-badge">
                 <Chip tone="warning">Guided · 0 XP</Chip>
@@ -117,65 +192,9 @@ function Player({ detail }: { detail: UnitDetail }) {
           </span>
         }
       />
-      <div className="player">
-        <section className="panel player-instructions" aria-labelledby="ins-title">
-          <h2 className="panel-title" id="ins-title">
-            {isFundTopic ? 'Lesson' : 'Instructions'}
-          </h2>
-          {isWritten ? (
-            <p className="muted" data-testid="written-ins">
-              The question is in the answer pane. Write your answer first; the model answer and its rubric open only after your answer is stored.
-            </p>
-          ) : prose.instructions.trim() !== '' ? (
-            <Prose text={prose.instructions} className="ins-prose" headings={isFundTopic} />
-          ) : promptOnRight ? (
-            <p className="muted">The question is in the answer pane.</p>
-          ) : answerFirst && spec && (spec.type === 'study-quiz' ? detail.studyQuest : spec.type === 'patch-kata' ? detail.kata : detail.explainBack) ? (
-            // W10: answer-first units carry their task in the work pane (cf. ui-audit #23)
-            <p className="muted" data-testid="task-in-pane">
-              {spec.type === 'study-quiz'
-                ? 'The reading list and the quiz gate are in the study pane.'
-                : spec.type === 'patch-kata'
-                  ? 'The patch to review is in the review pane.'
-                  : 'The questions are in the answer pane.'}
-            </p>
-          ) : isReading && (detail.refs ?? []).length === 0 ? (
-            <ReadingEmpty unitId={unit.id} unitKey={unit.key} trackId={unit.trackId} />
-          ) : (
-            <p className="muted">No written instructions are served for this unit yet.</p>
-          )}
-          {detail.refs && detail.refs.length > 0 && <RefList refs={detail.refs} />}
-          {detail.uncoveredLegs && detail.uncoveredLegs.length > 0 && <UncoveredLegs legs={detail.uncoveredLegs} />}
-          {detail.retestGate?.reason === 'practice' && (
-            <p className="muted small" data-testid="retest-practice">
-              Practice retest: the artifact&apos;s solution was revealed, so attempts here are guided and never count as the retest leg.
-            </p>
-          )}
-          {unit.competencies.length > 0 && (
-            <div className="ins-foot">
-              <span className="muted">Competencies</span>
-              <span className="chips">
-                {unit.competencies.map((c) => (
-                  <Chip key={c}>{c}</Chip>
-                ))}
-              </span>
-            </div>
-          )}
-          {/* a closed retest never reaches here (RetestClosedView): the server refuses its reveal */}
-          {check && !isReading && !answerFirst && (
-            <RevealPanel
-              unitId={unit.id}
-              leg={promotionLeg(detail)}
-              competencies={unit.competencies}
-              revealed={revealed}
-              solution={solution}
-              onRevealed={(s) => {
-                setRevealed(true);
-                setSolution(s);
-              }}
-            />
-          )}
-        </section>
+      <div className={`player${twoCol ? ' player-split' : ` player-single${readingColumn ? ' player-reading' : ''}`}`} data-layout={twoCol ? 'split' : readingColumn ? 'reading' : 'single'}>
+        {/* U2: a Fundamentals topic hands its lesson to the gate pane, which hides it while the gate is open */}
+        {!(isFundTopic && spec?.type === 'study-quiz' && detail.studyQuest) && insPanel}
 
         {isReading ? (
           <ReadingPane unitId={unit.id} initiallyDone={unit.state === 'done'} />
@@ -190,13 +209,18 @@ function Player({ detail }: { detail: UnitDetail }) {
         ) : spec.type === 'patch-kata' ? (
           <KataPane detail={detail} />
         ) : spec.type === 'study-quiz' ? (
-          <StudyQuestPane detail={detail} />
+          <StudyQuestPane detail={detail} lesson={isFundTopic ? insPanel || null : null} />
         ) : spec.type === 'quiz' ? (
           <QuizPane detail={detail} spec={spec} prompt={prose.prompt} solution={solution} />
         ) : spec.type === 'predict-output' ? (
           <PredictPane detail={detail} prompt={prose.prompt} />
         ) : (
           <CodePane detail={detail} spec={spec} />
+        )}
+        {!twoCol && reveal && (
+          <section className="panel player-aside" aria-label="Solution reveal">
+            {reveal}
+          </section>
         )}
       </div>
     </>
