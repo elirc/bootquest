@@ -49,4 +49,22 @@ describe('stylesheets', () => {
     expect(unclosedBlocks('.a {\n  color: red;\n\n.b {\n  color: blue;\n}\n')).toEqual([1]);
     expect(unclosedBlocks('.a { content: "{"; }\n/* { */\n')).toEqual([]);
   });
+
+  // U1: code must never render programming ligatures (`===` as one glyph in a lesson about `===`)
+  it('app.css turns ligatures off for code, kbd and the editor (after the font shorthand)', () => {
+    const css = readFileSync(join(STYLES, 'app.css'), 'utf8').replace(/\r\n/g, '\n');
+    const rule = (selector: string) => {
+      const at = css.indexOf(`${selector} {`);
+      expect(at, selector).toBeGreaterThan(-1);
+      return css.slice(at, css.indexOf('}', at));
+    };
+    const code = rule('code,\npre,\nkbd,\n.kbd');
+    expect(code).toContain('font-variant-ligatures: none');
+    expect(code).toContain("font-feature-settings: 'liga' 0, 'calt' 0");
+    for (const sel of ['\n.editor-text', '\n.editor-gutter']) {
+      const body = rule(sel);
+      expect(body.indexOf('font-variant-ligatures: none'), sel).toBeGreaterThan(body.indexOf('font: 13px'));
+      expect(body, sel).toContain("font-feature-settings: 'liga' 0, 'calt' 0");
+    }
+  });
 });
