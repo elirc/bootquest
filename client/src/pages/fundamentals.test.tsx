@@ -222,7 +222,7 @@ describe('a Fundamentals topic in the player', () => {
     await waitFor(() => expect(primary).toHaveFocus());
   });
 
-  it('U5: after a passed gate "Practise: <drill>" is the primary link and "Next topic" the second; neither after a fail', async () => {
+  it('U5: after a passed gate "Practise: <drill>" is the primary link and "Skip to next topic" the second; neither after a fail', async () => {
     const base = createMockApi();
     const api: BootQuestApi = {
       ...base,
@@ -245,7 +245,9 @@ describe('a Fundamentals topic in the player', () => {
     const next = await screen.findByTestId('next-unit');
     expect(within(next).getByTestId('next-primary')).toHaveTextContent('Practise: Defaults that keep 0');
     expect(within(next).getByTestId('next-primary')).toHaveAttribute('href', '/play/950');
-    expect(within(next).getByTestId('next-topic')).toHaveTextContent('Next topic: 02 Functions & closures');
+    // wave B (ruling 4): after a gate pass the next topic is a muted "Skip" link, never a second button
+    expect(within(next).getByTestId('next-topic')).toHaveTextContent('Skip to next topic');
+    expect(within(next).getByTestId('next-topic')).not.toHaveClass('btn');
     expect(within(next).getByTestId('next-topic')).toHaveAttribute('href', '/play/208');
   });
 });

@@ -28,8 +28,11 @@ import { TRACK_LABEL, campaignSourceOf, competencyLabel, languageOf, readingTitl
 import { ExplainBackPane, KataPane } from './LadderPanes';
 import { StudyQuestPane } from './StudyQuestPane';
 import { isFundKey, isFundTopicKey } from '../lib/fundamentals';
+import { fundTrackOf } from '../lib/nextstep';
+import { FundLadderProvider, useFundLadderRefresh } from '../lib/useFundLadder';
 import { LearnMoreButton } from '../components/LearnMore';
 import { WrittenPane } from './WrittenPane';
+import { CourseRail } from './Player/CourseRail';
 import { CodeEditor } from './Player/Editor';
 import { HintBar, hintedXpNote } from './Player/HintBar';
 import { LessonProse } from './Player/LessonAids';
@@ -166,7 +169,8 @@ function Player({ detail }: { detail: UnitDetail }) {
   );
 
   return (
-    <>
+    // wave B: ONE ladder read per page, shared by the course rail and the next step (no track: no read)
+    <FundLadderProvider track={fundTrackOf(unit.key)}>
       <PageHeader
         eyebrow={
           <nav aria-label="Breadcrumb" className="crumbs">
@@ -196,6 +200,7 @@ function Player({ detail }: { detail: UnitDetail }) {
           </span>
         }
       />
+      {isFundKey(unit.key) && <CourseRail unit={unit} />}
       <div className={`player${twoCol ? ' player-split' : ` player-single${readingColumn ? ' player-reading' : ''}`}`} data-layout={twoCol ? 'split' : readingColumn ? 'reading' : 'single'}>
         {/* U2: a Fundamentals topic hands its lesson to the gate pane, which hides it while the gate is open */}
         {!(isFundTopic && spec?.type === 'study-quiz' && detail.studyQuest) && insPanel}
@@ -227,7 +232,7 @@ function Player({ detail }: { detail: UnitDetail }) {
           </section>
         )}
       </div>
-    </>
+    </FundLadderProvider>
   );
 }
 
@@ -463,7 +468,7 @@ function SubmitFollowUp({ submit, unit }: { submit: SubmitResponse; unit: UnitDe
   return (
     <>
       {promotions.length > 0 && <Promotions promotions={promotions} />}
-      {submit.verdict === 'pass' && <NextStep unit={unit} />}
+      {submit.verdict === 'pass' && <NextStep unit={unit} submit={submit} />}
     </>
   );
 }
@@ -519,6 +524,7 @@ function CodePane({ detail, spec }: { detail: UnitDetail; spec: PublicCheck }) {
   const language = languageOf(spec) ?? 'code';
   const refreshTracks = useTracksRefresh();
   // wave B hints: the bar's latest state (for the XP line of a hinted pass); re-read after every submit
+  const refreshLadder = useFundLadderRefresh();
   const hintState = useRef<HintsResponse | null>(null);
   const [hintRefresh, setHintRefresh] = useState(0);
 
@@ -603,6 +609,7 @@ function CodePane({ detail, spec }: { detail: UnitDetail; spec: PublicCheck }) {
         setSavedCode(code); // recorded on the attempt now: nothing to lose
         if (submit.verdict === 'pass') draft.clear(); // verified pass: the draft is done
         refreshTracks(); // W10: a recorded submit can change the track's done count
+        refreshLadder(); // wave B: the course rail's ticks and the next step follow the submit
       }
     } catch (e) {
       // W6: a changed-example retest submitted before its >= 2-day schedule opens is refused (409 NOT_DUE)

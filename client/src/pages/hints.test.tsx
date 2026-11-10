@@ -107,9 +107,9 @@ describe('the hint bar (code drills)', () => {
       let asked = 0;
       const r = renderApp(`/play/${DRILL}`, {
         ...base,
-        getHints: (id) => {
+        getHints: () => {
           asked++;
-          return getHints(id);
+          return getHints();
         },
       });
       await editorBox();

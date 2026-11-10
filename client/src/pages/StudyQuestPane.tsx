@@ -10,6 +10,7 @@ import { hasModifier, isEditableTarget, useKeydown } from '../lib/keys';
 import { InlineProse, Prose } from '../lib/prose';
 import { enterActsOnFocus, shortcutBlocked } from '../lib/shortcuts';
 import { useTracksRefresh } from '../lib/tracks';
+import { useFundLadderRefresh } from '../lib/useFundLadder';
 import { readingTitle } from '../lib/view';
 import { isFundTopicKey } from '../lib/fundamentals';
 import {
@@ -108,6 +109,7 @@ function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuest
   const firstRadio = useRef<HTMLInputElement>(null);
   const submitButton = useRef<HTMLButtonElement>(null);
   const refreshTracks = useTracksRefresh();
+  const refreshLadder = useFundLadderRefresh();
   // "Learn more": which items have a reading, and (after an answer) which have a released explanation
   const [notes, setNotes] = useState<UnitNotesResponse | null>(null);
   const loadNotes = useCallback(() => {
@@ -180,6 +182,7 @@ function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuest
       }
       loadNotes(); // explanations may have been released by this answer
       refreshTracks(); // W10: a pass changes campaign / track progress (and may unlock an act)
+      refreshLadder(); // wave B: the course rail and the next step read the ladder after the pass
     } catch (e) {
       setError(errorText(e));
     } finally {
@@ -499,7 +502,7 @@ function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuest
         {submit?.studyQuiz && <StudyResult submit={submit} fund={fund} explained={fund && explained.size > 0} reread={reread} />}
         {submit !== null && coolingMs > 0 && <CooldownNote ms={coolingMs} />}
         {/* U5: a passed gate is not a dead end — the topic's drills, then the next topic */}
-        {submit?.verdict === 'pass' && <NextStep unit={detail.unit} />}
+        {submit?.verdict === 'pass' && <NextStep unit={detail.unit} submit={submit} />}
       </div>
       <Link to={`/campaign/${detail.unit.trackId}`} className="muted small">
         Back to campaign
@@ -550,7 +553,8 @@ function StudyResult({ submit, fund, explained, reread }: { submit: SubmitRespon
           The keyed answer and the explanation of every question are shown above.
         </p>
       )}
-      {r.flashcardsEnrolled > 0 && (
+      {/* a Fundamentals pass says this in its completion panel (Player/NextStep) */}
+      {r.flashcardsEnrolled > 0 && !(fund && pass) && (
         <p className="muted small" data-testid="flashcards-notice">
           {r.flashcardsEnrolled} flashcard{r.flashcardsEnrolled === 1 ? '' : 's'} from this quest joined your review queue (first due tomorrow).
         </p>
