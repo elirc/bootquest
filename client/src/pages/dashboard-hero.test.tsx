@@ -98,7 +98,7 @@ describe('pickHero (council ruling 5)', () => {
       kind: 'fundamentals',
       label: 'Continue Fundamentals: Topic 2 title',
       href: '/play/2',
-      context: 'Fundamentals · JS/TS · Topic 2 of 3',
+      context: 'Fundamentals · JS/TS · Topic 2 of 3 · 1 complete · 1 gate passed',
     });
   });
 

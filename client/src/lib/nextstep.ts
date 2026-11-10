@@ -5,12 +5,13 @@
 // that lives on the ladder the next step comes from GET /tracks/:id/fundamentals instead:
 //
 //   1. this topic's quiz gate, while it is not passed;
-//   2. this topic's next drill that is not done (locked and revealed drills are skipped);
+//   2. this topic's next open drill (lib/fundamentals drillOpen, shared with the dashboard hero:
+//      done, locked and revealed drills are never a next step);
 //   3. the next topic that is open and not passed.
 //
 // Anything else (and a finished ladder) falls back to the dashboard's nextUp.
 import type { FundamentalsResponse, FundTopicDto, TrackId, UnitSummary } from '../api/types';
-import { fundTopicIdOf } from './fundamentals';
+import { drillOpen, fundTopicIdOf } from './fundamentals';
 
 const FUND_TRACK_RE = /^fund(?:\/|-)(js|csharp|java)\//;
 
@@ -37,9 +38,6 @@ export interface FundNext {
 }
 
 const NONE: FundNext = { primary: null, nextTopic: null };
-
-/** a drill worth offering: open, not done, and not spoiled by a revealed solution */
-const drillOpen = (u: UnitSummary): boolean => u.state !== 'done' && u.state !== 'locked' && !u.revealed;
 
 /** "02 · Functions & closures" style topic title, as the ladder shows it */
 export const fundTopicLabel = (t: FundTopicDto): string => `${String(t.order).padStart(2, '0')} ${t.title}`;

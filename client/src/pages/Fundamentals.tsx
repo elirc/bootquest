@@ -13,7 +13,7 @@ import { useApi } from '../api/context';
 import type { FundTopicDto, TrackId, UnitSummary } from '../api/types';
 import { Icon } from '../components/Icon';
 import { Chip, LoadState, ProgressBar } from '../components/ui';
-import { FUND_LEVEL_LABEL } from '../lib/fundamentals';
+import { FUND_LEVEL_LABEL, fundProgress, fundProgressText, topicComplete } from '../lib/fundamentals';
 import { useAsync } from '../lib/useAsync';
 
 export function FundamentalsSection({ trackId }: { trackId: TrackId }): JSX.Element | null {
@@ -44,7 +44,7 @@ function writeExpanded(v: boolean): void {
 
 /** The full rule, kept for the tooltip (f52 U18: the card itself says it in one line). */
 const fundRule = (passPct: number): string =>
-  `A standalone ladder for the language and its main framework, no repo needed. Each topic is a short lesson and a quiz gate (pass mark ${passPct}%); passing enrols the topic's flashcards into your reviews and unlocks the next topic. Drills practise it in code.`;
+  `A standalone ladder for the language and its main framework, no repo needed. Each topic is a short lesson and a quiz gate (pass mark ${passPct}%); passing enrols the topic's flashcards into your reviews and unlocks the next topic. Drills practise it in code: a topic is complete once its gate and at least one of its drills are passed.`;
 
 function FundamentalsBody({ trackId }: { trackId: TrackId }): JSX.Element | null {
   const api = useApi();
@@ -63,7 +63,9 @@ function FundamentalsBody({ trackId }: { trackId: TrackId }): JSX.Element | null
   }
   const topics = res.data.topics;
   if (topics.length === 0) return null;
-  const done = topics.filter((t) => t.unit.state === 'done').length;
+  // wave B (ruling 3): complete = gate + one own drill passed (the gate alone unlocks the next topic)
+  const progress = fundProgress(topics);
+  const done = progress.gates;
   const next = topics.find((t) => t.unit.state === 'available');
   // the compact card: the current topic (the first one not passed) and the two after it
   const at = topics.findIndex((t) => t.unit.state !== 'done');
@@ -78,7 +80,7 @@ function FundamentalsBody({ trackId }: { trackId: TrackId }): JSX.Element | null
       <div className="fund-head">
         <h2 id={headingId}>Fundamentals</h2>
         <span className="muted small" data-testid="fund-progress">
-          {done}/{topics.length} topics passed
+          {fundProgressText(progress)} · {topics.length} topics
         </span>
         {next && (
           <Link className="btn btn-sm btn-primary" to={`/play/${next.unit.id}`} data-testid="fund-continue">
@@ -86,9 +88,9 @@ function FundamentalsBody({ trackId }: { trackId: TrackId }): JSX.Element | null
           </Link>
         )}
       </div>
-      <ProgressBar value={done} max={topics.length} label="Fundamentals topics passed" tone="success" />
+      <ProgressBar value={progress.complete} max={topics.length} label="Fundamentals topics complete" tone="success" />
       <p className="muted small fund-intro" title={fundRule(topics[0]!.passPct)}>
-        A short lesson and a quiz gate per topic. Passing unlocks the next one.
+        A short lesson and a quiz gate per topic. Passing unlocks the next one; one passed drill completes the topic.
       </p>
       {!all && preview.length > 0 && (
         <ol className="fund-topics fund-preview" aria-label="Current and next topics" data-testid="fund-preview">
@@ -132,9 +134,15 @@ function TopicLine({ topic: t }: { topic: FundTopicDto }) {
           <TopicTitle topic={t} />
         </Link>
       )}
-      {t.unit.state === 'done' && <Chip tone="success">passed</Chip>}
+      <TopicChip topic={t} />
     </div>
   );
+}
+
+/** wave B (ruling 3): "complete" (gate + one own drill) or, with the gate alone, "gate passed". */
+function TopicChip({ topic: t }: { topic: FundTopicDto }) {
+  if (t.unit.state !== 'done') return null;
+  return topicComplete(t) ? <Chip tone="success">complete</Chip> : <Chip tone="info">gate passed</Chip>;
 }
 
 function TopicRow({ topic: t }: { topic: FundTopicDto }) {
@@ -146,7 +154,7 @@ function TopicRow({ topic: t }: { topic: FundTopicDto }) {
         </Link>
         <span className="fund-chips">
           <Chip>{FUND_LEVEL_LABEL[t.level]}</Chip>
-          {t.unit.state === 'done' && <Chip tone="success">passed</Chip>}
+          <TopicChip topic={t} />
         </span>
       </div>
       <p className="muted small fund-summary">{t.summary}</p>

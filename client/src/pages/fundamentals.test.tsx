@@ -16,8 +16,8 @@ describe('Fundamentals section (Campaign page)', () => {
     renderApp('/campaign/js');
     const section = await screen.findByTestId('fundamentals');
     expect(within(section).getByRole('heading', { name: 'Fundamentals' })).toBeInTheDocument();
-    expect(within(section).getByTestId('fund-progress')).toHaveTextContent('0/2 topics passed');
-    expect(within(section).getByRole('progressbar', { name: 'Fundamentals topics passed' })).toBeInTheDocument();
+    expect(within(section).getByTestId('fund-progress')).toHaveTextContent('0 complete · 0 gates passed · 2 topics');
+    expect(within(section).getByRole('progressbar', { name: 'Fundamentals topics complete' })).toBeInTheDocument();
     const topics = section.querySelectorAll<HTMLElement>('[data-topic]');
     expect([...topics].map((t) => t.dataset.topic)).toEqual(['01-values-types-and-coercion', '02-functions-and-closures']);
     expect(within(topics[0]!).getByRole('link', { name: /01\s*Values, types & coercion/ })).toHaveAttribute('href', `/play/${T1}`);
@@ -47,7 +47,7 @@ describe('Fundamentals section (Campaign page)', () => {
     const api: BootQuestApi = { ...base, getFundamentals: async () => ({ trackId: 'js', topics }) };
     const first = renderApp('/campaign/js', api);
     let section = await screen.findByTestId('fundamentals');
-    expect(within(section).getByTestId('fund-progress')).toHaveTextContent('3/20 topics passed');
+    expect(within(section).getByTestId('fund-progress')).toHaveTextContent('3 complete · 3 gates passed · 20 topics');
     expect(within(section).getByTestId('fund-continue')).toHaveTextContent('Continue: 04 Topic 4');
     const shown = () => [...section.querySelectorAll<HTMLElement>('[data-topic]')].map((t) => t.dataset.topic);
     expect(shown()).toEqual(['04-topic-4', '05-topic-5', '06-topic-6']);
@@ -123,7 +123,7 @@ describe('Fundamentals section (Campaign page)', () => {
     expect(within(section).getByRole('alert')).toBeInTheDocument();
     fail = false;
     await user.click(within(section).getByRole('button', { name: /retry/i }));
-    expect(await within(await screen.findByTestId('fundamentals')).findByTestId('fund-progress')).toHaveTextContent('0/2');
+    expect(await within(await screen.findByTestId('fundamentals')).findByTestId('fund-progress')).toHaveTextContent('0 complete · 0 gates passed');
   });
 });
 
@@ -211,7 +211,7 @@ describe('a Fundamentals topic in the player', () => {
     await answerAll(user, FX1.keys);
     await user.click(screen.getByRole('button', { name: /Submit answers/ }));
     expect(await screen.findByText('Quiz gate passed')).toBeInTheDocument();
-    expect(screen.getByTestId('quest-done')).toHaveTextContent('topic passed');
+    expect(screen.getByTestId('quest-done')).toHaveTextContent('gate passed');
     const ladder = await api.getFundamentals('js');
     expect(ladder.topics.map((t) => t.unit.state)).toEqual(['done', 'available']);
     // U5: a passed gate is not a dead end (this topic has no drills: the next topic is the step)

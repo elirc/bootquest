@@ -275,7 +275,7 @@ function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuest
             <h2 className="panel-title">Quiz gate</h2>
             {done && (
               <span data-testid="quest-done">
-                <Chip tone="success">topic passed</Chip>
+                <Chip tone="success">gate passed</Chip>
               </span>
             )}
           </div>

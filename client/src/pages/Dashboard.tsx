@@ -20,6 +20,7 @@ import { SlateFocus } from '../components/SlateFocus';
 import { Chip, Kbd, LoadState, PageHeader, Panel, ProgressBar, RatingPips } from '../components/ui';
 import { WeakSpotsTeaser } from '../components/WeakSpots';
 import { fmtInt, fmtRelative, fmtShortDate, fmtWhen, plural } from '../lib/format';
+import { drillOpen, fundProgress, fundProgressText, type FundProgress } from '../lib/fundamentals';
 import { useTracks } from '../lib/tracks';
 import { useAsync, type AsyncState } from '../lib/useAsync';
 import { FREEZE_TOKENS_MAX, SLATE_DRILL_TRACKS, TRACK_LABEL, TRACK_PLACEHOLDER, dayOfMs, isTrackId } from '../lib/view';
@@ -86,26 +87,28 @@ export interface FundStep {
   fresh: boolean;
   /** a drill's position among its topic's drills */
   drill?: { at: number; of: number };
+  /** wave B (ruling 3): topics complete (gate + one own drill) and gates passed on this ladder */
+  progress: FundProgress;
 }
 
 /**
  * The ladder's next step: the first topic whose quiz gate is not passed (its lesson + gate) or, when
- * that topic's gate is passed, its first undone drill. A finished ladder, or a step that is still
- * locked, is no step (null).
+ * that topic's gate is passed, its first OPEN drill (lib/fundamentals drillOpen, the rule shared with
+ * lib/nextstep.ts: a done, locked or revealed drill is never a next step). A finished ladder, or a
+ * topic that is still locked, is no step (null).
  */
 export function fundamentalsStep(r: FundamentalsResponse): FundStep | null {
   const topics = r.topics;
   for (let i = 0; i < topics.length; i++) {
     const t = topics[i]!;
-    const base = { trackId: r.trackId, order: i + 1, total: topics.length };
+    const base = { trackId: r.trackId, order: i + 1, total: topics.length, progress: fundProgress(topics) };
     if (t.unit.state !== 'done') {
       if (t.unit.state === 'locked') return null;
       return { ...base, unitId: t.unit.id, kind: 'topic', title: t.title, fresh: i === 0 };
     }
-    const at = t.drills.findIndex((d) => d.state !== 'done');
+    const at = t.drills.findIndex(drillOpen);
     if (at !== -1) {
       const d = t.drills[at]!;
-      if (d.state === 'locked') return null;
       return { ...base, unitId: d.id, kind: 'drill', title: d.title, fresh: false, drill: { at: at + 1, of: t.drills.length } };
     }
   }
@@ -153,10 +156,22 @@ export function pickHero(d: DashboardData, fund: FundStep | null): HeroPick {
   if (due > 0) return { kind: 'review', label: `Review ${plural(due, 'card')}`, href: '/review', context: 'Reviews first: these cards are due today' };
   if (fund) {
     const where = `Fundamentals · ${TRACK_LABEL[fund.trackId]} · Topic ${fund.order} of ${fund.total}`;
+    // wave B (ruling 3): "3 complete · 5 gates passed" once anything is passed
+    const progress = fund.progress.gates > 0 ? ` · ${fundProgressText(fund.progress)}` : '';
     if (fund.kind === 'drill' && fund.drill) {
-      return { kind: 'fundamentals', label: `Practise: ${fund.title}`, href: `/play/${fund.unitId}`, context: `${where} · drill ${fund.drill.at} of ${fund.drill.of}` };
+      return {
+        kind: 'fundamentals',
+        label: `Practise: ${fund.title}`,
+        href: `/play/${fund.unitId}`,
+        context: `${where} · drill ${fund.drill.at} of ${fund.drill.of}${progress}`,
+      };
     }
-    return { kind: 'fundamentals', label: `${fund.fresh ? 'Start' : 'Continue'} Fundamentals: ${fund.title}`, href: `/play/${fund.unitId}`, context: where };
+    return {
+      kind: 'fundamentals',
+      label: `${fund.fresh ? 'Start' : 'Continue'} Fundamentals: ${fund.title}`,
+      href: `/play/${fund.unitId}`,
+      context: `${where}${progress}`,
+    };
   }
   // a slate row does not say its unit's kind; a target that Next up lists as an explain-back is skipped
   const explainBacks = new Set(d.nextUp.flatMap((n) => (n.unit?.kind === 'explain-back' ? [n.unit.id] : [])));
