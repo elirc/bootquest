@@ -32,7 +32,10 @@ describe('written player: immutable answer first, then the model answer + rubric
     const code = pane.querySelector('pre.code-block');
     expect(code?.textContent).toBe('items.sort((a, b) => a.score > b.score);');
     expect(pane.textContent).not.toContain('```');
-    expect(screen.getByTestId('written-ins')).toHaveTextContent('The question is in the answer pane');
+    // f52 U9: one column, no "the question is in the answer pane" placeholder pane
+    expect(screen.queryByTestId('written-ins')).not.toBeInTheDocument();
+    expect(document.querySelector('.player')).toHaveAttribute('data-layout', 'single');
+    expect(document.querySelector('.player-instructions')).toBeNull();
     // no model answer, no rubric, no reveal button; and no expected-403 probe (detail says unanswered)
     expect(document.body.textContent).not.toContain(MODEL_MARK);
     expect(document.body.textContent).not.toContain(RUBRIC_MARK);

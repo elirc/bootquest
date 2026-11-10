@@ -5,6 +5,7 @@ import { ApiProvider } from './api/context';
 import { App } from './App';
 import './styles/tokens.css';
 import './styles/app.css';
+import './styles/player.css';
 import './styles/skilltree.css';
 import './styles/trackunits.css';
 import './styles/fundamentals.css';

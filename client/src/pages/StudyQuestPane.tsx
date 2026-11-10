@@ -1,15 +1,18 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { useApi } from '../api/context';
 import { errorText } from '../api/errors';
 import type { StudyQuestPublic, SubmitResponse, UnitDetail, UnitNotesResponse } from '../api/types';
 import { LearnMoreButton } from '../components/LearnMore';
 import { Icon } from '../components/Icon';
-import { Chip } from '../components/ui';
-import { InlineProse } from '../lib/prose';
+import { Chip, Kbd } from '../components/ui';
+import { hasModifier, isEditableTarget, useKeydown } from '../lib/keys';
+import { InlineProse, Prose } from '../lib/prose';
+import { enterActsOnFocus, shortcutBlocked } from '../lib/shortcuts';
 import { useTracksRefresh } from '../lib/tracks';
 import { readingTitle } from '../lib/view';
 import { isFundTopicKey } from '../lib/fundamentals';
+import { NextStep } from './Player/NextStep';
 
 /**
  * W8 study quest (spec §4): an ordered reading list into the repo, then the pre-seeded quiz
@@ -17,8 +20,27 @@ import { isFundTopicKey } from '../lib/fundamentals';
  * right/wrong per question and NEVER the key of a missed question: misses become review cards
  * (question on the front, keyed answer + source on the back) that arrive in the review queue
  * the next day. Submits are free and repeatable; the 50 XP is paid once.
+ *
+ * f52 U15 (ruling 3): a FUNDAMENTALS topic's gate is stepped instead: one question at a time
+ * ("3 / 10"), 1-4 picks, Enter goes on, Back / Next move freely, then a review screen that lists
+ * every question before the submit. Nothing says right or wrong until the submit is recorded.
+ * Campaign study quests keep the all-at-once form.
+ *
+ * f52 U3 (ruling 4): after a PASSED gate the keyed answer and the explanation of every question
+ * are shown under it, missed questions first. They come from GET /units/:id/notes (re-read after
+ * each submit), which releases a Fundamentals gate's explanations on a verified pass only. After a
+ * FAILED gate nothing more is shown than which questions were missed.
  */
-export function StudyQuestPane({ detail }: { detail: UnitDetail }) {
+/** The first line of a Fundamentals explanation note: the keyed choice by text (notes-service FUND_ANSWER_PREFIX). */
+const ANSWER_PREFIX = 'Answer: ';
+
+/** Split a released explanation into its keyed-answer line (Fundamentals notes only) and the rest. */
+export function splitExplanation(body: string): { answer: string | null; rest: string } {
+  if (!body.startsWith(ANSWER_PREFIX)) return { answer: null, rest: body };
+  const end = body.indexOf('\n');
+  return end === -1 ? { answer: body.slice(ANSWER_PREFIX.length), rest: '' } : { answer: body.slice(ANSWER_PREFIX.length, end), rest: body.slice(end + 1).trim() };
+}
+export function StudyQuestPane({ detail, lesson = null }: { detail: UnitDetail; lesson?: ReactNode }) {
   const sq = detail.studyQuest ?? null;
   if (!sq) {
     return (
@@ -29,19 +51,48 @@ export function StudyQuestPane({ detail }: { detail: UnitDetail }) {
       </section>
     );
   }
-  return <StudyQuest detail={detail} sq={sq} />;
+  return <StudyQuest detail={detail} sq={sq} lesson={lesson} />;
 }
 
-function StudyQuest({ detail, sq }: { detail: UnitDetail; sq: StudyQuestPublic }) {
+/**
+ * U2 (ruling 2): a Fundamentals quiz gate is closed-book. While the gate is open (started, not yet
+ * submitted) the lesson is not rendered at all; "Show lesson" brings it back for THIS try and marks
+ * the try as assisted ("I had help" ticked and locked). A retry hides the lesson again.
+ */
+function LessonHidden({ onShow }: { onShow: () => void }) {
+  return (
+    <section className="panel lesson-hidden" aria-label="Lesson" data-testid="lesson-hidden">
+      <p>
+        <Icon name="lock" size={14} /> <strong>Lesson hidden while you answer.</strong>{' '}
+        <span className="muted">The quiz gate is closed-book.</span>
+      </p>
+      <p className="lesson-hidden-actions">
+        <button type="button" className="btn btn-sm" onClick={onShow}>
+          Show lesson
+        </button>
+        <span className="muted small">Showing it marks this attempt as &ldquo;I had help&rdquo;.</span>
+      </p>
+    </section>
+  );
+}
+
+function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuestPublic; lesson: ReactNode }) {
   const api = useApi();
   const unitId = detail.unit.id;
   const [started, setStarted] = useState(false);
   const [answers, setAnswers] = useState<(number | null)[]>(() => sq.questions.map(() => null));
   const [assisted, setAssisted] = useState(false);
+  // U2: the learner opened the lesson during this try (locks "I had help" on until the try ends)
+  const [lessonShown, setLessonShown] = useState(false);
   const [busy, setBusy] = useState(false);
   const [submit, setSubmit] = useState<SubmitResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(detail.unit.state === 'done');
+  // U15 stepper (Fundamentals only): the question on screen, and whether the review screen is up
+  const [step, setStep] = useState(0);
+  const [reviewing, setReviewing] = useState(false);
+  const firstRadio = useRef<HTMLInputElement>(null);
+  const submitButton = useRef<HTMLButtonElement>(null);
   const refreshTracks = useTracksRefresh();
   // "Learn more": which items have a reading, and (after an answer) which have a released explanation
   const [notes, setNotes] = useState<UnitNotesResponse | null>(null);
@@ -51,6 +102,16 @@ function StudyQuest({ detail, sq }: { detail: UnitDetail; sq: StudyQuestPublic }
   useEffect(loadNotes, [loadNotes]);
   const hasNotes = (itemKey: string) =>
     notes !== null && (notes.readings.some((n) => n.target === itemKey) || notes.explanations.released.some((n) => n.target === itemKey));
+  // U3: the explanations a PASSED submit released, by question item key (never read after a fail)
+  const passedNow = submit?.verdict === 'pass';
+  const explained = new Map(passedNow && notes !== null ? notes.explanations.released.map((n) => [n.target, n] as const) : []);
+  // ...and the questions in display order: once a passed Fundamentals gate shows its keyed
+  // answers, the missed ones come first (a campaign quest's notes are per-question extras: no reorder)
+  const displayOrder = sq.questions.map((_, i) => i);
+  if (isFundTopicKey(detail.unit.key) && passedNow && explained.size > 0 && submit?.studyQuiz) {
+    const items = submit.studyQuiz.items;
+    displayOrder.sort((a, b) => Number(items[a]?.correct ?? true) - Number(items[b]?.correct ?? true) || a - b);
+  }
   const complete = answers.every((a) => a !== null);
   const answered = answers.filter((a) => a !== null).length;
 
@@ -74,12 +135,72 @@ function StudyQuest({ detail, sq }: { detail: UnitDetail; sq: StudyQuestPublic }
   const retry = () => {
     setSubmit(null);
     setAnswers(sq.questions.map(() => null));
+    setStep(0);
+    setReviewing(false);
+    // a new try is closed-book again
+    setLessonShown(false);
+    setAssisted(false);
   };
 
   // fund wave: a Fundamentals topic has no repo and no reading list; its lesson is the Lesson pane
   const fund = isFundTopicKey(detail.unit.key);
 
+  // the gate is open from "Start quiz" until the submit is recorded
+  const gateOpen = started && submit === null;
+  const showLesson = () => {
+    setLessonShown(true);
+    setAssisted(true);
+  };
+
+  const total = sq.questions.length;
+  // U15: Fundamentals gates are answered one question at a time, then reviewed
+  const stepping = fund && gateOpen && !reviewing && total > 0;
+  const pick = (qi: number, ci: number) => setAnswers((prev) => prev.map((a, i) => (i === qi ? ci : a)));
+  const goNext = () => {
+    if (step >= total - 1) setReviewing(true);
+    else setStep(step + 1);
+  };
+  const goBack = () => setStep(Math.max(0, step - 1));
+
+  // keyboard focus follows the stepper: the question's first choice, then (on review) Submit, so
+  // the whole gate can be taken without the mouse
+  useEffect(() => {
+    if (stepping) firstRadio.current?.focus({ preventScroll: true });
+  }, [stepping, step]);
+  useEffect(() => {
+    if (fund && reviewing && submit === null) submitButton.current?.focus({ preventScroll: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reviewing]);
+
+  // The same guards as the single-question quiz (Player QuizPane). On the review screen there is
+  // no page-level Enter at all: Submit acts only as the focused button.
+  useKeydown((e) => {
+    if (!stepping || hasModifier(e) || shortcutBlocked(e)) return;
+    if (e.key === 'Enter') {
+      if (e.isComposing) return;
+      // Enter on a focused button / link / checkbox is that control's own Enter
+      if (enterActsOnFocus(e.target) || isEditableTarget(e.target)) return;
+      if (answers[step] === null) return;
+      e.preventDefault();
+      goNext();
+      return;
+    }
+    if (isEditableTarget(e.target)) return;
+    const n = Number(e.key);
+    if (Number.isInteger(n) && n >= 1 && n <= (sq.questions[step]?.choices.length ?? 0)) {
+      e.preventDefault();
+      pick(step, n - 1);
+    }
+  });
+
   return (
+    <>
+    {lesson !== null && (gateOpen && !lessonShown ? <LessonHidden onShow={showLesson} /> : lesson)}
+    {lesson !== null && gateOpen && lessonShown && (
+      <p className="muted small lesson-shown-note" data-testid="lesson-shown">
+        Lesson shown: this attempt is marked &ldquo;I had help&rdquo;.
+      </p>
+    )}
     <section className="panel player-work" aria-label={fund ? 'Quiz gate' : 'Study quest'}>
       {fund ? (
         <>
@@ -92,7 +213,8 @@ function StudyQuest({ detail, sq }: { detail: UnitDetail; sq: StudyQuestPublic }
             )}
           </div>
           <p className="muted small" data-testid="fund-gate-intro">
-            Read the lesson, then take the quiz gate: {sq.questions.length} questions, pass mark {sq.passPct}%. Missed questions come back as review cards;
+            Read the lesson, then take the quiz gate: {sq.questions.length} questions, pass mark {sq.passPct}%. The gate is closed-book: the lesson is hidden
+            while you answer. Missed questions come back as review cards;
             your first pass enrols this topic&apos;s {sq.flashcards} flashcards into your reviews and unlocks the next topic.
           </p>
         </>
@@ -135,21 +257,84 @@ function StudyQuest({ detail, sq }: { detail: UnitDetail; sq: StudyQuestPublic }
             <Icon name="play" /> Start quiz
           </button>
         </div>
+      ) : stepping ? (
+        <div className="study-quiz gate-step" role="group" aria-label="Quiz gate" data-testid="gate-step">
+          <div className="gate-step-head">
+            <span className="gate-progress" data-testid="gate-progress" aria-label={`Question ${step + 1} of ${total}`}>
+              {step + 1} / {total}
+            </span>
+            <span className="muted small">
+              {answered}/{total} answered
+            </span>
+          </div>
+          <div className="gate-bar" aria-hidden="true">
+            <span style={{ width: `${((step + 1) / total) * 100}%` }} />
+          </div>
+          {(() => {
+            const q = sq.questions[step]!;
+            return (
+              // keyed: each question is a fresh group (its first choice takes focus)
+              <fieldset key={q.itemKey} className="choices" data-testid={`question-${step + 1}`}>
+                <legend>
+                  <strong>Q{step + 1}.</strong> <InlineProse text={q.prompt} />
+                </legend>
+                {q.choices.map((c, ci) => (
+                  <label key={ci} className={`choice${answers[step] === ci ? ' choice-on' : ''}`}>
+                    <input
+                      ref={ci === 0 ? firstRadio : undefined}
+                      type="radio"
+                      name={`q${step + 1}`}
+                      checked={answers[step] === ci}
+                      onChange={() => pick(step, ci)}
+                      aria-label={`Q${step + 1} choice ${ci + 1}`}
+                    />
+                    <Kbd>{ci + 1}</Kbd>
+                    <span className="choice-text">
+                      <InlineProse text={c} />
+                    </span>
+                  </label>
+                ))}
+              </fieldset>
+            );
+          })()}
+          <div className="toolbar">
+            <button type="button" className="btn" onClick={goBack} disabled={step === 0}>
+              Back
+            </button>
+            <span className="toolbar-spacer" />
+            <span className="muted small">
+              Pick with 1–{sq.questions[step]!.choices.length}, then Enter
+            </span>
+            <button type="button" className="btn btn-primary" onClick={goNext}>
+              {step === total - 1 ? 'Review answers' : 'Next'} <Kbd>Enter</Kbd>
+            </button>
+          </div>
+        </div>
       ) : (
         <form
           className="study-quiz"
           aria-label="Quiz gate"
           onSubmit={(e) => {
             e.preventDefault();
-            void send();
+            // U15: a stepped gate submits only from its Submit button (never an implicit Enter)
+            if (!fund) void send();
           }}
         >
-          {sq.questions.map((q, qi) => {
+          {fund && submit === null && (
+            <p className="muted small" data-testid="gate-review">
+              Review your answers. You can still change any of them; nothing is marked until you submit.
+            </p>
+          )}
+          {displayOrder.map((qi) => {
+            const q = sq.questions[qi]!;
             const outcome = submit?.studyQuiz?.items[qi];
+            const note = explained.get(q.itemKey);
+            const ex = note ? splitExplanation(note.body) : null;
             return (
               <fieldset key={q.itemKey} className="choices" disabled={busy || submit !== null} data-testid={`question-${qi + 1}`}>
                 <legend>
                   <strong>Q{qi + 1}.</strong> <InlineProse text={q.prompt} />
+                  {fund && !submit && answers[qi] === null && <span className="gate-unanswered"> not answered</span>}
                   {outcome && (
                     <span className={`study-mark ${outcome.correct ? 'study-right' : 'study-wrong'}`} data-testid={`mark-${qi + 1}`}>
                       {outcome.correct ? ' correct' : ' incorrect'}
@@ -163,7 +348,11 @@ function StudyQuest({ detail, sq }: { detail: UnitDetail; sq: StudyQuestPublic }
                   )}
                 </legend>
                 {q.choices.map((c, ci) => (
-                  <label key={ci} className={`choice${answers[qi] === ci ? ' choice-on' : ''}`}>
+                  // the keyed choice is marked only from a released explanation (a passed gate)
+                  <label
+                    key={ci}
+                    className={`choice${answers[qi] === ci ? ' choice-on' : ''}${ex?.answer != null && ex.answer === c ? ' choice-right' : ex?.answer != null && outcome && !outcome.correct && answers[qi] === ci ? ' choice-wrong' : ''}`}
+                  >
                     <input
                       type="radio"
                       name={`q${qi + 1}`}
@@ -176,13 +365,37 @@ function StudyQuest({ detail, sq }: { detail: UnitDetail; sq: StudyQuestPublic }
                     </span>
                   </label>
                 ))}
+                {ex && (
+                  <div className={`gate-explain${outcome && !outcome.correct ? ' gate-explain-missed' : ''}`} data-testid={`explain-${qi + 1}`}>
+                    {ex.answer !== null && (
+                      <p>
+                        <strong>Answer:</strong> <InlineProse text={ex.answer} />
+                      </p>
+                    )}
+                    {ex.rest !== '' && <Prose text={ex.rest} />}
+                  </div>
+                )}
               </fieldset>
             );
           })}
           <div className="toolbar">
             <label className="check">
-              <input type="checkbox" checked={assisted} onChange={(e) => setAssisted(e.target.checked)} disabled={submit !== null} />I had help
+              <input type="checkbox" checked={assisted} onChange={(e) => setAssisted(e.target.checked)} disabled={submit !== null || lessonShown} />I had help
             </label>
+            {fund && !submit && (
+              <button
+                type="button"
+                className="btn"
+                disabled={busy}
+                onClick={() => {
+                  const firstOpen = answers.findIndex((a) => a === null);
+                  setStep(firstOpen === -1 ? total - 1 : firstOpen);
+                  setReviewing(false);
+                }}
+              >
+                Back to questions
+              </button>
+            )}
             <span className="toolbar-spacer" />
             <span className="muted small">
               {answered}/{sq.questions.length} answered
@@ -192,7 +405,13 @@ function StudyQuest({ detail, sq }: { detail: UnitDetail; sq: StudyQuestPublic }
                 Try again
               </button>
             ) : (
-              <button type="submit" className="btn btn-primary" disabled={!complete || busy}>
+              <button
+                ref={submitButton}
+                type={fund ? 'button' : 'submit'}
+                className="btn btn-primary"
+                disabled={!complete || busy}
+                onClick={fund ? () => void send() : undefined}
+              >
                 <Icon name="check" /> {busy ? 'Submitting…' : 'Submit answers'}
               </button>
             )}
@@ -206,16 +425,19 @@ function StudyQuest({ detail, sq }: { detail: UnitDetail; sq: StudyQuestPublic }
             <Icon name="warn" /> {error}
           </div>
         )}
-        {submit?.studyQuiz && <StudyResult submit={submit} />}
+        {submit?.studyQuiz && <StudyResult submit={submit} fund={fund} explained={fund && explained.size > 0} />}
+        {/* U5: a passed gate is not a dead end — the topic's drills, then the next topic */}
+        {submit?.verdict === 'pass' && <NextStep unit={detail.unit} />}
       </div>
       <Link to={`/campaign/${detail.unit.trackId}`} className="muted small">
         Back to campaign
       </Link>
     </section>
+    </>
   );
 }
 
-function StudyResult({ submit }: { submit: SubmitResponse }) {
+function StudyResult({ submit, fund, explained }: { submit: SubmitResponse; fund: boolean; explained: boolean }) {
   const r = submit.studyQuiz!;
   const pass = submit.verdict === 'pass';
   const xp = submit.xp;
@@ -235,9 +457,16 @@ function StudyResult({ submit }: { submit: SubmitResponse }) {
       </div>
       {missed > 0 && (
         <p className="muted small" data-testid="miss-cards-notice">
-          The answers to the {missed} missed question{missed === 1 ? '' : 's'} are not shown here: each one is now a review card (question on the front, the
-          keyed answer and its source on the back) that arrives in your review queue tomorrow
+          {pass && explained
+            ? `The ${missed} question${missed === 1 ? '' : 's'} you missed ${missed === 1 ? 'is' : 'are'} listed first above, with the keyed answer and why;`
+            : `The answers to the ${missed} missed question${missed === 1 ? '' : 's'} are not shown here:`}{' '}
+          each one is now a review card (question on the front, the keyed answer and its source on the back) that arrives in your review queue tomorrow
           {r.reviewCards.alreadyQueued > 0 ? ` (${r.reviewCards.alreadyQueued} already queued from an earlier attempt)` : ''}.
+        </p>
+      )}
+      {pass && explained && missed === 0 && (
+        <p className="muted small" data-testid="explained-notice">
+          The keyed answer and the explanation of every question are shown above.
         </p>
       )}
       {r.flashcardsEnrolled > 0 && (
@@ -245,7 +474,13 @@ function StudyResult({ submit }: { submit: SubmitResponse }) {
           {r.flashcardsEnrolled} flashcard{r.flashcardsEnrolled === 1 ? '' : 's'} from this quest joined your review queue (first due tomorrow).
         </p>
       )}
-      {!pass && <p className="muted small">Failed submits cost nothing and are recorded; review the reading list and try again.</p>}
+      {!pass && (
+        <p className="muted small" data-testid="fail-advice">
+          {fund
+            ? 'A failed try costs nothing and is saved. Re-read the lesson, then try again: the answers stay hidden until you pass.'
+            : 'Failed submits cost nothing and are recorded; review the reading list and try again.'}
+        </p>
+      )}
     </div>
   );
 }

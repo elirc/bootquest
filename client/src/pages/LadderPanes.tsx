@@ -645,7 +645,7 @@ export function ExplainBackPane({ detail }: { detail: UnitDetail }) {
             <div className="confirm" role="alertdialog" onKeyDown={(e) => e.key === 'Escape' && !busy && setConfirming(false)} aria-labelledby="eb-confirm-title" aria-describedby="eb-confirm-desc">
               <h3 id="eb-confirm-title">Submit your answers?</h3>
               <p id="eb-confirm-desc">
-                Answers are stored <strong>immutably</strong> and cannot be edited afterwards. The key points appear only after this.
+                Your answers cannot be edited afterwards. The key points appear only after this.
               </p>
               <div className="toolbar">
                 <button type="button" className="btn" autoFocus onClick={() => setConfirming(false)} disabled={busy}>
@@ -1126,28 +1126,108 @@ function ExplainBackResult({ r, keyResp, hasAltSets }: { r: ExplainBackScoreResp
 
 // ---------------------------------------------------------------- patch-review kata
 
-/** Plain unified-diff viewer: one span per line, colored by its first character. */
+type DiffLineClass = 'diff-file' | 'diff-hunk' | 'diff-add' | 'diff-del' | 'diff-ctx';
+
+const HUNK_RE = /^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@/;
+
+/**
+ * Classify every line of a unified diff. Inside a hunk the first character alone decides (`-` is a
+ * removal, `+` an addition): a removed SQL comment reads `-- note` and a removed `-- x` line reads
+ * `--- x`, and neither is a file header. `---` / `+++` are headers only between hunks; the hunk's
+ * own line counts say where it ends.
+ */
+export function classifyDiff(lines: readonly string[]): DiffLineClass[] {
+  let oldLeft = 0;
+  let newLeft = 0;
+  let open = false; // a hunk whose header carried no usable counts: open until the next header
+  return lines.map((line) => {
+    const inHunk = open || oldLeft > 0 || newLeft > 0;
+    if (line.startsWith('@@')) {
+      const m = HUNK_RE.exec(line);
+      oldLeft = m ? Number(m[1] ?? 1) : 0;
+      newLeft = m ? Number(m[2] ?? 1) : 0;
+      open = !m;
+      return 'diff-hunk';
+    }
+    if (line.startsWith('diff ')) {
+      oldLeft = newLeft = 0;
+      open = false;
+      return 'diff-file';
+    }
+    if (!inHunk) {
+      if (line.startsWith('+++') || line.startsWith('---')) return 'diff-file';
+      return line.startsWith('+') ? 'diff-add' : line.startsWith('-') ? 'diff-del' : 'diff-ctx';
+    }
+    if (line.startsWith('+')) {
+      newLeft = Math.max(0, newLeft - 1);
+      return 'diff-add';
+    }
+    if (line.startsWith('-')) {
+      oldLeft = Math.max(0, oldLeft - 1);
+      return 'diff-del';
+    }
+    if (!line.startsWith('\\')) {
+      // a context line counts on both sides ("\ No newline at end of file" counts on neither)
+      oldLeft = Math.max(0, oldLeft - 1);
+      newLeft = Math.max(0, newLeft - 1);
+    }
+    return 'diff-ctx';
+  });
+}
+
+/** A removed line that holds nothing but a comment (`//`, `#`, `--`, a block-comment line or `<!--`). */
+export function isRemovedCommentLine(line: string): boolean {
+  if (!line.startsWith('-')) return false;
+  const t = line.slice(1).trim();
+  return /^(\/\/|\/\*|\*\/|<!--|-->)/.test(t) || /^(#|--|\*)(\s|$)/.test(t) || /^#!/.test(t);
+}
+
+type DiffRow = { kind: 'line'; i: number } | { kind: 'fold'; from: number; to: number };
+
+/** Runs of two or more removed comment-only lines (inside a hunk) fold into one row. */
+function diffRows(lines: readonly string[], cls: readonly DiffLineClass[]): DiffRow[] {
+  const rows: DiffRow[] = [];
+  const foldable = (i: number) => cls[i] === 'diff-del' && isRemovedCommentLine(lines[i]!);
+  for (let i = 0; i < lines.length; ) {
+    let j = i;
+    while (j < lines.length && foldable(j)) j++;
+    if (j - i >= 2) {
+      rows.push({ kind: 'fold', from: i, to: j });
+      i = j;
+    } else {
+      rows.push({ kind: 'line', i });
+      i++;
+    }
+  }
+  return rows;
+}
+
+/**
+ * Plain unified-diff viewer: one span per line, colored by what the line is. Removed comments are
+ * noise in a review (the patch under review rarely hides its defect in one), so a run of them is
+ * collapsed to "N comment lines removed" and opens on click.
+ */
 export function DiffView({ diff, wrap = false }: { diff: string; wrap?: boolean }) {
+  const lines = diff.split('\n');
+  const cls = classifyDiff(lines);
+  const span = (i: number) => (
+    <span key={i} className={`diff-line ${cls[i]}`}>
+      {lines[i]}
+      {'\n'}
+    </span>
+  );
   return (
     <pre className={`code-block diff-view${wrap ? ' diff-wrap' : ''}`} data-testid="diff">
-      {diff.split('\n').map((line, i) => {
-        const cls =
-          line.startsWith('+++') || line.startsWith('---') || line.startsWith('diff ')
-            ? 'diff-file'
-            : line.startsWith('@@')
-              ? 'diff-hunk'
-              : line.startsWith('+')
-                ? 'diff-add'
-                : line.startsWith('-')
-                  ? 'diff-del'
-                  : 'diff-ctx';
-        return (
-          <span key={i} className={`diff-line ${cls}`}>
-            {line}
-            {'\n'}
-          </span>
-        );
-      })}
+      {diffRows(lines, cls).map((row) =>
+        row.kind === 'line' ? (
+          span(row.i)
+        ) : (
+          <details key={`fold-${row.from}`} className="diff-fold" data-testid="diff-fold">
+            <summary>{row.to - row.from} comment lines removed</summary>
+            {Array.from({ length: row.to - row.from }, (_, k) => span(row.from + k))}
+          </details>
+        ),
+      )}
     </pre>
   );
 }
@@ -1237,7 +1317,8 @@ export function KataPane({ detail }: { detail: UnitDetail }) {
         </button>
       </header>
       <p className="muted small">
-        Review this patch like a PR. Find every seeded defect you can: how many there are is shown with the key, after your findings are recorded.
+        Review this patch like a PR. Find every seeded defect you can: how many there are is shown with the key, after your findings are recorded. Runs
+        of removed comment lines are collapsed; click one to expand it.
       </p>
       <DiffView diff={kata.diff} wrap={wrap} />
       {kata.contextFiles.map((f) => (
@@ -1305,10 +1386,12 @@ export function KataPane({ detail }: { detail: UnitDetail }) {
             <HelpBox checked={assisted} onChange={(v) => draft.set((d) => ({ ...d, assisted: v }))} disabled={busy} />
             <span className="toolbar-spacer" />
             <button type="button" className="btn btn-primary" disabled={!ready || busy} onClick={() => void submit()}>
-              <Icon name="check" /> Submit findings (immutable)
+              <Icon name="check" /> Submit findings
             </button>
           </div>
-          <p className="muted small">Findings are stored immutably; the seeded-defect key is shown only after.</p>
+          <p className="muted small submit-note" data-testid="findings-final">
+            You can&apos;t edit them afterwards. The seeded-defect key is shown only after you submit.
+          </p>
           <DraftNote restored={draft.restored} persisted={draft.persisted} />
           <ErrorLine error={error} />
         </>

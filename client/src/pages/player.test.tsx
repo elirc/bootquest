@@ -475,6 +475,170 @@ describe('after a submit', () => {
     await quizReady();
     await user.keyboard('2{Enter}');
     expect(await screen.findByText('Correct')).toBeInTheDocument();
-    expect(within(await screen.findByTestId('next-unit')).getByRole('link', { name: /Next unit/ })).toHaveAttribute('href', '/play/107');
+    const link = within(await screen.findByTestId('next-unit')).getByRole('link', { name: /Next unit/ });
+    expect(link).toHaveAttribute('href', '/play/107');
+    // the primary next link takes focus, so Enter advances
+    await waitFor(() => expect(link).toHaveFocus());
+  });
+
+  // U4: a Fundamentals drill continues on its own ladder, never on the campaign's Next up
+  describe('a Fundamentals drill (U4)', () => {
+    const TOPIC = '01-values-types-and-coercion';
+    const summary = (id: number, key: string, title: string, state: 'available' | 'done' | 'locked' = 'available') =>
+      ({ id, key, trackId: 'js' as const, kind: key.startsWith('fund/') ? ('study' as const) : ('drill' as const), title, difficulty: 1, state, revealed: false, prerequisites: [] });
+    /** the js drill 102 re-homed as drill 1 of Fundamentals topic 01, with a ladder around it */
+    function fundDrillApi(gate: 'available' | 'done', drills: [number, string][]): BootQuestApi {
+      const base = withUnit(DRILL, (d) => ({ ...d, unit: { ...d.unit, key: `fund-js/${TOPIC}/01-first` } }));
+      return {
+        ...base,
+        getFundamentals: async () => ({
+          trackId: 'js',
+          topics: [
+            {
+              id: TOPIC,
+              order: 1,
+              title: 'Values, types & coercion',
+              level: 'beginner',
+              summary: '',
+              quizQuestions: 5,
+              passPct: 80,
+              flashcards: 3,
+              unit: summary(207, `fund/js/${TOPIC}`, '01 · Values, types & coercion', gate),
+              drills: drills.map(([id, title], i) => summary(id, `fund-js/${TOPIC}/0${i + 1}-d`, title)),
+            },
+            {
+              id: '02-functions-and-closures',
+              order: 2,
+              title: 'Functions & closures',
+              level: 'beginner',
+              summary: '',
+              quizQuestions: 1,
+              passPct: 80,
+              flashcards: 2,
+              unit: summary(208, 'fund/js/02-functions-and-closures', '02 · Functions & closures', gate === 'done' ? 'available' : 'locked'),
+              drills: [],
+            },
+          ],
+        }),
+      };
+    }
+    const passDrill = async (user: ReturnType<typeof renderApp>['user']) => {
+      const editor = await editorBox();
+      await user.clear(editor);
+      await user.type(editor, PASSING);
+      await user.click(screen.getByRole('button', { name: /Submit/ }));
+      return screen.findByTestId('next-unit');
+    };
+
+    it('after drill 1 the link names drill 2 of the same topic (and the next topic beside it)', async () => {
+      const { user } = renderApp(`/play/${DRILL}`, fundDrillApi('done', [[DRILL, 'First drill'], [901, 'Second drill']]));
+      const next = await passDrill(user);
+      const primary = within(next).getByTestId('next-primary');
+      expect(primary).toHaveTextContent('Practise: Second drill');
+      expect(primary).toHaveAttribute('href', '/play/901');
+      await waitFor(() => expect(primary).toHaveFocus());
+      expect(within(next).getByTestId('next-topic')).toHaveAttribute('href', '/play/208');
+      expect(within(next).getByTestId('next-topic')).toHaveTextContent('Next topic: 02 Functions & closures');
+      expect(next).not.toHaveTextContent('Next unit');
+    });
+
+    it('after the last drill it names the quiz gate while that is not passed, else the next topic', async () => {
+      const first = renderApp(`/play/${DRILL}`, fundDrillApi('available', [[DRILL, 'First drill']]));
+      const gate = within(await passDrill(first.user)).getByTestId('next-primary');
+      expect(gate).toHaveTextContent('Quiz gate: 01 Values, types & coercion');
+      expect(gate).toHaveAttribute('href', '/play/207');
+      first.unmount();
+      localStorage.clear();
+      const second = renderApp(`/play/${DRILL}`, fundDrillApi('done', [[DRILL, 'First drill']]));
+      const topic = within(await passDrill(second.user)).getByTestId('next-primary');
+      expect(topic).toHaveTextContent('Next topic: 02 Functions & closures');
+      expect(topic).toHaveAttribute('href', '/play/208');
+    });
+
+    it("a ladder that cannot be read falls back to the track's Next up", async () => {
+      const api: BootQuestApi = { ...fundDrillApi('done', []), getFundamentals: async () => Promise.reject(new Error('boom')) };
+      const { user } = renderApp(`/play/${DRILL}`, api);
+      expect(within(await passDrill(user)).getByRole('link', { name: /Next unit: signalpost U04/ })).toHaveAttribute('href', '/play/107');
+    });
+  });
+});
+
+// U12: failed-test output
+describe('failed tests in the results', () => {
+  const RAW = 'Expected values to be strictly deep-equal:\n+ actual - expected\n\n  {\n+   a: 1\n-   a: 2\n  }';
+  const failing: BootQuestApi = {
+    ...createMockApi(),
+    runUnit: async () => ({
+      result: {
+        pass: false,
+        output: '',
+        durationMs: 12,
+        failures: [
+          { name: 'groups by key', message: RAW, expected: { a: 2 }, actual: { a: 1 } },
+          { name: 'keeps order', message: 'TypeError: xs.reduce is not a function\n    at groupBy (solution.js:1:1)' },
+          { name: 'handles empty input', message: RAW, expected: {}, actual: null },
+          { name: 'bare failure', message: '' },
+        ],
+      },
+    }),
+  };
+
+  it('the first failing test is open and the rest are collapsed to their titles', async () => {
+    const { user } = renderApp(`/play/${DRILL}`, failing);
+    await editorBox();
+    await user.click(screen.getByRole('button', { name: /^Run/ }));
+    const results = screen.getByTestId('results');
+    await within(results).findByText('Checks failed');
+    const rows = within(results).getAllByTestId('test-detail') as HTMLDetailsElement[];
+    expect(rows.map((d) => d.querySelector('summary')!.textContent)).toEqual(['groups by key', 'keeps order', 'handles empty input']);
+    expect(rows.map((d) => d.open)).toEqual([true, false, false]);
+    // a failure with nothing to expand is a plain title
+    expect(within(results).getByText('bare failure').tagName).toBe('SPAN');
+    await user.click(within(rows[1]!).getByText('keeps order'));
+    expect(rows[1]!.open).toBe(true);
+  });
+
+  it('structured expected / actual hide the raw assertion message behind a disclosure; a message alone is a monospace pre', async () => {
+    const { user } = renderApp(`/play/${DRILL}`, failing);
+    await editorBox();
+    await user.click(screen.getByRole('button', { name: /^Run/ }));
+    const rows = (await within(screen.getByTestId('results')).findAllByTestId('test-detail')) as HTMLDetailsElement[];
+    const structured = rows[0]!;
+    expect(structured.querySelector('dl.diff')).toHaveTextContent('expected{"a":2}');
+    expect(structured.querySelector('dl.diff')).toHaveTextContent('actual{"a":1}');
+    const raw = structured.querySelector('details.test-raw') as HTMLDetailsElement;
+    expect(raw.open).toBe(false);
+    expect(raw.querySelector('summary')).toHaveTextContent('Assertion message');
+    expect(raw.querySelector('pre')!.textContent).toBe(RAW);
+    // the message is nowhere else in the row
+    expect(structured.querySelectorAll('pre')).toHaveLength(1);
+
+    const plain = rows[1]!;
+    expect(plain.querySelector('dl.diff')).toBeNull();
+    expect(plain.querySelector('details.test-raw')).toBeNull();
+    const pre = plain.querySelector('pre.test-msg-pre')!;
+    expect(pre.textContent).toBe('TypeError: xs.reduce is not a function\n    at groupBy (solution.js:1:1)');
+  });
+});
+
+// U18: learner-facing copy
+describe('copy (U18)', () => {
+  it('a run is a "practice run — not saved"; a submit says the attempt was saved', async () => {
+    const { user } = renderApp(`/play/${DRILL}`);
+    await editorBox();
+    const results = screen.getByTestId('results');
+    expect(results).toHaveTextContent("Runs are free and are not saved; Submit saves an attempt you can't change afterwards.");
+    await user.click(screen.getByRole('button', { name: /^Run/ }));
+    expect(await within(results).findByText(/practice run — not saved/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /Submit/ }));
+    expect(await within(results).findByText(/solo attempt saved/)).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/immutable|not recorded/);
+  });
+
+  it('the kata says "Submit findings", with "You can\'t edit them afterwards" under it', async () => {
+    renderApp('/play/109');
+    const button = await screen.findByRole('button', { name: 'Submit findings' });
+    expect(button).not.toHaveTextContent('immutable');
+    expect(screen.getByTestId('findings-final')).toHaveTextContent("You can't edit them afterwards.");
   });
 });

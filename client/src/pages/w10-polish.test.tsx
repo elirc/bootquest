@@ -302,20 +302,40 @@ describe('"(untitled guide)" reading titles show the file name', () => {
   });
 });
 
-describe('W10 re-audit: answer-first units point at their pane instead of "no instructions"', () => {
-  it('study quest, kata and explain-back say where the task is; a content-pending study quest does not', async () => {
+// f52 U9: these kinds are ONE column now. The pane that carries the task is the whole page, so
+// there is no "the task is in the other pane" placeholder (and no "no instructions" either).
+describe('U9: answer-first units are one column, with no "see the other pane" placeholder', () => {
+  it('study quest, kata and explain-back render only their work pane; a content-pending study quest says it has no instructions', async () => {
+    const single = async (ready: () => Promise<unknown>, layout: string) => {
+      await ready();
+      expect(document.querySelector('.player')).toHaveAttribute('data-layout', layout);
+      expect(screen.queryByTestId('task-in-pane')).not.toBeInTheDocument();
+      expect(document.querySelector('.player-instructions')).toBeNull();
+      expect(document.body.textContent).not.toMatch(/(is|are) in the (study|review|answer) pane/);
+      expect(screen.queryByText('No written instructions are served for this unit yet.')).not.toBeInTheDocument();
+    };
     const first = renderApp('/play/206');
-    expect(await screen.findByTestId('task-in-pane')).toHaveTextContent('reading list and the quiz gate are in the study pane');
+    await single(() => screen.findByTestId('reading-list'), 'reading');
     first.unmount();
     const kata = renderApp('/play/109');
-    expect(await screen.findByTestId('task-in-pane')).toHaveTextContent('patch to review is in the review pane');
+    await single(() => screen.findByTestId('diff'), 'single');
     kata.unmount();
     const eb = renderApp('/play/105');
-    expect(await screen.findByTestId('task-in-pane')).toHaveTextContent('questions are in the answer pane');
+    await single(() => screen.findByRole('region', { name: /./ }), 'single');
+    // the competencies moved to the header row
+    expect(screen.getByTestId('header-competencies')).toBeInTheDocument();
     eb.unmount();
     renderApp('/play/206', withUnit(206, (d) => ({ ...d, instructions: null, studyQuest: null })));
     await screen.findByTestId('study-pending');
     expect(screen.queryByTestId('task-in-pane')).not.toBeInTheDocument();
     expect(screen.getByText('No written instructions are served for this unit yet.')).toBeInTheDocument();
+  });
+
+  it('a code drill keeps two columns, with its competencies under the instructions', async () => {
+    renderApp('/play/102');
+    await screen.findByRole('textbox', { name: /Code editor/ });
+    expect(document.querySelector('.player')).toHaveAttribute('data-layout', 'split');
+    expect(document.querySelector('.player-instructions')).not.toBeNull();
+    expect(screen.queryByTestId('header-competencies')).not.toBeInTheDocument();
   });
 });

@@ -1,4 +1,5 @@
 import type { CheckSpec, SeedNoteItem } from '@bootquest/shared';
+import { isFundItemKey } from '@bootquest/shared/fundamentals';
 import type { NoteDto, UnitNotesResponse } from '@bootquest/shared/api';
 import type { Db } from '../db/database.ts';
 import { isRevealed, VERIFIED_PASS_SQL } from '../engines/attempts.ts';
@@ -27,6 +28,10 @@ import { repoLink } from './study-service.ts';
  *           itself shows the keyed answer. Until then a missed question's key stays hidden (no
  *           free retry with the key in hand: a fail lists missed question NUMBERS only);
  *     withheld explanations are counted, never titled (a title can hint at the key);
+ *   - f52 U3: a Fundamentals topic's gate has no seed:notes pack. Its explanations are built from the
+ *     topic's own quiz items (keyed answer TEXT + authored explanation, one per question) and are
+ *     released ALL TOGETHER by a verified pass of THIS unit, and by nothing else: a failed gate
+ *     releases none (not even for the questions answered right), so a retry is never open-key;
  *   - any other unit: its registered refs; the post-solve `explanation` after a verified pass or
  *     a reveal; the solution only after a reveal (what GET /solution already serves). Explain-back
  *     and patch-kata keys stay behind their own answer-first endpoints, a written unit's model
@@ -111,6 +116,36 @@ function packFor(deps: ServiceDeps, spec: Extract<CheckSpec, { type: 'study-quiz
   return first ? deps.seedItems.questPacks().get(first.provenance.repo) : undefined;
 }
 
+/** The first line of a Fundamentals explanation note: the keyed choice by TEXT (never a served position). */
+export const FUND_ANSWER_PREFIX = 'Answer: ';
+
+/**
+ * f52 U3: a Fundamentals gate's answers + explanations. PASS ONLY (a verified pass of this unit);
+ * deliberately not explanationRelease, whose rule also releases a question answered right on a
+ * failed gate. Before the pass nothing is served but a count.
+ */
+function fundExplanations(deps: ServiceDeps, unitId: number, spec: Extract<CheckSpec, { type: 'study-quiz' }>): UnitNotesResponse['explanations'] {
+  const fund = deps.seedItems.fund;
+  const items = spec.itemKeys.map((k) => fund?.quiz(k));
+  if (items.length === 0 || items.some((q) => q === undefined)) return NO_EXPLANATIONS;
+  const passed = deps.db.get(`SELECT 1 AS x FROM attempt a WHERE a.unit_id = ? AND ${VERIFIED_PASS_SQL} LIMIT 1`, unitId) !== undefined;
+  if (!passed) {
+    return { state: 'locked', message: 'Answers and explanations open when you pass the quiz gate.', released: [], withheld: items.length, nextAt: null };
+  }
+  const released: NoteDto[] = items.map((q, i) => ({
+    key: `fund-explain:${q!.key}`,
+    id: `q${String(i + 1).padStart(2, '0')}`,
+    phase: 'after',
+    target: q!.key,
+    targetKind: 'quiz',
+    title: `Q${i + 1}`,
+    body: `${FUND_ANSWER_PREFIX}${q!.choices[q!.answer] ?? String(q!.answer)}\n\n${q!.explanation}`,
+    excerpts: [],
+    readMore: [],
+  }));
+  return { state: 'released', message: 'The keyed answer and explanation of every question.', released, withheld: 0, nextAt: null };
+}
+
 const NO_EXPLANATIONS = { state: 'none' as const, message: 'This unit has no written explanations yet.', released: [], withheld: 0, nextAt: null };
 
 /** Units whose own answer-first endpoints already release their key: nothing extra here. */
@@ -121,6 +156,10 @@ export function getUnitNotes(deps: ServiceDeps, unitId: number): UnitNotesRespon
   const unit = requireOpenUnit(db, unitId);
   const check = primaryCheck(db, unit.id);
   const refs = unitRefs(db, unit.id);
+
+  if (check && check.spec.type === 'study-quiz' && isFundItemKey(check.spec.itemKeys[0]!)) {
+    return { unitId: unit.id, source: null, readings: [], explanations: fundExplanations(deps, unit.id, check.spec), refs, explanation: null, solution: null };
+  }
 
   if (check && check.spec.type === 'study-quiz') {
     const pack = packFor(deps, check.spec);
