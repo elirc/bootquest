@@ -26,7 +26,8 @@
 // It builds React nodes only (never innerHTML), so every character of the source is rendered
 // as text. No markdown library: anything it does not understand stays literal text.
 
-import { Fragment, type ReactNode } from 'react';
+import { Fragment, useEffect, useState, type ReactNode } from 'react';
+import type { CodeToken } from './codelang';
 
 export type ProseBlock =
   | { kind: 'p'; lines: string[] }
@@ -257,15 +258,52 @@ function renderLines(lines: string[]): ReactNode[] {
   });
 }
 
+/**
+ * U17: a code block. It renders synchronously as plain text (exactly the old <pre>), then, for a
+ * fence that names a language the player knows (js / ts / jsx / java / csharp), the highlighter is
+ * fetched lazily and the same text is re-rendered as coloured `tok-*` spans. The text content never
+ * changes. Under test nothing is fetched: the block stays plain.
+ */
+function CodeBlock({ text, lang }: { text: string; lang: string | null }) {
+  const [tokens, setTokens] = useState<CodeToken[] | null>(null);
+  useEffect(() => {
+    if (import.meta.env.MODE === 'test' || !lang) return;
+    let live = true;
+    setTokens(null);
+    import('./codelang')
+      .then(async (m) => {
+        const id = m.codeLangOf(lang);
+        if (!id) return;
+        const out = await m.highlightCode(text, id);
+        if (live) setTokens(out);
+      })
+      .catch(() => undefined); // no highlighter: the plain block is still correct
+    return () => {
+      live = false;
+    };
+  }, [text, lang]);
+  return (
+    <pre className="code-block" data-lang={lang ?? undefined} data-highlighted={tokens ? 'true' : undefined}>
+      {tokens
+        ? tokens.map((t, i) =>
+            t.cls ? (
+              <span key={i} className={t.cls}>
+                {t.text}
+              </span>
+            ) : (
+              t.text
+            ),
+          )
+        : text}
+    </pre>
+  );
+}
+
 /** One parsed block → its element. Exhaustive over ProseBlock['kind'] (a new kind fails typecheck). */
 function renderBlock(b: ProseBlock, key: number): ReactNode {
   switch (b.kind) {
     case 'code':
-      return (
-        <pre key={key} className="code-block" data-lang={b.lang ?? undefined}>
-          {b.text}
-        </pre>
-      );
+      return <CodeBlock key={key} text={b.text} lang={b.lang} />;
     case 'list':
       return (
         <ul key={key} className="prose-list">
