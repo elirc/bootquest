@@ -603,7 +603,8 @@ function StudyResult({
           {pass && explained
             ? `The ${missed} question${missed === 1 ? '' : 's'} you missed ${missed === 1 ? 'is' : 'are'} listed first above, with the keyed answer and why;`
             : `The answers to the ${missed} missed question${missed === 1 ? '' : 's'} are not shown here:`}{' '}
-          each one is now a review card (question on the front, the keyed answer and its source on the back) that arrives in your review queue tomorrow
+          each one is now a review card (question on the front, the keyed answer and its source on the back) that{' '}
+          {fund && !pass ? 'reaches your review queue once you pass this gate' : 'arrives in your review queue tomorrow'}
           {r.reviewCards.alreadyQueued > 0 ? ` (${r.reviewCards.alreadyQueued} already queued from an earlier attempt)` : ''}.
         </p>
       )}

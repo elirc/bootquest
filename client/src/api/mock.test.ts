@@ -217,7 +217,7 @@ describe('f52 hints (mirrors server/src/api/hints-service.ts)', () => {
     const h2 = await api.takeHint(DRILL);
     expect(h2).toMatchObject({ nextAvailable: false, lockedReason: 'exhausted', xpPct: 50, hint: { index: 2 } });
     expect(JSON.stringify(h2)).not.toContain('never served');
-    expect(await codeOf(api.takeHint(DRILL))).toBe('NOT_FOUND');
+    expect(await codeOf(api.takeHint(DRILL))).toBe('ALREADY_ATTESTED');
     expect((await api.submitUnit(DRILL, { code: PASSING, selfAssisted: false })).xp!.amount).toBe(Math.floor(fullXp / 2));
 
     expect(await api.getHints(QUIZ)).toMatchObject({ total: 0, lockedReason: 'not-hintable' });

@@ -1520,7 +1520,7 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
         if (reason === 'locked') throw err(403, 'TRACK_LOCKED', `track ${u.trackId} is locked`);
         if (reason === 'not-hintable') throw err(409, 'WRONG_UNIT_KIND', `unit ${id} serves no hints`);
         if (reason === 'passed') throw err(409, 'ALREADY_ANSWERED', `unit ${id} already has a verified pass`);
-        if (reason === 'exhausted') throw err(404, 'NOT_FOUND', `unit ${id}: every hint was taken`);
+        if (reason === 'exhausted') throw err(409, 'ALREADY_ATTESTED', `unit ${id}: every hint was taken`);
         if (reason === 'needs-fail') throw err(409, 'NOT_ANSWERED', `unit ${id}: a hint opens after one failed submit`);
         const index = (hintsTaken.get(id) ?? 0) + 1;
         hintsTaken.set(id, index);
