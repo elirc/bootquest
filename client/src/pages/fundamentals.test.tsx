@@ -380,14 +380,15 @@ describe('the Fundamentals gate result', () => {
     expect(screen.getByTestId('miss-cards-notice')).toHaveTextContent('each one is now a review card');
   });
 
-  it('a fail shows which questions were missed and nothing else: no key, no explanation', async () => {
+  it('a fail shows the score and what to re-read, and nothing else: no per-question mark, no key, no explanation', async () => {
     const { user, api } = renderApp(`/play/${T1}`);
     await user.click(await screen.findByRole('button', { name: /Start quiz/ }));
     await answerAll(user, FX1.keys.map((k, i) => (i < 2 ? (k + 1) % 3 : k))); // 3/5
     await user.click(screen.getByRole('button', { name: /Submit answers/ }));
     expect(await screen.findByText('Below the pass mark')).toBeInTheDocument();
-    expect(screen.getByTestId('mark-1')).toHaveTextContent('incorrect');
-    expect(screen.getByTestId('mark-3')).toHaveTextContent('correct');
+    // wave B (ruling 2): a failed gate marks no question at all
+    expect(document.querySelector('.study-mark, [data-testid^="mark-"]')).toBeNull();
+    expect(screen.getByTestId('study-result')).toHaveTextContent('3/5 correct (60%)');
     // let the notes re-read settle: still nothing
     const notes = await api.getUnitNotes(T1);
     expect(notes.explanations).toMatchObject({ state: 'locked', released: [], withheld: 5 });
@@ -395,7 +396,9 @@ describe('the Fundamentals gate result', () => {
     expect(document.querySelector('.choice-right')).toBeNull();
     expect(document.body.textContent).not.toContain('Every non-empty string is truthy');
     expect(screen.getByTestId('miss-cards-notice')).toHaveTextContent('The answers to the 2 missed questions are not shown here');
-    expect(screen.getByTestId('fail-advice')).toHaveTextContent('Re-read the lesson');
+    // ...and names the lesson sections of the missed questions (Q1, Q2) from the gate map
+    expect(screen.getByTestId('reread')).toHaveTextContent('Re-read: typeof surprises · The seven primitives');
+    expect(screen.getByTestId('fail-advice')).toHaveTextContent('A failed try costs nothing and is saved.');
     // question order is untouched
     expect([...document.querySelectorAll('fieldset[data-testid^="question-"]')].map((f) => f.getAttribute('data-testid'))).toEqual(
       [1, 2, 3, 4, 5].map((n) => `question-${n}`),
