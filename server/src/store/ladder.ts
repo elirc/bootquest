@@ -65,6 +65,8 @@ export class LadderLoadError extends Error {
 
 const h12 = (s: string): string => createHash('sha256').update(s).digest('hex').slice(0, 12);
 const slug = (s: string): string => s.replace(/[^A-Za-z0-9._-]+/g, '-');
+/** the repo segment of a ladder unit key (`ladder/<family>/<repo slug>/<hash>`); api/service.ts nextUp reuses it */
+export const ladderRepoSlug = slug;
 
 const G2_PROMPT = /^G2 BRIEF\b/;
 export const isG2 = (item: SeedExplainBackItem): boolean => G2_PROMPT.test(item.questions[0]?.prompt ?? '');
