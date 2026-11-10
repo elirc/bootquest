@@ -1,7 +1,7 @@
 /**
  * f52 lesson aids (wave B ruling 7): content/fundamentals/sections.json + GET /units/:id/lesson-aids.
  *   - the committed map: every track / topic exists, every question number is 1..quiz length, every heading
- *     is a `##`/`###` heading of that topic's lesson, all 60 topics have a full gate map, and the pilot checks
+ *     is a `##`/`###` heading of that topic's lesson, every committed topic has a full gate map, and the pilot checks
  *     (js 01-05) cover every heading once without restating a quiz key or a flashcard back;
  *   - a bad entry logs one warning and is skipped, the rest loads; a missing / malformed file never throws;
  *   - the endpoint serves { gate, checks } for a Fundamentals topic unit and empty aids for any other unit.
@@ -27,6 +27,8 @@ const TRACKS = ['js', 'csharp', 'java'] as const;
 const PILOT = ['01', '02', '03', '04', '05'];
 
 const readTrack = (track: string): FundamentalsFile => FundamentalsFile.parse(JSON.parse(readFileSync(join(FUND, track, 'topics.json'), 'utf8')));
+/** topics committed in content/fundamentals/<track>/topics.json, across the three tracks */
+const COMMITTED_TOPICS = TRACKS.reduce((n, track) => n + readTrack(track).topics.length, 0);
 
 describe('lessonHeadings', () => {
   it('returns ## and ### heading texts in order, skipping fenced code and other levels', () => {
@@ -61,7 +63,7 @@ describe('content/fundamentals/sections.json (committed)', () => {
     expect(bad).toEqual([]);
   });
 
-  it('loads without a warning and every one of the 60 topics has a full gate map', () => {
+  it('loads without a warning and every committed topic has a full gate map', () => {
     const store = loadFundStore(defaultFundamentalsDirs(FUND), { warn: (m) => expect.fail(m) });
     let topics = 0;
     const partial: string[] = [];
@@ -74,7 +76,8 @@ describe('content/fundamentals/sections.json (committed)', () => {
       }
     }
     expect(partial).toEqual([]);
-    expect(topics).toBe(60);
+    expect(COMMITTED_TOPICS).toBeGreaterThanOrEqual(60);
+    expect(topics).toBe(COMMITTED_TOPICS);
   });
 
   it('pilot checks: js 01-05 only, one per lesson heading in lesson order, no quiz key or flashcard back restated', () => {
@@ -159,7 +162,7 @@ describe('readFundSections (warn and skip)', () => {
     writeFileSync(join(dir, 'sections.json'), '{ broken');
     const warnings: string[] = [];
     const store = loadFundStore([join(FUND, 'js')], { sectionsPaths: [join(dir, 'sections.json')], relatedPaths: [], warn: (m) => warnings.push(m) });
-    expect(store.topics('js')).toHaveLength(20);
+    expect(store.topics('js')).toHaveLength(readTrack('js').topics.length);
     expect(store.lessonAids('js', store.topics('js')[0]!.id)).toEqual({ gate: {}, checks: [] });
     expect(warnings).toHaveLength(1);
   });
