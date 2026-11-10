@@ -51,13 +51,22 @@ function StepText({ step }: { step: FundStep }) {
   );
 }
 
-/** "+50 XP", counted up from 0 in 600 ms (at once under reduced motion and in tests). */
-function XpCount({ amount }: { amount: number }) {
+/**
+ * "+50 XP", counted up from 0 in 600 ms (at once under reduced motion and in tests). The panel sits
+ * in the results' aria-live region, so the animated number is hidden from assistive technology
+ * (every frame would be announced) and the final amount is there once, as visually-hidden text.
+ */
+export function XpCount({ amount }: { amount: number }) {
   const shown = useCountUp(amount);
   return (
-    <span className="completion-xp" data-testid="completion-xp" aria-label={`+${amount} XP`}>
-      +{shown} XP
-    </span>
+    <>
+      <span className="completion-xp" data-testid="completion-xp" aria-hidden="true">
+        +{shown} XP
+      </span>
+      <span className="sr-only" data-testid="completion-xp-text">
+        {`+${amount} XP`}
+      </span>
+    </>
   );
 }
 
