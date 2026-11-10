@@ -19,6 +19,7 @@ import { Icon } from '../components/Icon';
 import { SlateFocus } from '../components/SlateFocus';
 import { Chip, Kbd, LoadState, PageHeader, Panel, ProgressBar, RatingPips } from '../components/ui';
 import { WeakSpotsTeaser } from '../components/WeakSpots';
+import { TOPIC_MINUTES, drillMinutes, fmtMinutes, reviewEstimate } from '../lib/estimates';
 import { fmtInt, fmtRelative, fmtShortDate, fmtWhen, plural } from '../lib/format';
 import { drillOpen, fundProgress, fundProgressText, type FundProgress } from '../lib/fundamentals';
 import { useTracks } from '../lib/tracks';
@@ -29,6 +30,22 @@ type Loaded<T> = AsyncState<T> & { reload: () => void };
 
 /** The partial-day rule (server engines/streak.ts): this much XP in a day keeps the streak. */
 const STREAK_XP = 20;
+/** wave B (ruling 6): with no review due, this much XP today (or a complete slate) is a full day. */
+export const DONE_XP = 50;
+
+/** No xpToday on the wire (W-7): today's heatmap row is the server's own number for it. */
+export const xpTodayOf = (d: DashboardData): number => d.heatmap.find((h) => h.day === d.today)?.xp ?? 0;
+
+/**
+ * wave B (ruling 6): "Done for today" — nothing due for review AND (today's slate is complete OR at
+ * least 50 XP today). The hero then says so and keeps the next step as a secondary button.
+ */
+export function doneForToday(d: DashboardData): boolean {
+  if (d.reviewQueue.due > 0) return false;
+  const counted = d.slate.items.filter((s) => !vacuousReviewSlot(d.slate.items, d.reviewQueue.due)(s));
+  const slateComplete = d.streak.todayComplete || (counted.length > 0 && counted.every((s) => s.done));
+  return slateComplete || xpTodayOf(d) >= DONE_XP;
+}
 
 export function DashboardPage() {
   const api = useApi();
@@ -89,6 +106,8 @@ export interface FundStep {
   drill?: { at: number; of: number };
   /** wave B (ruling 3): topics complete (gate + one own drill) and gates passed on this ladder */
   progress: FundProgress;
+  /** wave B (ruling 6): the static estimate of this step (topic about 10 min; drill 5 / 10 / 15 by difficulty) */
+  minutes: number;
 }
 
 /**
@@ -104,12 +123,12 @@ export function fundamentalsStep(r: FundamentalsResponse): FundStep | null {
     const base = { trackId: r.trackId, order: i + 1, total: topics.length, progress: fundProgress(topics) };
     if (t.unit.state !== 'done') {
       if (t.unit.state === 'locked') return null;
-      return { ...base, unitId: t.unit.id, kind: 'topic', title: t.title, fresh: i === 0 };
+      return { ...base, unitId: t.unit.id, kind: 'topic', title: t.title, fresh: i === 0, minutes: TOPIC_MINUTES };
     }
     const at = t.drills.findIndex(drillOpen);
     if (at !== -1) {
       const d = t.drills[at]!;
-      return { ...base, unitId: d.id, kind: 'drill', title: d.title, fresh: false, drill: { at: at + 1, of: t.drills.length } };
+      return { ...base, unitId: d.id, kind: 'drill', title: d.title, fresh: false, drill: { at: at + 1, of: t.drills.length }, minutes: drillMinutes(d.difficulty) };
     }
   }
   return null;
@@ -153,7 +172,10 @@ export interface HeroPick {
  */
 export function pickHero(d: DashboardData, fund: FundStep | null): HeroPick {
   const due = d.reviewQueue.due;
-  if (due > 0) return { kind: 'review', label: `Review ${plural(due, 'card')}`, href: '/review', context: 'Reviews first: these cards are due today' };
+  // wave B (ruling 6): static estimates give the session a shape (a review card is about 10 s)
+  if (due > 0) {
+    return { kind: 'review', label: `Review ${plural(due, 'card')}`, href: '/review', context: `Reviews first: these cards are due today · ${reviewEstimate(due)}` };
+  }
   if (fund) {
     const where = `Fundamentals · ${TRACK_LABEL[fund.trackId]} · Topic ${fund.order} of ${fund.total}`;
     // wave B (ruling 3): "3 complete · 5 gates passed" once anything is passed
@@ -163,14 +185,14 @@ export function pickHero(d: DashboardData, fund: FundStep | null): HeroPick {
         kind: 'fundamentals',
         label: `Practise: ${fund.title}`,
         href: `/play/${fund.unitId}`,
-        context: `${where} · drill ${fund.drill.at} of ${fund.drill.of}${progress}`,
+        context: `${where} · drill ${fund.drill.at} of ${fund.drill.of} · ${fmtMinutes(fund.minutes)}${progress}`,
       };
     }
     return {
       kind: 'fundamentals',
       label: `${fund.fresh ? 'Start' : 'Continue'} Fundamentals: ${fund.title}`,
       href: `/play/${fund.unitId}`,
-      context: `${where}${progress}`,
+      context: `${where} · ${fmtMinutes(fund.minutes)}${progress}`,
     };
   }
   // a slate row does not say its unit's kind; a target that Next up lists as an explain-back is skipped
@@ -192,14 +214,27 @@ function Hero({ d, fund }: { d: DashboardData; fund: FundState }) {
   // reviews win outright; otherwise wait for the ladder so the button never changes under the cursor
   const ready = d.reviewQueue.due > 0 || fund.settled;
   const pick = ready ? pickHero(d, fund.settled ? fund.step : null) : null;
+  // wave B (ruling 6): a full day says so; what would be next stays one (secondary) click away
+  const done = doneForToday(d);
   return (
-    <section className="panel dash-hero" aria-labelledby="p-hero" data-testid="dash-hero" data-kind={pick?.kind ?? 'loading'}>
+    <section
+      className={`panel dash-hero${done ? ' dash-hero-done' : ''}`}
+      aria-labelledby="p-hero"
+      data-testid="dash-hero"
+      data-kind={pick?.kind ?? 'loading'}
+      data-done={done ? 'true' : 'false'}
+    >
       <h2 className="panel-title" id="p-hero">
-        Next step
+        {done ? 'Today' : 'Next step'}
       </h2>
+      {done && (
+        <p className="dash-hero-donetext pos" data-testid="hero-done">
+          Done for today ✓ · streak safe
+        </p>
+      )}
       {pick ? (
         <>
-          <Link to={pick.href} className="btn btn-primary dash-hero-go" data-testid="hero-go">
+          <Link to={pick.href} className={`btn ${done ? 'dash-hero-more' : 'btn-primary'} dash-hero-go`} data-testid="hero-go">
             <Icon name="play" /> <span className="dash-hero-label">{pick.label}</span>
           </Link>
           <p className="dash-hero-context muted" data-testid="hero-context">
@@ -241,8 +276,7 @@ function DashboardBody({
   const vacuous = vacuousReviewSlot(items, d.reviewQueue.due);
   const counted = items.filter((s) => !vacuous(s));
   const slateDone = counted.filter((s) => s.done).length;
-  // No xpToday on the wire (W-7): today's heatmap row is the server's own number for it.
-  const xpToday = d.heatmap.find((h) => h.day === d.today)?.xp ?? 0;
+  const xpToday = xpTodayOf(d);
   const tokens = Math.min(d.streak.tokens, FREEZE_TOKENS_MAX);
   const streakSafe = xpToday >= STREAK_XP || d.streak.todayComplete;
   const retests = comp.data?.retests ?? [];
@@ -267,9 +301,14 @@ function DashboardBody({
             <span className="tile-unit">days</span>
           </div>
           {/* f52 U16 (display only): 20 XP today, or a complete slate, already keeps the streak */}
-          {streakSafe && (
+          {streakSafe ? (
             <p className="tile-safe pos" data-testid="streak-safe" title="20 XP today or a cleared slate keeps the streak">
               Streak safe for today ✓
+            </p>
+          ) : (
+            // wave B (ruling 6): until then, how far today's XP is from keeping it
+            <p className="tile-safe muted" data-testid="streak-progress" title="20 XP today or a cleared slate keeps the streak">
+              {xpToday} / {STREAK_XP} XP today
             </p>
           )}
           <div className="tile-meta">
