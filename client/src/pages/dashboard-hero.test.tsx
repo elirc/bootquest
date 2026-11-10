@@ -1,5 +1,8 @@
 // f52 stream D (U6 + U7): the dashboard hero (one next step, council ruling 5: reviews due ->
 // Fundamentals -> first undone slate item -> Next up, never an explain-back) and the reordered page.
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { createMockApi } from '../api/mock';
@@ -238,5 +241,35 @@ describe('streak tile (f52 U16)', () => {
     renderApp('/', today(0, true));
     await screen.findByTestId('hero-go', {}, { timeout: 15_000 });
     expect(within(streakTile()).getByTestId('streak-safe')).toBeInTheDocument();
+  });
+});
+
+describe('layout widths (f52 U19 + U20)', () => {
+  it('Next up carries its card count for the no-orphan rows (5 tracks: one row, then 3 + 2)', async () => {
+    renderApp('/');
+    await screen.findByTestId('hero-go', {}, { timeout: 15_000 });
+    const ul = document.querySelector<HTMLElement>('.nextup')!;
+    expect(ul.style.getPropertyValue('--nextup-n')).toBe('5');
+    expect(ul.style.getPropertyValue('--nextup-half')).toBe('3');
+  });
+
+  it('Dashboard and Campaign render inside the same centred column', async () => {
+    const r = renderApp('/');
+    await screen.findByTestId('hero-go', {}, { timeout: 15_000 });
+    expect(screen.getByRole('heading', { level: 1 }).closest('.page-col')).not.toBeNull();
+    expect(document.querySelector('.page-col .dash')).not.toBeNull();
+    r.unmount();
+    renderApp('/campaign/js');
+    await screen.findByRole('tabpanel', { name: 'Campaign acts' }, { timeout: 15_000 });
+    expect(screen.getByRole('heading', { level: 1 }).closest('.page-col')).not.toBeNull();
+    expect(document.querySelector('.page-col .campaign')).not.toBeNull();
+  });
+
+  it('dashboard.css: one centred max width; the campaign blocks lose their 820px cap', () => {
+    const css = (f: string) => readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'styles', f), 'utf8');
+    expect(css('dashboard.css')).toMatch(/\.page-col \{\s*max-width: 1080px;\s*margin-inline: auto;/);
+    expect(css('dashboard.css')).toMatch(/\.page-col \.acts,\s*\.page-col \.act-empty \{\s*max-width: none;/);
+    expect(css('fundamentals.css')).not.toContain('820px');
+    expect(css('trackunits.css')).not.toContain('820px');
   });
 });

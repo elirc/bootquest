@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useRef, useState, type CSSProperties } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useApi } from '../api/context';
 import { errorText } from '../api/errors';
@@ -46,13 +46,14 @@ export function DashboardPage() {
   const showBody = q.status === 'ready' && (painted || comp.status !== 'loading');
   if (showBody && !painted) setPainted(true);
   return (
-    <>
+    // f52 U20: one centred content column, the same width as the Campaign page
+    <div className="page-col">
       <PageHeader
         eyebrow={q.data ? new Date(`${q.data.today}T00:00:00Z`).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC' }) : ' '}
         title="Dashboard"
       />
       {showBody ? <DashboardBody d={q.data} comp={comp} slate={slate} fund={fund} /> : <LoadState error={q.error} onRetry={q.reload} minHeight={720} />}
-    </>
+    </div>
   );
 }
 
@@ -329,7 +330,8 @@ function DashboardBody({
       <DueNowPanel />
 
       <Panel title="Next up" labelledBy="p-next">
-        <ul className="nextup">
+        {/* f52 U19: rows of equal cards (all in one row when wide, then halves), never one card alone */}
+        <ul className="nextup" style={{ '--nextup-n': d.nextUp.length, '--nextup-half': Math.ceil(d.nextUp.length / 2) } as CSSProperties}>
           {d.nextUp.map((n) => (
             <li key={n.trackId}>
               {n.unit ? (

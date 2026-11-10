@@ -83,7 +83,8 @@ function CampaignView({ trackId }: { trackId: TrackId }) {
   });
 
   return (
-    <>
+    // f52 U20: one centred content column, the same width as the dashboard
+    <div className="page-col">
       <PageHeader eyebrow="Campaign" title={track ? track.name : ' '} actions={<ViewToggle view={view} onChange={setView} />} />
       <TrackTabs tracks={tracks.data?.tracks ?? []} current={trackId} />
       <TrackProgressLine progress={tracks.data?.tracks.find((t) => t.id === trackId)?.progress} locked={locked} />
@@ -126,7 +127,7 @@ function CampaignView({ trackId }: { trackId: TrackId }) {
           <LoadState error={campaign.error} onRetry={campaign.reload} minHeight={480} />
         )}
       </div>
-    </>
+    </div>
   );
 }
 
