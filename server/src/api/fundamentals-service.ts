@@ -1,7 +1,7 @@
 import type { UnitSummary } from '@bootquest/shared/api';
-import type { FundamentalsResponseExt as FundamentalsResponse } from '@bootquest/shared/api-ext';
+import type { FundamentalsResponseExt as FundamentalsResponse, LessonAidsResponse } from '@bootquest/shared/api-ext';
 import { FUND_PASS_PCT, fundTopicUnitKey, type FundTrack } from '@bootquest/shared/fundamentals';
-import { getTrack, passedUnitIds, prerequisiteMap, revealedUnitIds, unitsForTrack, type UnitRecord } from '../store/queries.ts';
+import { getTrack, getUnit, passedUnitIds, prerequisiteMap, revealedUnitIds, unitsForTrack, type UnitRecord } from '../store/queries.ts';
 import { HttpError } from './http.ts';
 import { lockStateFor, type ServiceDeps } from './service.ts';
 
@@ -66,4 +66,19 @@ export function getFundamentals(deps: ServiceDeps, trackId: string): Fundamental
     });
   }
   return { trackId: track.id, topics: out };
+}
+
+/**
+ * f52 lesson aids (wave B ruling 7): GET /units/:id/lesson-aids — read-only. For a Fundamentals topic
+ * (study) unit: the gate map (quiz question number -> the lesson heading that teaches it; headings only,
+ * never an answer) and the open-book checks from content/fundamentals/sections.json. Any other unit, or a
+ * topic without an entry: empty aids. Unknown id: 404.
+ */
+export function getLessonAids(deps: ServiceDeps, unitId: number): LessonAidsResponse {
+  const unit = getUnit(deps.db, unitId);
+  if (!unit) throw new HttpError(404, 'NOT_FOUND', `unit ${unitId} not found`);
+  const ref = unit.kind === 'study' ? deps.seedItems.fund?.topicOfUnitKey(unit.key) : undefined;
+  if (!ref || ref.track !== unit.trackId) return { gate: {}, checks: [] };
+  const aids = deps.seedItems.fund!.lessonAids(ref.track, ref.topic.id);
+  return { gate: { ...aids.gate }, checks: aids.checks.map((c) => ({ heading: c.heading, prompt: c.prompt, answer: c.answer })) };
 }

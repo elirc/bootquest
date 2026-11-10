@@ -67,12 +67,32 @@ export interface FundStore {
   topicOfUnitKey(unitKey: string): FundTopicRef | undefined;
   /** f52 C3: "More practice" unit keys of a topic (content/fundamentals/related.json), in listed order; [] when none */
   related(track: FundTrack | TrackId, topicId: string): readonly string[];
+  /** f52 lesson aids: a topic's gate map + open-book checks (content/fundamentals/sections.json); empty when none */
+  lessonAids(track: FundTrack | TrackId, topicId: string): FundLessonAids;
 }
+
+/** f52 lesson aids: one ungraded, open-book check shown after a lesson heading. */
+export interface FundLessonCheck {
+  heading: string;
+  prompt: string;
+  answer: string;
+}
+
+/** f52 lesson aids of one topic: gate = 1-based quiz question number -> the lesson heading that teaches it. */
+export interface FundLessonAids {
+  gate: Readonly<Record<string, string>>;
+  checks: readonly FundLessonCheck[];
+}
+
+/** content/fundamentals/sections.json, validated: track -> topicId -> aids. */
+export type FundSectionsMap = ReadonlyMap<string, ReadonlyMap<string, FundLessonAids>>;
+
+const NO_AIDS: FundLessonAids = Object.freeze({ gate: Object.freeze({}), checks: Object.freeze([]) });
 
 /** f52 C3: content/fundamentals/related.json = { "<track>": { "<topicId>": ["<existing unit key>", ...] } }. */
 export type FundRelatedMap = ReadonlyMap<string, ReadonlyMap<string, readonly string[]>>;
 
-export function mapFundStore(files: readonly FundamentalsFile[], related: FundRelatedMap = new Map()): FundStore {
+export function mapFundStore(files: readonly FundamentalsFile[], related: FundRelatedMap = new Map(), sections: FundSectionsMap = new Map()): FundStore {
   const byTrack = new Map<FundTrack, FundTopic[]>();
   const quizzes = new Map<string, FundQuizItem>();
   const cards = new Map<string, FundFlashcard>();
@@ -102,6 +122,7 @@ export function mapFundStore(files: readonly FundamentalsFile[], related: FundRe
     topicOfItem: (k) => ofItem.get(k),
     topicOfUnitKey: (k) => ofUnit.get(k),
     related: (t, topic) => related.get(t)?.get(topic) ?? [],
+    lessonAids: (t, topic) => sections.get(t)?.get(topic) ?? NO_AIDS,
   };
 }
 
@@ -144,17 +165,24 @@ export function readFundamentalsDir(dir: string): FundamentalsFile {
 
 /**
  * The Fundamentals store of these track dirs. f52 C3: plus the "More practice" map, by default
- * `related.json` beside the track dirs (their parent dir); a missing file = no related units.
+ * `related.json` beside the track dirs (their parent dir); a missing file = no related units. f52 lesson
+ * aids: plus `sections.json` from the same place, validated against the loaded topics.
  */
-export function loadFundStore(dirs: readonly string[], opts: { relatedPaths?: readonly string[]; warn?: (msg: string) => void } = {}): FundStore {
-  const relatedPaths = opts.relatedPaths ?? [...new Set(dirs.map((d) => join(dirname(d), FUND_RELATED_FILE)))];
+export function loadFundStore(
+  dirs: readonly string[],
+  opts: { relatedPaths?: readonly string[]; sectionsPaths?: readonly string[]; warn?: (msg: string) => void } = {},
+): FundStore {
+  const besideDirs = (name: string): string[] => [...new Set(dirs.map((d) => join(dirname(d), name)))];
+  const files = dirs.map((d) => readFundamentalsDir(d));
   return mapFundStore(
-    dirs.map((d) => readFundamentalsDir(d)),
-    readFundRelated(relatedPaths, opts.warn),
+    files,
+    readFundRelated(opts.relatedPaths ?? besideDirs(FUND_RELATED_FILE), opts.warn),
+    readFundSections(opts.sectionsPaths ?? besideDirs(FUND_SECTIONS_FILE), files, opts.warn),
   );
 }
 
 export const FUND_RELATED_FILE = 'related.json';
+export const FUND_SECTIONS_FILE = 'sections.json';
 
 const defaultWarn = (m: string): void => console.warn(`[bootquest fundamentals] ${m}`);
 
@@ -197,6 +225,110 @@ export function readFundRelated(paths: readonly string[], warn: (msg: string) =>
           else warn(`${path}: ${track}/${topic}: entry ${JSON.stringify(k)} is not a new unit key, skipped`);
         }
         byTopic.set(topic, list);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * The `##` / `###` heading texts of a lesson, in order (marker and surrounding whitespace stripped);
+ * lines inside fenced code blocks are not headings.
+ */
+export function lessonHeadings(lesson: string): string[] {
+  const out: string[] = [];
+  let fence: string | null = null;
+  for (const line of lesson.split(/\r?\n/)) {
+    const f = /^\s*(`{3,}|~{3,})/.exec(line);
+    if (f) {
+      if (fence === null) fence = f[1]!;
+      else if (f[1]!.startsWith(fence) && line.trim() === f[1]) fence = null;
+      continue;
+    }
+    if (fence !== null) continue;
+    const h = /^#{2,3}[ \t]+(.+?)[ \t]*$/.exec(line);
+    if (h) out.push(h[1]!);
+  }
+  return out;
+}
+
+const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+const nonEmpty = (v: unknown): v is string => typeof v === 'string' && v.trim() !== '';
+const SECTIONS_SHAPE = '{ "<track>": { "<topicId>": { "gate": { "<question number>": "<lesson heading>" }, "checks": [{ "heading", "prompt", "answer" }] } } }';
+
+type MutableAids = { gate: Record<string, string>; checks: FundLessonCheck[] };
+
+/**
+ * f52 lesson aids: read sections.json (track -> topic -> { gate, checks }). Never refuses startup: a missing
+ * file is no aids; an unreadable / malformed file logs a warning and is ignored; an entry naming an unknown
+ * track or topic, a question number outside the topic's quiz, a heading that is not a `##`/`###` heading of
+ * that topic's lesson, or a malformed check logs one warning and is skipped (the rest of the topic stays).
+ * The gate map holds headings only (never answers); check answers are open-book study aids.
+ */
+export function readFundSections(paths: readonly string[], files: readonly FundamentalsFile[], warn: (msg: string) => void = defaultWarn): FundSectionsMap {
+  const topicsOf = new Map<string, Map<string, FundTopic>>(files.map((f) => [f.track, new Map(f.topics.map((t) => [t.id, t]))]));
+  const out = new Map<string, Map<string, MutableAids>>();
+  for (const path of paths) {
+    if (!existsSync(path)) continue;
+    let doc: unknown;
+    try {
+      doc = JSON.parse(readFileSync(path, 'utf8'));
+    } catch (err) {
+      warn(`${path}: not JSON, ignored (${err instanceof Error ? err.message.slice(0, 200) : String(err)})`);
+      continue;
+    }
+    if (!isObject(doc)) {
+      warn(`${path}: expected ${SECTIONS_SHAPE}, ignored`);
+      continue;
+    }
+    for (const [track, byTopic] of Object.entries(doc)) {
+      const known = topicsOf.get(track);
+      if (!known) {
+        warn(`${path}: track "${track}" is not a loaded Fundamentals track, skipped`);
+        continue;
+      }
+      if (!isObject(byTopic)) {
+        warn(`${path}: track "${track}" is not an object, skipped`);
+        continue;
+      }
+      const trackOut = out.get(track) ?? new Map<string, MutableAids>();
+      out.set(track, trackOut);
+      for (const [topicId, entry] of Object.entries(byTopic)) {
+        const where = `${path}: ${track}/${topicId}`;
+        const topic = known.get(topicId);
+        if (!topic) {
+          warn(`${where}: not a topic of the ${track} ladder, skipped`);
+          continue;
+        }
+        if (!isObject(entry)) {
+          warn(`${where}: expected { "gate": {...}, "checks": [...] }, skipped`);
+          continue;
+        }
+        const headings = new Set(lessonHeadings(topic.lesson));
+        const aids = trackOut.get(topicId) ?? { gate: {}, checks: [] };
+        for (const k of Object.keys(entry)) if (k !== 'gate' && k !== 'checks') warn(`${where}: unknown field "${k}", ignored`);
+        if (entry.gate !== undefined) {
+          if (!isObject(entry.gate)) warn(`${where}: gate is not an object, skipped`);
+          else {
+            for (const [n, heading] of Object.entries(entry.gate)) {
+              const num = /^[1-9]\d*$/.test(n) ? Number(n) : NaN;
+              if (!(num >= 1 && num <= topic.quiz.length)) warn(`${where}: gate question "${n}" is not 1..${topic.quiz.length}, skipped`);
+              else if (typeof heading !== 'string' || !headings.has(heading)) warn(`${where}: gate ${n}: ${JSON.stringify(heading)} is not a heading of the lesson, skipped`);
+              else aids.gate[String(num)] = heading;
+            }
+          }
+        }
+        if (entry.checks !== undefined) {
+          if (!Array.isArray(entry.checks)) warn(`${where}: checks is not a list, skipped`);
+          else {
+            (entry.checks as unknown[]).forEach((c, i) => {
+              if (!isObject(c) || !nonEmpty(c.heading) || !nonEmpty(c.prompt) || !nonEmpty(c.answer)) warn(`${where}: check ${i + 1} needs a non-empty heading, prompt and answer, skipped`);
+              else if (!headings.has(c.heading)) warn(`${where}: check ${i + 1}: ${JSON.stringify(c.heading)} is not a heading of the lesson, skipped`);
+              else aids.checks.push({ heading: c.heading, prompt: c.prompt, answer: c.answer });
+            });
+          }
+        }
+        trackOut.set(topicId, aids);
       }
     }
   }
