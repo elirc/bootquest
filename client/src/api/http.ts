@@ -29,7 +29,7 @@ import {
   type SelfAttestResponse,
   type SubmitResponse,
   type TrackUnitsResponse,
-  type FundamentalsResponse,
+  type FundamentalsResponseExt,
   type TracksResponse,
   type UnitDetail,
   type UnitNotesResponse,
@@ -89,7 +89,7 @@ export function createHttpApi(baseUrl = '/api', fetchImpl: typeof fetch = (...a)
     getDashboard: () => call<Dashboard>('/dashboard'),
     getTracks: () => call<TracksResponse>('/tracks'),
     getTrackUnits: (trackId) => call<TrackUnitsResponse>(`/tracks/${encodeURIComponent(trackId)}/units`),
-    getFundamentals: (trackId) => call<FundamentalsResponse>(`/tracks/${encodeURIComponent(trackId)}/fundamentals`),
+    getFundamentals: (trackId) => call<FundamentalsResponseExt>(`/tracks/${encodeURIComponent(trackId)}/fundamentals`),
     getUnit: (id) => call<UnitDetail>(unit(id)),
     runUnit: (id, input) =>
       post<RunResponse>(`${unit(id)}/run`, input.code !== undefined ? { code: input.code } : { answer: input.answer }),

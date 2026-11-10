@@ -61,7 +61,7 @@ import { defaultRunners, type RunnerRegistry } from './runners.ts';
 import { emptySeedItemStore, type SeedItemStore } from '../store/seed-items.ts';
 import { ladderUnits } from '../store/ladder.ts';
 import { registerSettingsRoutes } from './settings-routes.ts';
-import { FundamentalsResponse, HintsResponse, HintTakenResponse } from '@bootquest/shared/api-ext';
+import { FundamentalsResponseExt, HintsResponse, HintTakenResponse } from '@bootquest/shared/api-ext';
 import { getFundamentals } from './fundamentals-service.ts';
 import { getHints, takeHint } from './hints-service.ts';
 import {
@@ -199,7 +199,7 @@ export function createApp(opts: AppOptions): Express {
   router.get('/tracks/:id/fundamentals', asyncRoute((req, res) => {
     const { id } = validate(TrackIdParams, req.params, 'params');
     validate(EmptyQuery, req.query, 'query');
-    sendJson(res, 200, FundamentalsResponse.parse(getFundamentals(deps, id)));
+    sendJson(res, 200, FundamentalsResponseExt.parse(getFundamentals(deps, id)));
   }));
 
   registerFindRoutes(router, deps); // ab S4: /units/search (before /units/:id) + /drills/next

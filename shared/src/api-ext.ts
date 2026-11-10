@@ -319,3 +319,14 @@ export const HintTakenResponse = HintsResponse.extend({
   hint: z.object({ index: z.number().int().positive(), text: z.string() }).strict(),
 }).strict();
 export type HintTakenResponse = z.infer<typeof HintTakenResponse>;
+
+// ---- f52 S: Fundamentals "More practice" (C3) -------------------------------------------------------------
+// GET /tracks/:id/fundamentals: each topic may carry `related`, existing drill units from other banks that
+// practise the same topic (content/fundamentals/related.json; keys that do not resolve are skipped). Absent
+// when the topic has no related units on this server.
+
+export const FundTopicDtoExt = FundTopicDto.extend({ related: z.array(api.UnitSummary).optional() }).strict();
+export type FundTopicDtoExt = z.infer<typeof FundTopicDtoExt>;
+
+export const FundamentalsResponseExt = FundamentalsResponse.extend({ topics: z.array(FundTopicDtoExt) }).strict();
+export type FundamentalsResponseExt = z.infer<typeof FundamentalsResponseExt>;
