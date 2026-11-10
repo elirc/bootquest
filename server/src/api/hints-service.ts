@@ -98,7 +98,10 @@ const REFUSALS: Readonly<Record<Exclude<HintLockReason, 'locked'>, { status: num
   'not-hintable': { status: 409, code: 'WRONG_UNIT_KIND', message: (id) => `unit ${id} serves no hints (drill / code-check units with more than one authored hint only)` },
   'needs-fail': { status: 409, code: 'NOT_ANSWERED', message: (id) => `unit ${id}: submit an attempt first; a hint opens after one failed submit` },
   passed: { status: 409, code: 'ALREADY_ANSWERED', message: (id) => `unit ${id} already has a verified pass; hints are for getting unstuck` },
-  exhausted: { status: 404, code: 'NOT_FOUND', message: (id) => `unit ${id}: every hint was taken; Reveal solution is the next step` },
+  // 409, not 404: the unit and its hints exist, the request conflicts with the ledger (every servable hint is
+  // already taken). ALREADY_ATTESTED is the existing "this once-only step is already done" code, distinct from
+  // `passed` (ALREADY_ANSWERED) so a client can tell the two apart without GET.
+  exhausted: { status: 409, code: 'ALREADY_ATTESTED', message: (id) => `unit ${id}: every hint was taken; Reveal solution is the next step` },
 };
 
 /** POST /units/:id/hint — records the next hint (append-only hint_taken row), then returns it. */

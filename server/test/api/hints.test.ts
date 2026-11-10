@@ -127,8 +127,8 @@ describe('GET /units/:id/hints + POST /units/:id/hint', () => {
     const second = HintTakenResponse.parse((await take(ids.drill!)).body);
     expect(second).toMatchObject({ taken: ['first nudge', 'second nudge'], nextAvailable: false, lockedReason: 'exhausted', xpPct: 50, hint: { index: 2, text: 'second nudge' } });
     const third = await take(ids.drill!);
-    expect(third.status).toBe(404);
-    expect(third.body.error.code).toBe('NOT_FOUND');
+    expect(third.status).toBe(409); // exhausted is a conflict with the ledger, never a 404
+    expect(third.body.error.code).toBe('ALREADY_ATTESTED');
     expect(rows()).toBe(2);
 
     // the last authored hint never leaves the server (hints endpoint, unit detail)
