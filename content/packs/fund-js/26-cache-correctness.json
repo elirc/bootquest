@@ -1,0 +1,243 @@
+{
+ "format": "bootquest-pack@1",
+ "source": "fund-js",
+ "course": {
+  "id": "26-cache-correctness",
+  "order": 26,
+  "title": "Cache correctness",
+  "description": "Cache-aside with TTLs and an injected clock, keys that include every input and cannot collide, stampedes and single-flight loading, and invalidating on write without re-caching stale rows.",
+  "prerequisites": []
+ },
+ "modules": [
+  {
+   "id": "26-cache-correctness",
+   "title": "Cache correctness",
+   "lessons": [
+    {
+     "id": "drills",
+     "title": "Cache correctness",
+     "explanation": "Cache-aside with TTLs and an injected clock, keys that include every input and cannot collide, stampedes and single-flight loading, and invalidating on write without re-caching stale rows."
+    }
+   ]
+  }
+ ],
+ "units": [
+  {
+   "unit": {
+    "key": "fund-js/26-cache-correctness/01-single-flight-ttl-cache",
+    "track": "js",
+    "kind": "drill",
+    "title": "cached: TTL cache with single-flight loads",
+    "phase": "26-cache-correctness",
+    "difficulty": 3,
+    "competencies": [
+     "language-fluency"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-js",
+       "language": "js",
+       "tests": [
+        {
+         "name": "a repeated read within the TTL loads once",
+         "code": "assert.equal(typeof mod.cached, 'function', 'export cached');\nlet t = 0;\nconst clock = { now: () => t };\nlet calls = 0;\nconst get = mod.cached(async (k) => { calls++; return 'feed:' + k; }, { ttl: 1000, clock });\nassert.equal(await get('home'), 'feed:home');\nt = 400;\nassert.equal(await get('home'), 'feed:home');\nassert.equal(calls, 1);"
+        },
+        {
+         "name": "50 concurrent misses share one load (stampede)",
+         "code": "let t = 0;\nconst clock = { now: () => t };\nlet calls = 0;\nlet release;\nconst gate = new Promise((r) => { release = r; });\nconst get = mod.cached(async () => { calls++; return gate; }, { ttl: 60000, clock });\nconst all = Array.from({ length: 50 }, () => get('home'));\nrelease(['post-1', 'post-2']);\nconst values = await Promise.all(all);\nassert.equal(calls, 1, '50 concurrent misses must share one load');\nassert.ok(values.every((v) => v.length === 2 && v[0] === 'post-1'));"
+        },
+        {
+         "name": "an entry expires exactly when its age reaches the TTL (boundary)",
+         "code": "let t = 1000;\nconst clock = { now: () => t };\nlet calls = 0;\nconst get = mod.cached(async (k) => { calls++; return k + calls; }, { ttl: 500, clock });\nassert.equal(await get('a'), 'a1');\nt = 1499;\nassert.equal(await get('a'), 'a1', 'age 499 is below the ttl of 500: still fresh');\nt = 1500;\nassert.equal(await get('a'), 'a2', 'age 500 has reached the ttl: expired');\nassert.equal(calls, 2);"
+        },
+        {
+         "name": "a failed load is shared by its waiters and never cached",
+         "code": "let t = 0;\nconst clock = { now: () => t };\nlet calls = 0;\nlet fail;\nconst gate = new Promise((_, reject) => { fail = reject; });\ngate.catch(() => {});\nconst fn = (k) => {\n  calls++;\n  return calls === 1 ? gate : Promise.resolve('ok:' + k);\n};\nconst get = mod.cached(fn, { ttl: 1000, clock });\nconst waiters = [get('k'), get('k'), get('k')];\nfail(new Error('db timeout'));\nconst settled = await Promise.allSettled(waiters);\nassert.deepEqual(settled.map((s) => s.status), ['rejected', 'rejected', 'rejected']);\nassert.ok(settled.every((s) => /db timeout/.test(s.reason.message)));\nassert.equal(calls, 1, 'the three waiters shared one load');\nassert.equal(await get('k'), 'ok:k', 'the next call must load again');\nassert.equal(calls, 2);"
+        },
+        {
+         "name": "0 and null are stored like any other value (trap)",
+         "code": "let t = 0;\nconst clock = { now: () => t };\nlet calls = 0;\nconst get = mod.cached(async (k) => { calls++; return k === 'count' ? 0 : null; }, { ttl: 1000, clock });\nassert.equal(await get('count'), 0);\nassert.equal(await get('count'), 0);\nassert.equal(await get('missing'), null);\nassert.equal(await get('missing'), null);\nassert.equal(calls, 2, 'a falsy value is still a cached value');"
+        },
+        {
+         "name": "different keys load and cache separately",
+         "code": "let t = 0;\nconst clock = { now: () => t };\nconst seen = [];\nconst get = mod.cached(async (k) => { seen.push(k); return k.toUpperCase(); }, { ttl: 1000, clock });\nassert.deepEqual(await Promise.all([get('a'), get('b'), get('a')]), ['A', 'B', 'A']);\nassert.deepEqual([...seen].sort(), ['a', 'b']);"
+        }
+       ],
+       "timeoutMs": 8000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "26-cache-correctness/01-single-flight-ttl-cache",
+    "type": "code",
+    "module": "26-cache-correctness",
+    "lesson": "drills",
+    "position": 0,
+    "skills": [
+     "caching",
+     "single-flight",
+     "promises"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "fund-js/26-cache-correctness/02-invalidate-on-write",
+    "track": "js",
+    "kind": "drill",
+    "title": "createUserService: fresh reads after writes",
+    "phase": "26-cache-correctness",
+    "difficulty": 3,
+    "competencies": [
+     "language-fluency"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-js",
+       "language": "js",
+       "tests": [
+        {
+         "name": "a second read is served from the cache",
+         "code": "assert.equal(typeof mod.createUserService, 'function', 'export createUserService');\nconst makeDb = (rows) => {\n  const data = new Map(rows.map((r) => [r.id, { ...r }]));\n  const db = { gets: 0, getHolds: [], updateHolds: [] };\n  db.get = async (id) => { db.gets++; const snap = data.has(id) ? { ...data.get(id) } : null; const hold = db.getHolds.shift(); if (hold) await hold; return snap; };\n  db.update = async (id, patch) => { const hold = db.updateHolds.shift(); if (hold) await hold; data.set(id, { ...data.get(id), ...patch }); };\n  return db;\n};\nconst db = makeDb([{ id: 1, email: 'old@x.io' }]);\nconst cache = new Map();\nconst svc = mod.createUserService({ db, cache });\nassert.deepEqual(await svc.getUser(1), { id: 1, email: 'old@x.io' });\nassert.deepEqual(await svc.getUser(1), { id: 1, email: 'old@x.io' });\nassert.equal(db.gets, 1);\nassert.ok(cache.has('user:1'), 'rows are cached under user:<id>');"
+        },
+        {
+         "name": "a read after a write returns the new row",
+         "code": "const makeDb = (rows) => {\n  const data = new Map(rows.map((r) => [r.id, { ...r }]));\n  const db = { gets: 0, getHolds: [], updateHolds: [] };\n  db.get = async (id) => { db.gets++; const snap = data.has(id) ? { ...data.get(id) } : null; const hold = db.getHolds.shift(); if (hold) await hold; return snap; };\n  db.update = async (id, patch) => { const hold = db.updateHolds.shift(); if (hold) await hold; data.set(id, { ...data.get(id), ...patch }); };\n  return db;\n};\nconst db = makeDb([{ id: 1, email: 'old@x.io' }]);\nconst svc = mod.createUserService({ db, cache: new Map() });\nawait svc.getUser(1);\nawait svc.updateUser(1, { email: 'new@x.io' });\nassert.equal((await svc.getUser(1)).email, 'new@x.io');"
+        },
+        {
+         "name": "a read during an unfinished write does not leave the old row cached",
+         "code": "const makeDb = (rows) => {\n  const data = new Map(rows.map((r) => [r.id, { ...r }]));\n  const db = { gets: 0, getHolds: [], updateHolds: [] };\n  db.get = async (id) => { db.gets++; const snap = data.has(id) ? { ...data.get(id) } : null; const hold = db.getHolds.shift(); if (hold) await hold; return snap; };\n  db.update = async (id, patch) => { const hold = db.updateHolds.shift(); if (hold) await hold; data.set(id, { ...data.get(id), ...patch }); };\n  return db;\n};\nconst db = makeDb([{ id: 1, email: 'old@x.io' }]);\nconst svc = mod.createUserService({ db, cache: new Map() });\nawait svc.getUser(1);\nlet commit;\ndb.updateHolds.push(new Promise((r) => { commit = r; }));\nconst writing = svc.updateUser(1, { email: 'new@x.io' });\nawait svc.getUser(1);\ncommit();\nawait writing;\nassert.equal((await svc.getUser(1)).email, 'new@x.io', 'the row read before the commit must not survive the write');"
+        },
+        {
+         "name": "a slow read that began before a write does not cache its old row (trap)",
+         "code": "const makeDb = (rows) => {\n  const data = new Map(rows.map((r) => [r.id, { ...r }]));\n  const db = { gets: 0, getHolds: [], updateHolds: [] };\n  db.get = async (id) => { db.gets++; const snap = data.has(id) ? { ...data.get(id) } : null; const hold = db.getHolds.shift(); if (hold) await hold; return snap; };\n  db.update = async (id, patch) => { const hold = db.updateHolds.shift(); if (hold) await hold; data.set(id, { ...data.get(id), ...patch }); };\n  return db;\n};\nconst db = makeDb([{ id: 1, email: 'old@x.io' }]);\nconst svc = mod.createUserService({ db, cache: new Map() });\nlet finishRead;\ndb.getHolds.push(new Promise((r) => { finishRead = r; }));\nconst slowRead = svc.getUser(1);\nawait svc.updateUser(1, { email: 'new@x.io' });\nfinishRead();\nawait slowRead;\nassert.equal((await svc.getUser(1)).email, 'new@x.io', 'the slow read stored the row it saw before the write');"
+        },
+        {
+         "name": "updating one user leaves other users cached",
+         "code": "const makeDb = (rows) => {\n  const data = new Map(rows.map((r) => [r.id, { ...r }]));\n  const db = { gets: 0, getHolds: [], updateHolds: [] };\n  db.get = async (id) => { db.gets++; const snap = data.has(id) ? { ...data.get(id) } : null; const hold = db.getHolds.shift(); if (hold) await hold; return snap; };\n  db.update = async (id, patch) => { const hold = db.updateHolds.shift(); if (hold) await hold; data.set(id, { ...data.get(id), ...patch }); };\n  return db;\n};\nconst db = makeDb([{ id: 1, email: 'a@x.io' }, { id: 2, email: 'b@x.io' }]);\nconst svc = mod.createUserService({ db, cache: new Map() });\nawait svc.getUser(1);\nawait svc.getUser(2);\nawait svc.updateUser(1, { email: 'a2@x.io' });\nawait svc.getUser(2);\nassert.equal(db.gets, 2, 'user 2 is still served from the cache');"
+        },
+        {
+         "name": "a missing user reads as null",
+         "code": "const makeDb = (rows) => {\n  const data = new Map(rows.map((r) => [r.id, { ...r }]));\n  const db = { gets: 0, getHolds: [], updateHolds: [] };\n  db.get = async (id) => { db.gets++; const snap = data.has(id) ? { ...data.get(id) } : null; const hold = db.getHolds.shift(); if (hold) await hold; return snap; };\n  db.update = async (id, patch) => { const hold = db.updateHolds.shift(); if (hold) await hold; data.set(id, { ...data.get(id), ...patch }); };\n  return db;\n};\nconst svc = mod.createUserService({ db: makeDb([]), cache: new Map() });\nassert.equal(await svc.getUser(42), null);"
+        }
+       ],
+       "timeoutMs": 8000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "26-cache-correctness/02-invalidate-on-write",
+    "type": "code",
+    "module": "26-cache-correctness",
+    "lesson": "drills",
+    "position": 1,
+    "skills": [
+     "cache invalidation",
+     "race conditions"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "fund-js/26-cache-correctness/03-collision-free-cache-key",
+    "track": "js",
+    "kind": "drill",
+    "title": "cacheKey: no collisions, normalised params",
+    "phase": "26-cache-correctness",
+    "difficulty": 2,
+    "competencies": [
+     "language-fluency"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-js",
+       "language": "js",
+       "tests": [
+        {
+         "name": "the same request with params in another order gives the same key",
+         "code": "assert.equal(typeof mod.cacheKey, 'function', 'export cacheKey');\nconst a = mod.cacheKey('t1', 'u9', { sort: 'name', page: 2 });\nassert.equal(typeof a, 'string');\nassert.equal(a, mod.cacheKey('t1', 'u9', { page: 2, sort: 'name' }));"
+        },
+        {
+         "name": "tenant and user are both part of the key",
+         "code": "const keys = new Set([\n  mod.cacheKey('t1', 'u1', { page: 1 }),\n  mod.cacheKey('t2', 'u1', { page: 1 }),\n  mod.cacheKey('t1', 'u2', { page: 1 }),\n  mod.cacheKey('t1', 'u1', { page: 2 }),\n]);\nassert.equal(keys.size, 4);"
+        },
+        {
+         "name": "a separator inside an id cannot forge another tenant's key",
+         "code": "assert.notEqual(mod.cacheKey('a:b', 'c', {}), mod.cacheKey('a', 'b:c', {}));\nassert.notEqual(mod.cacheKey('a|b', 'c', {}), mod.cacheKey('a', 'b|c', {}));\nassert.notEqual(mod.cacheKey('acme', '', { q: 'x' }), mod.cacheKey('acme:', '', { q: 'x' }));"
+        },
+        {
+         "name": "a param value cannot forge extra params",
+         "code": "assert.notEqual(mod.cacheKey('t', 'u', { q: 'a&z=1' }), mod.cacheKey('t', 'u', { q: 'a', z: '1' }));\nassert.notEqual(mod.cacheKey('t', 'u', { q: 'a=b' }), mod.cacheKey('t', 'u', { 'q=a': 'b' }));"
+        },
+        {
+         "name": "nested objects are normalised and still tell keys apart (trap)",
+         "code": "const open = mod.cacheKey('t', 'u', { filter: { status: 'open', owner: 'me' }, page: 1 });\nassert.equal(open, mod.cacheKey('t', 'u', { page: 1, filter: { owner: 'me', status: 'open' } }), 'nested key order must not matter');\nassert.notEqual(open, mod.cacheKey('t', 'u', { filter: { status: 'closed', owner: 'me' }, page: 1 }), 'different nested filters must not share a key');"
+        },
+        {
+         "name": "array order matters and undefined params count as absent",
+         "code": "assert.notEqual(mod.cacheKey('t', 'u', { ids: [1, 2] }), mod.cacheKey('t', 'u', { ids: [2, 1] }));\nassert.equal(mod.cacheKey('t', 'u', { page: 1, q: undefined }), mod.cacheKey('t', 'u', { page: 1 }));"
+        }
+       ],
+       "timeoutMs": 8000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "26-cache-correctness/03-collision-free-cache-key",
+    "type": "code",
+    "module": "26-cache-correctness",
+    "lesson": "drills",
+    "position": 2,
+    "skills": [
+     "cache keys",
+     "multi-tenancy",
+     "normalisation"
+    ]
+   }
+  }
+ ],
+ "content": {
+  "fund-js/26-cache-correctness/01-single-flight-ttl-cache": {
+   "instructions": "**Skills:** caching · single-flight · promises  \n**Level:** ★★★\n\n**Interview prompt.** \"Our home-feed query takes 300 ms, and every time its cache entry expires the database falls over. Write the cache wrapper.\"\n\n**Why it matters.** A plain \"check the cache, else load\" lets every concurrent miss run the same expensive load: a stampede. Single-flight makes concurrent misses share one load, the TTL bounds staleness, and a failed load must never be cached.\n\n**Your task.** Export `cached(fn, { ttl, clock })`. `fn(key)` returns a promise of the value and `clock.now()` returns the current time in ms. Return a function `get(key)` that returns a promise of the value:\n- a stored value is fresh while its age is less than `ttl` ms, its age counting from when its load resolved; at an age of exactly `ttl` it has expired\n- any resolved value, including `0` and `null`, is stored\n- concurrent calls for a key without a fresh value share ONE call of `fn(key)`\n- a rejected load is not stored: every caller waiting on it rejects with its error, and the next call loads again\n- different keys never share loads or values\n\n**Worked example.** With a `ttl` of 500, a value loaded at time 1000 is served from the cache at 1499 and loaded again at 1500.\n",
+   "starter": "export function cached(fn, { ttl, clock }) {\n  // TODO: store values with their load time, and share one in-flight load per key\n  return (key) => fn(key);\n}\n",
+   "solution": "export function cached(fn, { ttl, clock }) {\n  const values = new Map();\n  const inflight = new Map();\n  return function get(key) {\n    const hit = values.get(key);\n    if (hit && clock.now() - hit.storedAt < ttl) return Promise.resolve(hit.value);\n    const pending = inflight.get(key);\n    if (pending) return pending;\n    const load = Promise.resolve()\n      .then(() => fn(key))\n      .then((value) => {\n        values.set(key, { value, storedAt: clock.now() });\n        return value;\n      })\n      .finally(() => inflight.delete(key));\n    inflight.set(key, load);\n    return load;\n  };\n}\n",
+   "explanation": "Keep finished values with their load time, and a second map of loads still running:\n\n```js\nconst hit = values.get(key);\nif (hit && clock.now() - hit.storedAt < ttl) return Promise.resolve(hit.value);\nconst pending = inflight.get(key);\nif (pending) return pending;\nconst load = Promise.resolve()\n  .then(() => fn(key))\n  .then((value) => { values.set(key, { value, storedAt: clock.now() }); return value; })\n  .finally(() => inflight.delete(key));\ninflight.set(key, load);\nreturn load;\n```\n\nOnly a success reaches `values`; `finally` unregisters the load either way, so a failure is shared by its waiters and then forgotten. Starting `fn` inside `.then` also turns a loader that throws synchronously into a rejection instead of a stuck entry.\n\nThe tests catch three plausible-wrong versions: a cache without an in-flight map (50 concurrent misses run 50 loads), caching the promise itself (single-flight, but a rejection is then served for the whole TTL), and a truthy hit check with `<=` (reloads `0` and `null` on every call and serves a value one millisecond too long).",
+   "hints": [
+    "Single-flight: concurrent misses for the same key should wait on one shared load instead of each starting their own.",
+    "Keep two maps, one for finished values with the time they were stored and one for loads still running. A hit must be younger than the TTL. On a miss, reuse a running load if there is one, and otherwise start it and register it, store only a success, and unregister it when it settles either way.",
+    "Check the stored entry first and serve it while its age is strictly below the ttl, then hand back the pending promise for that key if one exists, and otherwise start the loader, record its promise, store the value with the current clock time on success, and remove the pending record whether it succeeded or failed."
+   ]
+  },
+  "fund-js/26-cache-correctness/02-invalidate-on-write": {
+   "instructions": "**Skills:** cache invalidation · race conditions  \n**Level:** ★★★\n\n**Interview prompt.** \"Users change their email and keep seeing the old one for ten minutes. Fix the profile cache.\"\n\n**Why it matters.** Cache-aside reads are easy; writes are where caches go stale. Deleting the key before the database write lets a concurrent reader put the old row straight back, and even write-then-delete has a gap: a slow read that began before the write can store the old row after the delete.\n\n**Your task.** Export `createUserService({ db, cache })` returning `{ getUser(id), updateUser(id, patch) }`, both async. `db.get(id)` resolves to the user row or `null`, `db.update(id, patch)` resolves once the row is written, and `cache` is a `Map` whose keys are `user:` followed by the id.\n- `getUser` returns the cached row when there is one; otherwise it reads the database, stores the row and returns it\n- `updateUser` writes the database first, and removes that user's cache entry once the write has finished\n- if an update of the same user finished while a read was waiting on the database, that read still returns its row but must NOT store it\n- other users' entries are never touched\n\n**Worked example.** `getUser(1)`, then `updateUser(1, { email: 'new@x.io' })`, then `getUser(1)`: the last call reads the database again and returns the new email.\n",
+   "starter": "export function createUserService({ db, cache }) {\n  // TODO: cache-aside reads; writes that leave no stale row behind\n  return {\n    async getUser(id) {\n      return db.get(id);\n    },\n    async updateUser(id, patch) {\n      await db.update(id, patch);\n    },\n  };\n}\n",
+   "solution": "export function createUserService({ db, cache }) {\n  const finishedWrites = new Map();\n  const keyOf = (id) => `user:${id}`;\n  const version = (id) => finishedWrites.get(id) ?? 0;\n  return {\n    async getUser(id) {\n      const key = keyOf(id);\n      if (cache.has(key)) return cache.get(key);\n      const before = version(id);\n      const row = await db.get(id);\n      if (version(id) === before) cache.set(key, row);\n      return row;\n    },\n    async updateUser(id, patch) {\n      await db.update(id, patch);\n      finishedWrites.set(id, version(id) + 1);\n      cache.delete(keyOf(id));\n    },\n  };\n}\n",
+   "explanation": "Write first, then delete; and let a read store its row only if no write of that user finished while it was waiting:\n\n```js\nasync getUser(id) {\n  const key = keyOf(id);\n  if (cache.has(key)) return cache.get(key);\n  const before = version(id);\n  const row = await db.get(id);\n  if (version(id) === before) cache.set(key, row);   // no write finished meanwhile\n  return row;\n},\nasync updateUser(id, patch) {\n  await db.update(id, patch);\n  finishedWrites.set(id, version(id) + 1);\n  cache.delete(keyOf(id));\n},\n```\n\nThe version check and `cache.set` run in the same synchronous step, so no write can slip between them.\n\nThe tests catch two plausible-wrong versions. Deleting the key BEFORE the write lets the read that arrives during the write miss, load the not-yet-updated row and cache it after the delete has already happened. Plain write-then-delete passes that test but fails the trap: a read that started before the write and finished after it stores the old row once the delete is over, and it stays for a full TTL.",
+   "hints": [
+    "Invalidate after the write commits, and protect the cache from slow reads that saw the data before the write.",
+    "Write first and drop the cached entry afterwards. To spot a slow read, keep a per-user count of finished writes: note it before reading, and store the row only if it has not changed when the read comes back.",
+    "In the update, await the database write, then bump that user's finished-write counter and delete the user's key. In the read, serve a cached hit, otherwise remember the counter, await the database, and set the key only if the counter still has the remembered value."
+   ]
+  },
+  "fund-js/26-cache-correctness/03-collision-free-cache-key": {
+   "instructions": "**Skills:** cache keys · multi-tenancy · normalisation  \n**Level:** ★★☆\n\n**Interview prompt.** \"Tenant B just saw tenant A's dashboard: the cache key was the report id. Write the key builder every cached endpoint must use.\"\n\n**Why it matters.** A cache key must contain every input that changes the response, and two different requests must never produce the same string. Gluing parts together with a separator lets one part forge another, and query parameters arrive in any order, so equal requests must still meet on one key.\n\n**Your task.** Export `cacheKey(tenant, user, params)` returning a string. `tenant` and `user` are strings; `params` is a plain object whose values are strings, numbers, booleans, `null`, arrays or nested plain objects.\n- equal inputs give equal keys, whatever the order of object keys at any depth\n- any difference in the tenant, the user or a param value gives a different key, including values that contain separator characters such as `:`, `|`, `&` or `=`\n- array order matters\n- a property whose value is `undefined` counts as absent\n\n**Worked example.** `cacheKey('t1', 'u9', { sort: 'name', page: 2 })` equals `cacheKey('t1', 'u9', { page: 2, sort: 'name' })`, and differs from `cacheKey('t2', 'u9', { page: 2, sort: 'name' })`.\n",
+   "starter": "export function cacheKey(tenant, user, params) {\n  // TODO: an unambiguous encoding of tenant, user and the normalised params\n  return 'key';\n}\n",
+   "solution": "const normalize = (value) => {\n  if (Array.isArray(value)) return value.map(normalize);\n  if (value !== null && typeof value === 'object') {\n    const out = {};\n    for (const k of Object.keys(value).sort()) {\n      if (value[k] !== undefined) out[k] = normalize(value[k]);\n    }\n    return out;\n  }\n  return value;\n};\n\nexport function cacheKey(tenant, user, params) {\n  return JSON.stringify([tenant, user, normalize(params)]);\n}\n",
+   "explanation": "Normalise the value recursively, then let JSON do the quoting:\n\n```js\nconst normalize = (value) => {\n  if (Array.isArray(value)) return value.map(normalize);\n  if (value !== null && typeof value === 'object') {\n    const out = {};\n    for (const k of Object.keys(value).sort()) if (value[k] !== undefined) out[k] = normalize(value[k]);\n    return out;\n  }\n  return value;\n};\nreturn JSON.stringify([tenant, user, normalize(params)]);\n```\n\nJSON quotes and escapes every string, so no part can contain a \"separator\" that forges another part.\n\nThe tests catch two plausible-wrong versions. Sorting with `JSON.stringify(params, Object.keys(params).sort())` passes the flat tests, but an array replacer is an allow-list applied at EVERY depth: `{ filter: { status: 'open' } }` serialises as `{\"filter\":{}}`, so every filter shares one key, and one user's filtered results are served for another filter. Joining with `:` and `&` lets `a:b` + `c` collide with `a` + `b:c`, and a value such as `a&z=1` forge an extra param.",
+   "hints": [
+    "A safe key is an unambiguous encoding of a normalised value, not a string glued together with separators.",
+    "Put the tenant, the user and the params into one structure, rebuild every nested object with its keys in sorted order and its undefined properties dropped, keep arrays in their order, and serialise the result with an encoding that quotes and escapes strings.",
+    "Write a recursive normaliser that maps arrays element by element and rebuilds plain objects from their sorted keys while skipping undefined values, then serialise an array of tenant, user and the normalised params as JSON."
+   ]
+  }
+ }
+}

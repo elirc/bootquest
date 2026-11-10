@@ -1,0 +1,263 @@
+{
+  "format": "fundamentals-authoring@1",
+  "track": "js",
+  "topic": "30-sql-schema-design-and-constraints",
+  "title": "SQL schema design and constraints",
+  "level": "advanced",
+  "summary": "Primary and foreign keys, NOT NULL, UNIQUE and CHECK as the last line of defence, what normalisation protects, and keeping a unique rule alive next to soft delete.",
+  "lesson": "## Keys\n\nEvery table needs a primary key: a value that identifies one row and never changes. A generated id (integer or UUID) is the safe choice, because business values that \"never change\" (an email, a SKU) do. Enforce the business rule separately, with `UNIQUE`.\n\n## Constraints are the last line of defence\n\nA check in application code races. Two requests both ask \"is this email taken?\", both see no row, both insert. Only the database sees every writer, so the rule belongs there.\n\n- `NOT NULL`: a value is required.\n- `UNIQUE`: no two rows are equal. NULLs count as different from each other, so a nullable unique column accepts many NULLs. Pair it with `NOT NULL`.\n- `CHECK (qty > 0)`: a rule for one row. A check fails only when it is false; with a NULL input the result is unknown and the row passes.\n- `REFERENCES users(id)`: a foreign key. No orphan rows, and by default a parent that still has children cannot be deleted. `ON DELETE CASCADE` deletes the children with it: choose that on purpose, never by habit.\n\n**Failure story.** Sign-up checked the email in code. A double-click sent two requests a few milliseconds apart and both passed the check. Two accounts shared one email, and \"reset password\" opened whichever row the query happened to return first.\n\nSQLite enforces foreign keys only on a connection where `PRAGMA foreign_keys = ON` has run (the SQLite library defaults to off; Node's `node:sqlite` turns it on). Postgres always enforces them.\n\n## Normalisation\n\nStore each fact once. If every order row carries a copy of the customer's email, a change of address updates one place and leaves the others stale. Put the fact in one table and point at it with a foreign key.\n\nA copy is correct when it records history. The price paid belongs on the order line.\n\n**Failure story.** Order lines stored only `product_id`, and invoices computed totals from the current `products.price`. The January price rise silently changed every past invoice, and the totals no longer matched what customers had paid.\n\n## Soft delete and unique rules\n\nSetting `deleted_at` in place of deleting a row keeps history, at a cost: every query must filter `deleted_at IS NULL`, and a plain `UNIQUE (email)` now stops a person from signing up again with the email of a deleted account. `UNIQUE (email, deleted_at)` does not help: live rows have a NULL there, NULLs are distinct, and two live rows with one email pass.\n\nUse a partial unique index, which covers only the rows that match its `WHERE`:\n\n```sql\nCREATE UNIQUE INDEX users_email_live\nON users (email) WHERE deleted_at IS NULL;\n```\n\nSQLite and Postgres both support this; MySQL does not. The same tool enforces \"at most one row of this kind per parent\", such as one primary address per customer.",
+  "quiz": [
+    {
+      "prompt": "A column is declared `email TEXT UNIQUE` and allows NULL. By default, how many rows with a NULL email can the table hold in SQLite and in Postgres?",
+      "choices": [
+        "None, because UNIQUE implies NOT NULL",
+        "At most one, because NULL equals NULL here",
+        "Any number, because NULLs count as distinct",
+        "At most one per transaction that inserts them"
+      ],
+      "answer": 2,
+      "explanation": "A unique constraint compares values, and a NULL is not equal to another NULL. Add NOT NULL when the value is required. (Postgres 15 can opt in to NULLS NOT DISTINCT.)"
+    },
+    {
+      "prompt": "Sign-up code runs a SELECT to see whether an email is taken and then runs the INSERT. Why is a UNIQUE constraint still needed?",
+      "choices": [
+        "Two concurrent requests can both pass the SELECT before either inserts",
+        "A SELECT cannot use an index, so the check is too slow to rely on",
+        "A SELECT in a transaction cannot see rows committed before it began",
+        "The equality test in a SELECT ignores letter case in every database"
+      ],
+      "answer": 0,
+      "explanation": "Check-then-insert is a race between requests. The constraint is evaluated by the database at write time, where both inserts meet."
+    },
+    {
+      "prompt": "A column is `qty INTEGER CHECK (qty > 0)` with no NOT NULL. What happens when a row is inserted with a NULL qty?",
+      "choices": [
+        "It is rejected, because NULL > 0 is not true",
+        "It is accepted, because the check is not false",
+        "It is accepted, and qty is stored as the number 0",
+        "It is rejected, because CHECK implies NOT NULL"
+      ],
+      "answer": 1,
+      "explanation": "NULL > 0 is unknown. A CHECK rejects a row only when the expression is false, so the NULL gets in unless the column is also NOT NULL."
+    },
+    {
+      "prompt": "An enforced foreign key has no ON DELETE clause. What happens when you delete a customer that orders still reference?",
+      "choices": [
+        "The delete is refused with a constraint error",
+        "The orders are deleted along with the customer",
+        "The orders stay, with customer_id set to NULL",
+        "The delete succeeds and the orders are orphaned"
+      ],
+      "answer": 0,
+      "explanation": "The default action refuses the delete. Removing the children is ON DELETE CASCADE and clearing the column is ON DELETE SET NULL; both must be asked for."
+    },
+    {
+      "prompt": "When does SQLite enforce a declared foreign key?",
+      "choices": [
+        "From the moment the table declares REFERENCES",
+        "When the table was created with the STRICT keyword",
+        "When the write runs inside an explicit transaction",
+        "When PRAGMA foreign_keys is ON for the connection"
+      ],
+      "answer": 3,
+      "explanation": "Enforcement is a per-connection setting that the SQLite library leaves off by default. Some drivers, node:sqlite among them, switch it on for you."
+    },
+    {
+      "prompt": "An order line stores `unit_price`, copied from the product row at purchase time. Is that a normalisation mistake?",
+      "choices": [
+        "Yes: one fact is now stored in two tables and will drift",
+        "Yes: a copied column cannot be protected by a foreign key",
+        "No: reading the product table is too slow for invoices",
+        "No: the price paid is a historical fact of its own"
+      ],
+      "answer": 3,
+      "explanation": "The catalogue price and the price paid are different facts. The second must stay fixed when the first changes, so it is stored with the order."
+    },
+    {
+      "prompt": "A users table has `deleted_at` (NULL while the user is live) and `UNIQUE (email, deleted_at)`. Two live rows are inserted with the same email. What happens?",
+      "choices": [
+        "The second insert fails, because both keys are equal",
+        "Both inserts succeed, because the NULLs are distinct",
+        "Both succeed, and the first row becomes soft-deleted",
+        "The second insert fails once deleted_at is indexed"
+      ],
+      "answer": 1,
+      "explanation": "Each key contains a NULL, and a unique constraint treats NULLs as different. A partial unique index over the live rows expresses the real rule."
+    },
+    {
+      "prompt": "Which declaration enforces \"at most one primary address per customer\" while allowing any number of non-primary ones?",
+      "choices": [
+        "`CREATE UNIQUE INDEX ... ON addresses (customer_id, is_primary)`",
+        "`CREATE TABLE addresses (..., CHECK (is_primary IN (0, 1)))`",
+        "`CREATE UNIQUE INDEX ... ON addresses (customer_id) WHERE is_primary = 1`",
+        "`CREATE UNIQUE INDEX ... ON addresses (is_primary) WHERE customer_id IS NOT NULL`"
+      ],
+      "answer": 2,
+      "explanation": "The partial index contains only primary rows, so customer_id is unique among those and unrestricted elsewhere. UNIQUE (customer_id, is_primary) would also limit each customer to one non-primary address."
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "Why enforce uniqueness in the database and not only in application code?",
+      "back": "Check-then-insert in code races between concurrent requests. The database is the one component that sees every write."
+    },
+    {
+      "front": "UNIQUE and NULL",
+      "back": "NULLs are treated as different from each other, so a nullable unique column can hold many of them. Add NOT NULL when a value is required."
+    },
+    {
+      "front": "What does a foreign key guarantee?",
+      "back": "Every child row points at an existing parent. Inserting an orphan fails, and deleting a referenced parent fails unless an ON DELETE action says otherwise."
+    },
+    {
+      "front": "CHECK and NULL",
+      "back": "A CHECK rejects a row only when its expression is false. A NULL input gives unknown, which passes, so combine CHECK with NOT NULL."
+    },
+    {
+      "front": "How do you keep a column unique among live rows when rows are soft-deleted?",
+      "back": "With a partial unique index on the column, restricted by WHERE deleted_at IS NULL. Deleted rows fall outside the index."
+    },
+    {
+      "front": "When is a copied value not a normalisation error?",
+      "back": "When it records what was true at the time, such as the unit price on an order line. It must stay fixed when the source row changes."
+    }
+  ],
+  "drills": [
+    {
+      "slug": "01-constraints-in-ddl",
+      "title": "Write DDL that rejects bad rows",
+      "difficulty": 2,
+      "skills": [
+        "NOT NULL",
+        "UNIQUE",
+        "FOREIGN KEY",
+        "CHECK"
+      ],
+      "instructions": "**Interview prompt.** \"Here are two tables with no constraints. Which bad rows can get in, and how do you stop them?\"\n\n**Why it matters.** Validation in application code runs in one code path and races with itself. A constraint runs for every writer: the API, the admin script, the migration, the colleague with a SQL console.\n\n**Your task.** Export `ddl`, a SQL string that creates two tables. The tests run it on a real in-memory SQLite database with foreign-key enforcement switched on, then try to insert bad rows. Keep these table and column names:\n- `users(id, email)` with `id INTEGER PRIMARY KEY`\n- `orders(id, user_id, qty)` with `id INTEGER PRIMARY KEY`\n\nThe database must reject:\n- a second user with an email that is already present\n- a user without an email\n- an order whose `user_id` matches no user, and an order without a `user_id`\n- an order whose `qty` is missing, zero or negative\n- deleting a user who still has orders\n\n**Worked example.** After `ddl` has run, inserting the email `ada@example.com` twice makes the second insert throw a constraint error, and the table still holds one row.",
+      "starter": "// TODO: add the constraints. Keep the table and column names.\nexport const ddl = `\n  CREATE TABLE users (\n    id INTEGER PRIMARY KEY,\n    email TEXT\n  );\n  CREATE TABLE orders (\n    id INTEGER PRIMARY KEY,\n    user_id INTEGER,\n    qty INTEGER\n  );\n`;\n",
+      "solution": "export const ddl = `\n  CREATE TABLE users (\n    id INTEGER PRIMARY KEY,\n    email TEXT NOT NULL UNIQUE\n  );\n  CREATE TABLE orders (\n    id INTEGER PRIMARY KEY,\n    user_id INTEGER NOT NULL REFERENCES users (id),\n    qty INTEGER NOT NULL CHECK (qty > 0)\n  );\n`;\n",
+      "tests": [
+        {
+          "name": "valid users and orders are accepted",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec('PRAGMA foreign_keys = ON');\nassert.equal(typeof mod.ddl, 'string', 'export const ddl = `...`');\ndb.exec(mod.ddl);\nconst addUser = (email) => db.prepare('INSERT INTO users (email) VALUES (?)').run(email).lastInsertRowid;\nconst addOrder = (userId, qty) => db.prepare('INSERT INTO orders (user_id, qty) VALUES (?, ?)').run(userId, qty);\nconst count = (table) => db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n;\nconst rejected = /constraint failed/;\nconst ada = addUser('ada@example.com');\nconst ben = addUser('ben@example.com');\naddOrder(ada, 1);\naddOrder(ada, 12);\naddOrder(ben, 3);\nassert.equal(count('users'), 2);\nassert.equal(count('orders'), 3);"
+        },
+        {
+          "name": "a duplicate email is rejected",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec('PRAGMA foreign_keys = ON');\nassert.equal(typeof mod.ddl, 'string', 'export const ddl = `...`');\ndb.exec(mod.ddl);\nconst addUser = (email) => db.prepare('INSERT INTO users (email) VALUES (?)').run(email).lastInsertRowid;\nconst addOrder = (userId, qty) => db.prepare('INSERT INTO orders (user_id, qty) VALUES (?, ?)').run(userId, qty);\nconst count = (table) => db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n;\nconst rejected = /constraint failed/;\naddUser('ada@example.com');\nassert.throws(() => addUser('ada@example.com'), rejected);\nassert.equal(count('users'), 1);"
+        },
+        {
+          "name": "a user without an email is rejected, even twice (trap)",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec('PRAGMA foreign_keys = ON');\nassert.equal(typeof mod.ddl, 'string', 'export const ddl = `...`');\ndb.exec(mod.ddl);\nconst addUser = (email) => db.prepare('INSERT INTO users (email) VALUES (?)').run(email).lastInsertRowid;\nconst addOrder = (userId, qty) => db.prepare('INSERT INTO orders (user_id, qty) VALUES (?, ?)').run(userId, qty);\nconst count = (table) => db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n;\nconst rejected = /constraint failed/;\nassert.throws(() => addUser(null), rejected);\nassert.throws(() => addUser(null), rejected);\nassert.equal(count('users'), 0);"
+        },
+        {
+          "name": "an order for a user that does not exist is rejected",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec('PRAGMA foreign_keys = ON');\nassert.equal(typeof mod.ddl, 'string', 'export const ddl = `...`');\ndb.exec(mod.ddl);\nconst addUser = (email) => db.prepare('INSERT INTO users (email) VALUES (?)').run(email).lastInsertRowid;\nconst addOrder = (userId, qty) => db.prepare('INSERT INTO orders (user_id, qty) VALUES (?, ?)').run(userId, qty);\nconst count = (table) => db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n;\nconst rejected = /constraint failed/;\naddUser('ada@example.com');\nassert.throws(() => addOrder(999, 1), rejected);\nassert.equal(count('orders'), 0);"
+        },
+        {
+          "name": "a quantity of zero or less is rejected, a quantity of 1 is fine (boundary)",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec('PRAGMA foreign_keys = ON');\nassert.equal(typeof mod.ddl, 'string', 'export const ddl = `...`');\ndb.exec(mod.ddl);\nconst addUser = (email) => db.prepare('INSERT INTO users (email) VALUES (?)').run(email).lastInsertRowid;\nconst addOrder = (userId, qty) => db.prepare('INSERT INTO orders (user_id, qty) VALUES (?, ?)').run(userId, qty);\nconst count = (table) => db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n;\nconst rejected = /constraint failed/;\nconst ada = addUser('ada@example.com');\nassert.throws(() => addOrder(ada, 0), rejected);\nassert.throws(() => addOrder(ada, -3), rejected);\naddOrder(ada, 1);\nassert.equal(count('orders'), 1);"
+        },
+        {
+          "name": "an order without a user or without a quantity is rejected",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec('PRAGMA foreign_keys = ON');\nassert.equal(typeof mod.ddl, 'string', 'export const ddl = `...`');\ndb.exec(mod.ddl);\nconst addUser = (email) => db.prepare('INSERT INTO users (email) VALUES (?)').run(email).lastInsertRowid;\nconst addOrder = (userId, qty) => db.prepare('INSERT INTO orders (user_id, qty) VALUES (?, ?)').run(userId, qty);\nconst count = (table) => db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n;\nconst rejected = /constraint failed/;\nconst ada = addUser('ada@example.com');\nassert.throws(() => addOrder(null, 1), rejected);\nassert.throws(() => addOrder(ada, null), rejected);\nassert.equal(count('orders'), 0);"
+        },
+        {
+          "name": "a user who still has orders cannot be deleted",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec('PRAGMA foreign_keys = ON');\nassert.equal(typeof mod.ddl, 'string', 'export const ddl = `...`');\ndb.exec(mod.ddl);\nconst addUser = (email) => db.prepare('INSERT INTO users (email) VALUES (?)').run(email).lastInsertRowid;\nconst addOrder = (userId, qty) => db.prepare('INSERT INTO orders (user_id, qty) VALUES (?, ?)').run(userId, qty);\nconst count = (table) => db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n;\nconst rejected = /constraint failed/;\nconst ada = addUser('ada@example.com');\naddOrder(ada, 2);\nassert.throws(() => db.prepare('DELETE FROM users WHERE id = ?').run(ada), rejected);\nassert.equal(count('users'), 1);\nassert.equal(count('orders'), 1);"
+        }
+      ],
+      "explanation": "```sql\nCREATE TABLE users (\n  id INTEGER PRIMARY KEY,\n  email TEXT NOT NULL UNIQUE\n);\nCREATE TABLE orders (\n  id INTEGER PRIMARY KEY,\n  user_id INTEGER NOT NULL REFERENCES users (id),\n  qty INTEGER NOT NULL CHECK (qty > 0)\n);\n```\n\nThe plausible wrong answer writes `UNIQUE`, `REFERENCES` and `CHECK` and stops there. All three let NULL through: unique treats NULLs as distinct (so any number of users without an email), a foreign key is not checked for a NULL child value, and `CHECK (qty > 0)` is unknown, not false, for a NULL quantity. The tests \"a user without an email\" and \"an order without a user or without a quantity\" catch it. `NOT NULL` closes each gap.\n\nThe default foreign-key action already refuses to delete a user with orders; `ON DELETE CASCADE` would delete their order history without a word. Remember that SQLite enforces foreign keys only on connections where `PRAGMA foreign_keys = ON` has run. The same DDL works in Postgres, where the id would be declared as an identity column.",
+      "hints": [
+        "Each rule in the list maps to one kind of column constraint, and most constraints say nothing about a missing value.",
+        "Go through the rejected rows one by one and name the constraint that stops each. Then ask of every constrained column what happens when the value is absent.",
+        "Make the email required and unique, make the order point at an existing user with a required reference, and require a quantity that a check keeps above zero. Leave the delete behaviour at its default."
+      ]
+    },
+    {
+      "slug": "02-unique-among-live-rows",
+      "title": "Unique email among users that are not soft-deleted",
+      "difficulty": 2,
+      "skills": [
+        "partial index",
+        "soft delete",
+        "UNIQUE and NULL"
+      ],
+      "instructions": "**Interview prompt.** \"We soft-delete users. Now nobody can sign up again with the email of a deleted account. Fix it without losing the unique rule.\"\n\n**Why it matters.** Soft delete changes what \"unique\" means: unique among the rows that are still alive. A plain unique constraint is too strict, and the obvious two-column constraint is not a constraint at all.\n\n**The table.** The tests create `users(id INTEGER PRIMARY KEY, email TEXT NOT NULL, deleted_at TEXT)`. A live user has a NULL `deleted_at`; deleting a user sets it to a timestamp.\n\n**Your task.** Export `index`, a SQL string holding one `CREATE UNIQUE INDEX` statement on `users`. The tests run it and then insert and update rows. After it:\n- two live users can never have the same email\n- a soft-deleted user does not block a new user with the same email\n- any number of soft-deleted rows may share an email, even with the same `deleted_at`\n- restoring a deleted user (setting `deleted_at` back to NULL) is rejected when a live user already has that email\n\n**Worked example.** Ada signs up, is soft-deleted, and signs up again: two rows with her email, one deleted and one live. A third sign-up with that email is rejected.",
+      "starter": "// TODO: replace this with ONE CREATE UNIQUE INDEX statement that covers live users only.\nexport const index = `\n  CREATE INDEX users_email ON users (email)\n`;\n",
+      "solution": "export const index = `\n  CREATE UNIQUE INDEX users_email_live ON users (email) WHERE deleted_at IS NULL\n`;\n",
+      "tests": [
+        {
+          "name": "live users with different emails are accepted",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec('CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL, deleted_at TEXT)');\nassert.equal(typeof mod.index, 'string', 'export const index = `...`');\ndb.exec(mod.index);\nconst add = (email, deletedAt = null) => db.prepare('INSERT INTO users (email, deleted_at) VALUES (?, ?)').run(email, deletedAt).lastInsertRowid;\nconst softDelete = (id, at) => db.prepare('UPDATE users SET deleted_at = ? WHERE id = ?').run(at, id);\nconst count = () => db.prepare('SELECT COUNT(*) AS n FROM users').get().n;\nconst rejected = /constraint failed/;\nadd('ada@example.com');\nadd('ben@example.com');\nassert.equal(count(), 2);\nconst indexes = db.prepare(\"SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'index' AND tbl_name = 'users'\").get().n;\nassert.equal(indexes, 1, 'mod.index creates exactly one index on users');"
+        },
+        {
+          "name": "a second live user with the same email is rejected",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec('CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL, deleted_at TEXT)');\nassert.equal(typeof mod.index, 'string', 'export const index = `...`');\ndb.exec(mod.index);\nconst add = (email, deletedAt = null) => db.prepare('INSERT INTO users (email, deleted_at) VALUES (?, ?)').run(email, deletedAt).lastInsertRowid;\nconst softDelete = (id, at) => db.prepare('UPDATE users SET deleted_at = ? WHERE id = ?').run(at, id);\nconst count = () => db.prepare('SELECT COUNT(*) AS n FROM users').get().n;\nconst rejected = /constraint failed/;\nadd('ada@example.com');\nassert.throws(() => add('ada@example.com'), rejected);\nassert.equal(count(), 1);"
+        },
+        {
+          "name": "a soft-deleted user does not block signing up again",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec('CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL, deleted_at TEXT)');\nassert.equal(typeof mod.index, 'string', 'export const index = `...`');\ndb.exec(mod.index);\nconst add = (email, deletedAt = null) => db.prepare('INSERT INTO users (email, deleted_at) VALUES (?, ?)').run(email, deletedAt).lastInsertRowid;\nconst softDelete = (id, at) => db.prepare('UPDATE users SET deleted_at = ? WHERE id = ?').run(at, id);\nconst count = () => db.prepare('SELECT COUNT(*) AS n FROM users').get().n;\nconst rejected = /constraint failed/;\nconst first = add('ada@example.com');\nsoftDelete(first, '2026-01-05T10:00:00Z');\nadd('ada@example.com');\nassert.equal(count(), 2);\nassert.throws(() => add('ada@example.com'), rejected, 'the new live row is protected again');"
+        },
+        {
+          "name": "several soft-deleted rows may share an email and a deletion time (boundary)",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec('CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL, deleted_at TEXT)');\nassert.equal(typeof mod.index, 'string', 'export const index = `...`');\ndb.exec(mod.index);\nconst add = (email, deletedAt = null) => db.prepare('INSERT INTO users (email, deleted_at) VALUES (?, ?)').run(email, deletedAt).lastInsertRowid;\nconst softDelete = (id, at) => db.prepare('UPDATE users SET deleted_at = ? WHERE id = ?').run(at, id);\nconst count = () => db.prepare('SELECT COUNT(*) AS n FROM users').get().n;\nconst rejected = /constraint failed/;\nadd('ada@example.com', '2026-01-05T10:00:00Z');\nadd('ada@example.com', '2026-01-05T10:00:00Z');\nadd('ada@example.com', '2026-02-01T08:00:00Z');\nadd('ada@example.com');\nassert.equal(count(), 4);"
+        },
+        {
+          "name": "restoring a deleted user whose email is live again is rejected (trap)",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec('CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL, deleted_at TEXT)');\nassert.equal(typeof mod.index, 'string', 'export const index = `...`');\ndb.exec(mod.index);\nconst add = (email, deletedAt = null) => db.prepare('INSERT INTO users (email, deleted_at) VALUES (?, ?)').run(email, deletedAt).lastInsertRowid;\nconst softDelete = (id, at) => db.prepare('UPDATE users SET deleted_at = ? WHERE id = ?').run(at, id);\nconst count = () => db.prepare('SELECT COUNT(*) AS n FROM users').get().n;\nconst rejected = /constraint failed/;\nconst old = add('ada@example.com');\nsoftDelete(old, '2026-01-05T10:00:00Z');\nadd('ada@example.com');\nassert.throws(() => softDelete(old, null), rejected);\nconst row = db.prepare('SELECT deleted_at FROM users WHERE id = ?').get(old);\nassert.equal(row.deleted_at, '2026-01-05T10:00:00Z');"
+        }
+      ],
+      "explanation": "```sql\nCREATE UNIQUE INDEX users_email_live ON users (email) WHERE deleted_at IS NULL\n```\n\nA partial index contains only the rows that satisfy its `WHERE`. Deleted rows are simply not in it, so they can repeat an email freely; live rows are all in it, so they cannot. An update that brings a row back into the index (a restore) is checked like an insert, which is why the trap test's restore fails.\n\nThe plausible wrong answer is `UNIQUE (email, deleted_at)`. It looks like \"unique per deletion state\", but every live row has a NULL in the second column and NULLs are distinct, so two live rows with one email are accepted: the test \"a second live user with the same email is rejected\" catches it. It also rejects two rows deleted at the same instant. A plain unique index on `email` fails the other way and blocks the new sign-up.\n\nThe statement is valid in Postgres as written. MySQL has no partial indexes; there the usual workaround is a generated column that is NULL for deleted rows.",
+      "hints": [
+        "An index does not have to contain every row of its table.",
+        "Describe in words which rows the unique rule applies to, and build the index over that subset only, leaving the others out.",
+        "Create a unique index on the email column and end the statement with a filter that keeps only rows whose deletion timestamp is NULL."
+      ]
+    },
+    {
+      "slug": "03-one-primary-address",
+      "title": "At most one primary address per customer",
+      "difficulty": 3,
+      "skills": [
+        "partial unique index",
+        "CHECK",
+        "schema repair"
+      ],
+      "instructions": "**Interview prompt.** \"Some customers have two primary addresses and the shipping label printer picks one at random. The code sets the flag correctly. How did this happen, and how do you make it impossible?\"\n\n**Why it matters.** \"Unset the old one, set the new one\" in application code is two statements. Two requests interleave, or one fails halfway, and the data breaks a rule that no line of the schema states.\n\n**The table.** The tests create `customers(id, name)` and then run your DDL. The starter holds the production schema of `addresses`: `is_primary` is a plain integer flag.\n\n**Your task.** Export `ddl`, a SQL string that creates `addresses(id, customer_id, line, is_primary)` (keep those names; `is_primary` stays an integer that defaults to 0) plus whatever else is needed so that:\n- a customer can have any number of addresses with `is_primary` 0\n- a customer can have at most one address with `is_primary` 1\n- different customers each have their own primary address\n- `is_primary` accepts no value other than 0 and 1\n- moving the primary flag works when the old address is cleared first; setting a second one without clearing is rejected\n\n**Worked example.** Ada has a primary address \"1 Main St\" and a second address \"9 Side Rd\". Inserting \"9 Side Rd\" with `is_primary` 1 is rejected; inserting it with 0 is accepted.",
+      "starter": "// TODO: nothing here stops a customer from having two primary addresses. Fix the schema.\nexport const ddl = `\n  CREATE TABLE addresses (\n    id INTEGER PRIMARY KEY,\n    customer_id INTEGER NOT NULL REFERENCES customers (id),\n    line TEXT NOT NULL,\n    is_primary INTEGER NOT NULL DEFAULT 0\n  );\n`;\n",
+      "solution": "export const ddl = `\n  CREATE TABLE addresses (\n    id INTEGER PRIMARY KEY,\n    customer_id INTEGER NOT NULL REFERENCES customers (id),\n    line TEXT NOT NULL,\n    is_primary INTEGER NOT NULL DEFAULT 0 CHECK (is_primary IN (0, 1))\n  );\n  CREATE UNIQUE INDEX addresses_one_primary ON addresses (customer_id) WHERE is_primary = 1;\n`;\n",
+      "tests": [
+        {
+          "name": "a customer can have several non-primary addresses",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec('PRAGMA foreign_keys = ON');\ndb.exec(\"CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT NOT NULL); INSERT INTO customers (id, name) VALUES (1, 'Ada'), (2, 'Ben');\");\nassert.equal(typeof mod.ddl, 'string', 'export const ddl = `...`');\ndb.exec(mod.ddl);\nconst add = (customerId, line, isPrimary) => db.prepare('INSERT INTO addresses (customer_id, line, is_primary) VALUES (?, ?, ?)').run(customerId, line, isPrimary).lastInsertRowid;\nconst primaries = (customerId) => db.prepare('SELECT line FROM addresses WHERE customer_id = ? AND is_primary = 1 ORDER BY id').all(customerId).map((r) => r.line);\nconst rejected = /constraint failed/;\nadd(1, '1 Main St', 0);\nadd(1, '9 Side Rd', 0);\nadd(1, '4 Mill Ln', 0);\ndb.prepare('INSERT INTO addresses (customer_id, line) VALUES (?, ?)').run(1, '7 Quay Rd');\nassert.equal(db.prepare('SELECT COUNT(*) AS n FROM addresses WHERE customer_id = 1 AND is_primary = 0').get().n, 4);"
+        },
+        {
+          "name": "one primary address next to other addresses is accepted",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec('PRAGMA foreign_keys = ON');\ndb.exec(\"CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT NOT NULL); INSERT INTO customers (id, name) VALUES (1, 'Ada'), (2, 'Ben');\");\nassert.equal(typeof mod.ddl, 'string', 'export const ddl = `...`');\ndb.exec(mod.ddl);\nconst add = (customerId, line, isPrimary) => db.prepare('INSERT INTO addresses (customer_id, line, is_primary) VALUES (?, ?, ?)').run(customerId, line, isPrimary).lastInsertRowid;\nconst primaries = (customerId) => db.prepare('SELECT line FROM addresses WHERE customer_id = ? AND is_primary = 1 ORDER BY id').all(customerId).map((r) => r.line);\nconst rejected = /constraint failed/;\nadd(1, '1 Main St', 1);\nadd(1, '9 Side Rd', 0);\nadd(1, '4 Mill Ln', 0);\nassert.deepEqual(primaries(1), ['1 Main St']);"
+        },
+        {
+          "name": "a second primary address for the same customer is rejected",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec('PRAGMA foreign_keys = ON');\ndb.exec(\"CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT NOT NULL); INSERT INTO customers (id, name) VALUES (1, 'Ada'), (2, 'Ben');\");\nassert.equal(typeof mod.ddl, 'string', 'export const ddl = `...`');\ndb.exec(mod.ddl);\nconst add = (customerId, line, isPrimary) => db.prepare('INSERT INTO addresses (customer_id, line, is_primary) VALUES (?, ?, ?)').run(customerId, line, isPrimary).lastInsertRowid;\nconst primaries = (customerId) => db.prepare('SELECT line FROM addresses WHERE customer_id = ? AND is_primary = 1 ORDER BY id').all(customerId).map((r) => r.line);\nconst rejected = /constraint failed/;\nadd(1, '1 Main St', 1);\nassert.throws(() => add(1, '9 Side Rd', 1), rejected);\nassert.deepEqual(primaries(1), ['1 Main St']);"
+        },
+        {
+          "name": "two customers each keep their own primary address",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec('PRAGMA foreign_keys = ON');\ndb.exec(\"CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT NOT NULL); INSERT INTO customers (id, name) VALUES (1, 'Ada'), (2, 'Ben');\");\nassert.equal(typeof mod.ddl, 'string', 'export const ddl = `...`');\ndb.exec(mod.ddl);\nconst add = (customerId, line, isPrimary) => db.prepare('INSERT INTO addresses (customer_id, line, is_primary) VALUES (?, ?, ?)').run(customerId, line, isPrimary).lastInsertRowid;\nconst primaries = (customerId) => db.prepare('SELECT line FROM addresses WHERE customer_id = ? AND is_primary = 1 ORDER BY id').all(customerId).map((r) => r.line);\nconst rejected = /constraint failed/;\nadd(1, '1 Main St', 1);\nadd(2, '5 High St', 1);\nassert.deepEqual(primaries(1), ['1 Main St']);\nassert.deepEqual(primaries(2), ['5 High St']);"
+        },
+        {
+          "name": "is_primary accepts no value other than 0 and 1 (trap)",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec('PRAGMA foreign_keys = ON');\ndb.exec(\"CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT NOT NULL); INSERT INTO customers (id, name) VALUES (1, 'Ada'), (2, 'Ben');\");\nassert.equal(typeof mod.ddl, 'string', 'export const ddl = `...`');\ndb.exec(mod.ddl);\nconst add = (customerId, line, isPrimary) => db.prepare('INSERT INTO addresses (customer_id, line, is_primary) VALUES (?, ?, ?)').run(customerId, line, isPrimary).lastInsertRowid;\nconst primaries = (customerId) => db.prepare('SELECT line FROM addresses WHERE customer_id = ? AND is_primary = 1 ORDER BY id').all(customerId).map((r) => r.line);\nconst rejected = /constraint failed/;\nassert.throws(() => add(1, '1 Main St', 2), rejected);\nassert.throws(() => add(1, '1 Main St', -1), rejected);\nassert.equal(db.prepare('SELECT COUNT(*) AS n FROM addresses').get().n, 0);"
+        },
+        {
+          "name": "the primary flag can move when the old one is cleared first (boundary)",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec('PRAGMA foreign_keys = ON');\ndb.exec(\"CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT NOT NULL); INSERT INTO customers (id, name) VALUES (1, 'Ada'), (2, 'Ben');\");\nassert.equal(typeof mod.ddl, 'string', 'export const ddl = `...`');\ndb.exec(mod.ddl);\nconst add = (customerId, line, isPrimary) => db.prepare('INSERT INTO addresses (customer_id, line, is_primary) VALUES (?, ?, ?)').run(customerId, line, isPrimary).lastInsertRowid;\nconst primaries = (customerId) => db.prepare('SELECT line FROM addresses WHERE customer_id = ? AND is_primary = 1 ORDER BY id').all(customerId).map((r) => r.line);\nconst rejected = /constraint failed/;\nconst oldId = add(1, '1 Main St', 1);\nconst newId = add(1, '9 Side Rd', 0);\nconst flag = db.prepare('UPDATE addresses SET is_primary = ? WHERE id = ?');\nassert.throws(() => flag.run(1, newId), rejected, 'two primaries at once');\ndb.exec('BEGIN');\nflag.run(0, oldId);\nflag.run(1, newId);\ndb.exec('COMMIT');\nassert.deepEqual(primaries(1), ['9 Side Rd']);"
+        }
+      ],
+      "explanation": "```sql\nCREATE TABLE addresses (\n  id INTEGER PRIMARY KEY,\n  customer_id INTEGER NOT NULL REFERENCES customers (id),\n  line TEXT NOT NULL,\n  is_primary INTEGER NOT NULL DEFAULT 0 CHECK (is_primary IN (0, 1))\n);\nCREATE UNIQUE INDEX addresses_one_primary ON addresses (customer_id) WHERE is_primary = 1;\n```\n\nThe partial index holds only the primary rows, and inside it `customer_id` must be unique: one primary per customer, no limit on the rest.\n\nThe plausible wrong answer is the table constraint `UNIQUE (customer_id, is_primary)`. It does stop a second primary, but it equally stops a second NON-primary address, because the pair (1, 0) may also appear only once. The first test catches it.\n\nThe `CHECK` matters too. Without it a row with `is_primary = 2` is outside the index, yet application code that tests the flag for truthiness treats it as primary: the rule is broken again through a side door. The trap test catches a schema that leaves it out.\n\nMoving the flag takes two updates in one transaction, old row first. In Postgres the column would be a boolean and the index would end in `WHERE is_primary`. Another sound design drops the flag and stores `primary_address_id` on the customer row.",
+      "hints": [
+        "A unique rule can apply to a subset of the rows in a table.",
+        "State the rule as: among the rows flagged as primary, each customer appears once. Then make sure the flag itself cannot hold a value outside the two you expect.",
+        "Add a check that limits the flag to zero or one, and create a unique index on the customer id that is filtered to rows where the flag equals one."
+      ]
+    }
+  ]
+}

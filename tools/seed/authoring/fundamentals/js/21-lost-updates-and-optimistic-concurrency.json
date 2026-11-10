@@ -1,0 +1,263 @@
+{
+  "format": "fundamentals-authoring@1",
+  "track": "js",
+  "topic": "21-lost-updates-and-optimistic-concurrency",
+  "title": "Lost updates and optimistic concurrency",
+  "level": "advanced",
+  "summary": "Check-then-act races across awaits, version columns and conditional writes, 409 and 412 for stale edits, and bounded retries that re-read.",
+  "lesson": "## The lost update\n\nTwo requests read the same row, each changes its own copy, and each writes it back. The second write silently overwrites the first. Nothing throws, both callers get a 200, and one change is gone.\n\n**Story 1: the last seat.** A booking handler runs:\n\n```js\nconst seat = await db.get(id);\nif (seat.heldBy === null) await db.put(id, { ...seat, heldBy: user });\n```\n\nTwo customers click at the same moment. Both reads see a free seat, both checks pass, both writes succeed. Two confirmation emails, one seat.\n\n**Story 2: the edit form.** Ann opens a product at 09:00 and fixes the price. Bob opened the same form at 08:55 and saves a new description at 09:01. His form still holds the old price, so his full-row save puts it back.\n\n## Why one thread does not save you\n\nNode runs one piece of JavaScript at a time, but every `await` is a gap in which other requests run. Read, check, write is a **check-then-act** race: the fact you checked can be false by the time you act. Reading a second time just before the write only narrows the gap.\n\n## Optimistic concurrency: a version column\n\nGive each row a `version` number. Every write states the version it was based on, and the database applies it only if that is still the stored version:\n\n```sql\nUPDATE seats SET held_by = ?, version = version + 1\nWHERE id = ? AND version = ?\n```\n\nThe check and the write are ONE statement, so nothing can slip between them. Then read the affected-row count: 1 means you won, 0 means somebody else wrote first or the row is gone. Ignoring that count brings the bug back.\n\nIt is called optimistic because nothing is locked while the user thinks; conflicts are detected at write time. A pessimistic lock (`SELECT ... FOR UPDATE`) makes other writers wait instead. That suits short transactions, never a form left open over lunch.\n\n## Telling the client: 409 and 412\n\nThe client sends the version it edited, in the body or as an `If-Match` header carrying the ETag it was given. A stale version gets **409 Conflict** with the current row, so the UI can say \"this changed while you were editing\". APIs built on `If-Match` answer **412 Precondition Failed** instead. Never apply the write anyway.\n\n## Bounded retry\n\nWhen the server itself computes the change (decrement stock, add a like), it can retry on a conflict. Two rules:\n\n- Retry the whole read-modify-write. Reusing the first read retries a write that can never succeed; reusing its computed values erases the other writer's change.\n- Cap the attempts (3 to 5), then return the conflict. An unbounded loop under heavy contention is an outage.\n\nDo not retry on behalf of a human edit: only the user can decide how two edits merge.",
+  "quiz": [
+    {
+      "prompt": "A handler reads a seat, checks that it is free, then saves the reservation with an unconditional write. Two requests arrive together. What can happen?",
+      "choices": [
+        "The second request waits until the first handler has finished",
+        "The second write fails with a duplicate-key error from the database",
+        "Both checks pass and both requests report a successful booking",
+        "Node throws a concurrency error when the second read starts"
+      ],
+      "answer": 2,
+      "explanation": "Both reads happen before either write, so both see a free seat. Nothing in an unconditional write notices the other request."
+    },
+    {
+      "prompt": "Why can a single-threaded Node server still lose an update?",
+      "choices": [
+        "Other requests run during each await between the read and the write",
+        "Worker threads share every variable that the request handler declares",
+        "The event loop runs two callbacks at once when both are ready",
+        "Promises settle in a random order when the server is under load"
+      ],
+      "answer": 0,
+      "explanation": "One callback runs at a time, but a handler is many callbacks. Each await hands control to other requests, which can change the row you read."
+    },
+    {
+      "prompt": "`UPDATE docs SET body = ?, version = version + 1 WHERE id = ? AND version = ?` reports 0 affected rows. What does that tell the handler?",
+      "choices": [
+        "The write was applied, but the body was already identical",
+        "The statement was rolled back after a deadlock with another writer",
+        "The version column overflowed and wrapped around to zero",
+        "Nothing was written: the row is gone or its version has moved on"
+      ],
+      "answer": 3,
+      "explanation": "The WHERE clause matched no row, so no row changed. The handler must report that instead of answering as if the save worked."
+    },
+    {
+      "prompt": "A client saves an edit based on version 3, but the row is now at version 5. Which response fits?",
+      "choices": [
+        "200 OK, with the edit applied on top of version 5 as it stands",
+        "409 Conflict, with the current row so the user can redo the edit",
+        "404 Not Found, because version 3 of the row no longer exists",
+        "503 Service Unavailable, so the client resends the same body later"
+      ],
+      "answer": 1,
+      "explanation": "The edit was made against data that has changed. Applying it would erase two other saves; resending the same body can never succeed."
+    },
+    {
+      "prompt": "Why is version checking called optimistic concurrency control?",
+      "choices": [
+        "It assumes writes succeed, so it skips checking their results",
+        "It takes no lock while editing and detects conflicts at write time",
+        "It locks the row early, expecting the transaction to stay short",
+        "It lets the last writer win, expecting edits to overlap rarely"
+      ],
+      "answer": 1,
+      "explanation": "The optimism is about conflicts being rare, so nobody waits on a lock. The write still verifies, and a mismatch is reported."
+    },
+    {
+      "prompt": "A server-side stock decrement hits a version conflict and retries. What must each retry do?",
+      "choices": [
+        "Resend the same row with its version number raised by one",
+        "Wait a moment, then repeat the identical write statement",
+        "Switch to an unconditional write so that the retry cannot fail again",
+        "Read the row again and recompute the change from fresh values"
+      ],
+      "answer": 3,
+      "explanation": "The first read is out of date. A retry built on it either fails again or, with a bumped version, erases the other writer's change."
+    },
+    {
+      "prompt": "Why cap the number of conflict retries?",
+      "choices": [
+        "Under heavy contention an uncapped loop can spin without ever finishing",
+        "The database rejects a version number that has been tried three times",
+        "Each retry doubles the version, which overflows after a few attempts",
+        "HTTP forbids a server from repeating a write more than five times"
+      ],
+      "answer": 0,
+      "explanation": "Every failed attempt is another read and write on a row that is already hot. A cap turns that into a prompt, honest conflict response."
+    },
+    {
+      "prompt": "A handler re-reads the row just before writing, sees the seat is still free, then does an unconditional write. Is the race gone?",
+      "choices": [
+        "Yes, because the second read sees every earlier write",
+        "Yes, as long as both reads return the same version number",
+        "No, another request can still write between that read and the write",
+        "No, but only because the second read may be served from a stale cache"
+      ],
+      "answer": 2,
+      "explanation": "A second check only narrows the gap. The gap closes when the check and the write are one conditional operation."
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "What is a lost update?",
+      "back": "Two writers read the same row, each modifies its own copy and writes it back; the later write silently erases the earlier one."
+    },
+    {
+      "front": "What is a check-then-act race?",
+      "back": "Code tests a condition and acts on it in separate steps, and the condition stops being true in the gap between them."
+    },
+    {
+      "front": "How does a version column prevent lost updates?",
+      "back": "The UPDATE names the version you read in its WHERE clause and increments it; if the stored version differs, zero rows change and you report a conflict."
+    },
+    {
+      "front": "Optimistic versus pessimistic concurrency",
+      "back": "Optimistic: no lock, verify when writing, suits rare conflicts and long edits. Pessimistic: lock the row first so others wait, suits short hot transactions."
+    },
+    {
+      "front": "Which status codes report a stale write?",
+      "back": "409 Conflict when the version travels in the body; 412 Precondition Failed when the client sent If-Match with an ETag."
+    },
+    {
+      "front": "Rules for retrying after a version conflict",
+      "back": "Repeat the whole read-modify-write starting with a new read, limit the attempts, and never auto-retry a human's edit."
+    }
+  ],
+  "drills": [
+    {
+      "slug": "01-reserve-the-last-seat",
+      "title": "reserveSeat: two callers, one seat",
+      "difficulty": 2,
+      "skills": [
+        "check-then-act",
+        "conditional write"
+      ],
+      "instructions": "**Interview prompt.** \"Two customers click Reserve on the last seat in the same millisecond. Walk me through your handler.\"\n\n**Why it matters.** Read, check, write is three steps with gaps between them. The store in this drill yields at every call, exactly like a database driver, so two callers really do interleave.\n\n**Your task.** Export `async reserveSeat(store, seatId, userId)`. The injected `store` has three async methods:\n- `store.get(id)` resolves to a copy of the seat `{ id, heldBy, version }`, or `null`\n- `store.put(id, row)` overwrites the row unconditionally\n- `store.putIfVersion(id, row, expectedVersion)` writes only if the stored version still equals `expectedVersion`, and resolves to `true` or `false`\n\nRules:\n- unknown seat: resolve to `{ ok: false, reason: 'not-found' }`\n- a seat whose `heldBy` is not `null`: `{ ok: false, reason: 'taken' }`, with no write attempted\n- a free seat: store it with `heldBy` set to `userId` and `version` one higher, and resolve to `{ ok: true }`\n- when several callers race for one free seat, exactly ONE gets `{ ok: true }`; the others get `{ ok: false, reason: 'taken' }`\n\n**Worked example.** With the seat `{ id: 'A1', heldBy: null, version: 1 }`, calls for `'ann'` and `'bob'` started together resolve to one success and one `'taken'`, and the stored seat is version 2, held by the winner.",
+      "starter": "// store.get(id)                               -> Promise<{ id, heldBy, version } | null>\n// store.put(id, row)                          -> Promise<void>     (unconditional)\n// store.putIfVersion(id, row, expectedVersion) -> Promise<boolean>  (false = version moved on)\nexport async function reserveSeat(store, seatId, userId) {\n  // TODO: reserve the seat for userId; racing callers must not both win\n}\n",
+      "solution": "export async function reserveSeat(store, seatId, userId) {\n  const seat = await store.get(seatId);\n  if (!seat) return { ok: false, reason: 'not-found' };\n  if (seat.heldBy !== null) return { ok: false, reason: 'taken' };\n  const next = { ...seat, heldBy: userId, version: seat.version + 1 };\n  const won = await store.putIfVersion(seatId, next, seat.version);\n  return won ? { ok: true } : { ok: false, reason: 'taken' };\n}\n",
+      "tests": [
+        {
+          "name": "a free seat is reserved and its version moves on",
+          "code": "const makeStore = (rows) => {\n  const data = new Map(rows.map((r) => [r.id, { ...r }]));\n  const log = [];\n  return {\n    log,\n    peek: (id) => data.get(id),\n    async get(id) { await null; log.push('get'); const r = data.get(id); return r ? { ...r } : null; },\n    async put(id, row) { await null; log.push('put'); data.set(id, { ...row }); },\n    async putIfVersion(id, row, expected) {\n      await null;\n      const cur = data.get(id);\n      if (!cur || cur.version !== expected) { log.push('conflict'); return false; }\n      log.push('write');\n      data.set(id, { ...row });\n      return true;\n    },\n  };\n};\nassert.equal(typeof mod.reserveSeat, 'function', 'export reserveSeat');\nconst store = makeStore([{ id: 'A1', heldBy: null, version: 1 }]);\nconst r = await mod.reserveSeat(store, 'A1', 'ann');\nassert.equal(r.ok, true);\nassert.deepEqual(store.peek('A1'), { id: 'A1', heldBy: 'ann', version: 2 });"
+        },
+        {
+          "name": "two interleaved callers: exactly one wins",
+          "code": "const makeStore = (rows) => {\n  const data = new Map(rows.map((r) => [r.id, { ...r }]));\n  const log = [];\n  return {\n    log,\n    peek: (id) => data.get(id),\n    async get(id) { await null; log.push('get'); const r = data.get(id); return r ? { ...r } : null; },\n    async put(id, row) { await null; log.push('put'); data.set(id, { ...row }); },\n    async putIfVersion(id, row, expected) {\n      await null;\n      const cur = data.get(id);\n      if (!cur || cur.version !== expected) { log.push('conflict'); return false; }\n      log.push('write');\n      data.set(id, { ...row });\n      return true;\n    },\n  };\n};\nconst store = makeStore([{ id: 'A1', heldBy: null, version: 1 }]);\nconst users = ['ann', 'bob'];\nconst results = await Promise.all(users.map((u) => mod.reserveSeat(store, 'A1', u)));\nconst winners = users.filter((u, i) => results[i].ok === true);\nassert.equal(winners.length, 1, 'winners: ' + JSON.stringify(results));\nconst loser = results.find((r) => r.ok !== true);\nassert.deepEqual(loser, { ok: false, reason: 'taken' });\nassert.deepEqual(store.peek('A1'), { id: 'A1', heldBy: winners[0], version: 2 });"
+        },
+        {
+          "name": "five interleaved callers still give one winner and one stored write (trap: checking twice is not enough)",
+          "code": "const makeStore = (rows) => {\n  const data = new Map(rows.map((r) => [r.id, { ...r }]));\n  const log = [];\n  return {\n    log,\n    peek: (id) => data.get(id),\n    async get(id) { await null; log.push('get'); const r = data.get(id); return r ? { ...r } : null; },\n    async put(id, row) { await null; log.push('put'); data.set(id, { ...row }); },\n    async putIfVersion(id, row, expected) {\n      await null;\n      const cur = data.get(id);\n      if (!cur || cur.version !== expected) { log.push('conflict'); return false; }\n      log.push('write');\n      data.set(id, { ...row });\n      return true;\n    },\n  };\n};\nconst store = makeStore([{ id: 'B7', heldBy: null, version: 4 }]);\nconst users = ['u1', 'u2', 'u3', 'u4', 'u5'];\nconst results = await Promise.all(users.map((u) => mod.reserveSeat(store, 'B7', u)));\nassert.equal(results.filter((r) => r.ok === true).length, 1, JSON.stringify(results));\nassert.equal(results.filter((r) => r.ok === false && r.reason === 'taken').length, 4);\nassert.equal(store.log.filter((e) => e === 'write' || e === 'put').length, 1, 'rows written: ' + store.log.join(','));\nassert.equal(store.peek('B7').version, 5);"
+        },
+        {
+          "name": "a seat that is already held is refused without a write",
+          "code": "const makeStore = (rows) => {\n  const data = new Map(rows.map((r) => [r.id, { ...r }]));\n  const log = [];\n  return {\n    log,\n    peek: (id) => data.get(id),\n    async get(id) { await null; log.push('get'); const r = data.get(id); return r ? { ...r } : null; },\n    async put(id, row) { await null; log.push('put'); data.set(id, { ...row }); },\n    async putIfVersion(id, row, expected) {\n      await null;\n      const cur = data.get(id);\n      if (!cur || cur.version !== expected) { log.push('conflict'); return false; }\n      log.push('write');\n      data.set(id, { ...row });\n      return true;\n    },\n  };\n};\nconst store = makeStore([{ id: 'A1', heldBy: 'zed', version: 3 }]);\nassert.deepEqual(await mod.reserveSeat(store, 'A1', 'ann'), { ok: false, reason: 'taken' });\nassert.deepEqual(store.log, ['get']);\nassert.deepEqual(store.peek('A1'), { id: 'A1', heldBy: 'zed', version: 3 });"
+        },
+        {
+          "name": "an unknown seat is not-found and nothing is created",
+          "code": "const makeStore = (rows) => {\n  const data = new Map(rows.map((r) => [r.id, { ...r }]));\n  const log = [];\n  return {\n    log,\n    peek: (id) => data.get(id),\n    async get(id) { await null; log.push('get'); const r = data.get(id); return r ? { ...r } : null; },\n    async put(id, row) { await null; log.push('put'); data.set(id, { ...row }); },\n    async putIfVersion(id, row, expected) {\n      await null;\n      const cur = data.get(id);\n      if (!cur || cur.version !== expected) { log.push('conflict'); return false; }\n      log.push('write');\n      data.set(id, { ...row });\n      return true;\n    },\n  };\n};\nconst store = makeStore([{ id: 'A1', heldBy: null, version: 1 }]);\nassert.deepEqual(await mod.reserveSeat(store, 'Z9', 'ann'), { ok: false, reason: 'not-found' });\nassert.equal(store.peek('Z9'), undefined);\nassert.deepEqual(store.log, ['get']);"
+        },
+        {
+          "name": "callers racing for different seats all succeed",
+          "code": "const makeStore = (rows) => {\n  const data = new Map(rows.map((r) => [r.id, { ...r }]));\n  const log = [];\n  return {\n    log,\n    peek: (id) => data.get(id),\n    async get(id) { await null; log.push('get'); const r = data.get(id); return r ? { ...r } : null; },\n    async put(id, row) { await null; log.push('put'); data.set(id, { ...row }); },\n    async putIfVersion(id, row, expected) {\n      await null;\n      const cur = data.get(id);\n      if (!cur || cur.version !== expected) { log.push('conflict'); return false; }\n      log.push('write');\n      data.set(id, { ...row });\n      return true;\n    },\n  };\n};\nconst store = makeStore([{ id: 'A1', heldBy: null, version: 1 }, { id: 'A2', heldBy: null, version: 1 }]);\nconst [a, b] = await Promise.all([mod.reserveSeat(store, 'A1', 'ann'), mod.reserveSeat(store, 'A2', 'bob')]);\nassert.equal(a.ok, true);\nassert.equal(b.ok, true);\nassert.equal(store.peek('A1').heldBy, 'ann');\nassert.equal(store.peek('A2').heldBy, 'bob');"
+        }
+      ],
+      "explanation": "The check stays, but it no longer decides the winner. The conditional write does:\n\n```js\nconst seat = await store.get(seatId);\nif (!seat) return { ok: false, reason: 'not-found' };\nif (seat.heldBy !== null) return { ok: false, reason: 'taken' };\nconst next = { ...seat, heldBy: userId, version: seat.version + 1 };\nconst won = await store.putIfVersion(seatId, next, seat.version);\nreturn won ? { ok: true } : { ok: false, reason: 'taken' };\n```\n\nBoth racers read version 1. The first conditional write moves the row to version 2, so the second one finds a different version and is refused. This is the application-side form of `UPDATE ... WHERE id = ? AND version = ?` followed by reading the affected-row count.\n\n**What the tests catch.** The plausible wrong answer is read, check, `store.put`: with two interleaved callers both checks pass and both report success. Reading the seat a second time just before `put` fails the same tests, because both second reads still happen before either write.",
+      "hints": [
+        "This is a check-then-act race: the seat can stop being free between your read and your write.",
+        "Make the write itself conditional on the row being unchanged since you read it, and let the outcome of that write decide who won.",
+        "Read the seat, refuse early when it is missing or held, then send the new row through the store method that compares versions and treat a false answer as taken."
+      ]
+    },
+    {
+      "slug": "02-update-if-version",
+      "title": "updateIfVersion: stale edits get a 409",
+      "difficulty": 3,
+      "skills": [
+        "optimistic concurrency",
+        "409 Conflict"
+      ],
+      "instructions": "**Interview prompt.** \"Two editors save the same document. Implement the update so the second save cannot silently erase the first.\"\n\n**Why it matters.** This is the handler behind every edit form that sends back the version it loaded. It needs three answers (saved, gone, changed underneath you), and the third has to hold even when the two saves overlap.\n\n**Your task.** Export `async updateIfVersion(store, id, patch, version)`. `version` is the number the client's edit was based on. The `store` is the same as in the previous drill: async `get(id)`, `put(id, row)` and `putIfVersion(id, row, expectedVersion)`. Resolve to:\n- `{ status: 404 }` when the row does not exist\n- `{ status: 409, current }` when the stored version is not exactly `version` (older OR newer); `current` is the row as stored now, and nothing is written\n- `{ status: 200, row }` otherwise, where `row` is what you stored: the old row with the patch's fields applied and `version` one higher\n\nAlso:\n- a patch can never change `id` or `version`: ignore those two fields when they are present\n- if another writer gets in between your read and your write, that is also a 409 carrying the row as stored now, never a second 200\n\n**Worked example.** Stored `{ id: 'd1', title: 'Old', body: 'b', version: 3 }`. `updateIfVersion(store, 'd1', { title: 'New' }, 3)` resolves to status 200 with `{ id: 'd1', title: 'New', body: 'b', version: 4 }`. The same call with version 2 resolves to status 409 and writes nothing.",
+      "starter": "// store.get(id)                               -> Promise<row | null>\n// store.put(id, row)                          -> Promise<void>     (unconditional)\n// store.putIfVersion(id, row, expectedVersion) -> Promise<boolean>  (false = version moved on)\nexport async function updateIfVersion(store, id, patch, version) {\n  // TODO: 404 when missing, 409 with the current row when stale, 200 with the stored row\n}\n",
+      "solution": "export async function updateIfVersion(store, id, patch, version) {\n  const current = await store.get(id);\n  if (!current) return { status: 404 };\n  if (current.version !== version) return { status: 409, current };\n  const { id: _id, version: _version, ...fields } = patch;\n  const row = { ...current, ...fields, version: current.version + 1 };\n  if (await store.putIfVersion(id, row, version)) return { status: 200, row };\n  return { status: 409, current: await store.get(id) };\n}\n",
+      "tests": [
+        {
+          "name": "a matching version applies the patch and bumps the version",
+          "code": "const makeStore = (rows) => {\n  const data = new Map(rows.map((r) => [r.id, { ...r }]));\n  const log = [];\n  return {\n    log,\n    peek: (id) => data.get(id),\n    async get(id) { await null; log.push('get'); const r = data.get(id); return r ? { ...r } : null; },\n    async put(id, row) { await null; log.push('put'); data.set(id, { ...row }); },\n    async putIfVersion(id, row, expected) {\n      await null;\n      const cur = data.get(id);\n      if (!cur || cur.version !== expected) { log.push('conflict'); return false; }\n      log.push('write');\n      data.set(id, { ...row });\n      return true;\n    },\n  };\n};\nassert.equal(typeof mod.updateIfVersion, 'function', 'export updateIfVersion');\nconst store = makeStore([{ id: 'd1', title: 'Old', body: 'b', version: 3 }]);\nconst r = await mod.updateIfVersion(store, 'd1', { title: 'New' }, 3);\nassert.equal(r.status, 200);\nassert.deepEqual(r.row, { id: 'd1', title: 'New', body: 'b', version: 4 });\nassert.deepEqual(store.peek('d1'), { id: 'd1', title: 'New', body: 'b', version: 4 });"
+        },
+        {
+          "name": "a stale version is a 409 with the current row and nothing written",
+          "code": "const makeStore = (rows) => {\n  const data = new Map(rows.map((r) => [r.id, { ...r }]));\n  const log = [];\n  return {\n    log,\n    peek: (id) => data.get(id),\n    async get(id) { await null; log.push('get'); const r = data.get(id); return r ? { ...r } : null; },\n    async put(id, row) { await null; log.push('put'); data.set(id, { ...row }); },\n    async putIfVersion(id, row, expected) {\n      await null;\n      const cur = data.get(id);\n      if (!cur || cur.version !== expected) { log.push('conflict'); return false; }\n      log.push('write');\n      data.set(id, { ...row });\n      return true;\n    },\n  };\n};\nconst store = makeStore([{ id: 'd1', title: 'Old', body: 'b', version: 3 }]);\nconst r = await mod.updateIfVersion(store, 'd1', { title: 'New' }, 2);\nassert.equal(r.status, 409);\nassert.deepEqual(r.current, { id: 'd1', title: 'Old', body: 'b', version: 3 });\nassert.ok(!store.log.includes('write') && !store.log.includes('put'), 'wrote on a stale version: ' + store.log.join(','));\nassert.deepEqual(store.peek('d1'), { id: 'd1', title: 'Old', body: 'b', version: 3 });"
+        },
+        {
+          "name": "two interleaved saves from one version: one 200, one 409, no lost field",
+          "code": "const makeStore = (rows) => {\n  const data = new Map(rows.map((r) => [r.id, { ...r }]));\n  const log = [];\n  return {\n    log,\n    peek: (id) => data.get(id),\n    async get(id) { await null; log.push('get'); const r = data.get(id); return r ? { ...r } : null; },\n    async put(id, row) { await null; log.push('put'); data.set(id, { ...row }); },\n    async putIfVersion(id, row, expected) {\n      await null;\n      const cur = data.get(id);\n      if (!cur || cur.version !== expected) { log.push('conflict'); return false; }\n      log.push('write');\n      data.set(id, { ...row });\n      return true;\n    },\n  };\n};\nconst store = makeStore([{ id: 'd1', title: 'Old', body: 'old body', version: 1 }]);\nconst results = await Promise.all([\n  mod.updateIfVersion(store, 'd1', { title: 'From Ann' }, 1),\n  mod.updateIfVersion(store, 'd1', { body: 'From Bob' }, 1),\n]);\nassert.deepEqual(results.map((r) => r.status).sort(), [200, 409]);\nconst stored = store.peek('d1');\nassert.equal(stored.version, 2);\nconst won = results.find((r) => r.status === 200);\nconst lost = results.find((r) => r.status === 409);\nassert.deepEqual(stored, won.row);\nassert.ok(stored.title === 'Old' || stored.body === 'old body', 'both patches landed: ' + JSON.stringify(stored));\nassert.deepEqual(lost.current, stored, 'the 409 carries the row as stored now');"
+        },
+        {
+          "name": "a patch cannot change id or version (trap)",
+          "code": "const makeStore = (rows) => {\n  const data = new Map(rows.map((r) => [r.id, { ...r }]));\n  const log = [];\n  return {\n    log,\n    peek: (id) => data.get(id),\n    async get(id) { await null; log.push('get'); const r = data.get(id); return r ? { ...r } : null; },\n    async put(id, row) { await null; log.push('put'); data.set(id, { ...row }); },\n    async putIfVersion(id, row, expected) {\n      await null;\n      const cur = data.get(id);\n      if (!cur || cur.version !== expected) { log.push('conflict'); return false; }\n      log.push('write');\n      data.set(id, { ...row });\n      return true;\n    },\n  };\n};\nconst store = makeStore([{ id: 'd1', title: 'Old', version: 1 }]);\nconst r = await mod.updateIfVersion(store, 'd1', { title: 'New', id: 'd9', version: 99 }, 1);\nassert.equal(r.status, 200);\nassert.deepEqual(r.row, { id: 'd1', title: 'New', version: 2 });\nassert.deepEqual(store.peek('d1'), { id: 'd1', title: 'New', version: 2 });\nassert.equal(store.peek('d9'), undefined);"
+        },
+        {
+          "name": "a version from the future is a conflict too",
+          "code": "const makeStore = (rows) => {\n  const data = new Map(rows.map((r) => [r.id, { ...r }]));\n  const log = [];\n  return {\n    log,\n    peek: (id) => data.get(id),\n    async get(id) { await null; log.push('get'); const r = data.get(id); return r ? { ...r } : null; },\n    async put(id, row) { await null; log.push('put'); data.set(id, { ...row }); },\n    async putIfVersion(id, row, expected) {\n      await null;\n      const cur = data.get(id);\n      if (!cur || cur.version !== expected) { log.push('conflict'); return false; }\n      log.push('write');\n      data.set(id, { ...row });\n      return true;\n    },\n  };\n};\nconst store = makeStore([{ id: 'd1', title: 'Old', version: 3 }]);\nconst r = await mod.updateIfVersion(store, 'd1', { title: 'New' }, 5);\nassert.equal(r.status, 409);\nassert.deepEqual(r.current, { id: 'd1', title: 'Old', version: 3 });\nassert.deepEqual(store.peek('d1'), { id: 'd1', title: 'Old', version: 3 });"
+        },
+        {
+          "name": "a missing row is a 404 and nothing is created",
+          "code": "const makeStore = (rows) => {\n  const data = new Map(rows.map((r) => [r.id, { ...r }]));\n  const log = [];\n  return {\n    log,\n    peek: (id) => data.get(id),\n    async get(id) { await null; log.push('get'); const r = data.get(id); return r ? { ...r } : null; },\n    async put(id, row) { await null; log.push('put'); data.set(id, { ...row }); },\n    async putIfVersion(id, row, expected) {\n      await null;\n      const cur = data.get(id);\n      if (!cur || cur.version !== expected) { log.push('conflict'); return false; }\n      log.push('write');\n      data.set(id, { ...row });\n      return true;\n    },\n  };\n};\nconst store = makeStore([]);\nassert.deepEqual(await mod.updateIfVersion(store, 'nope', { title: 'x' }, 1), { status: 404 });\nassert.equal(store.peek('nope'), undefined);\nassert.deepEqual(store.log, ['get']);"
+        }
+      ],
+      "explanation": "Compare for the early answer, then make the write conditional as well:\n\n```js\nconst current = await store.get(id);\nif (!current) return { status: 404 };\nif (current.version !== version) return { status: 409, current };\nconst { id: _id, version: _version, ...fields } = patch;\nconst row = { ...current, ...fields, version: current.version + 1 };\nif (await store.putIfVersion(id, row, version)) return { status: 200, row };\nreturn { status: 409, current: await store.get(id) };\n```\n\nThe comparison in JavaScript is only a fast path. Between it and the write there is an `await`, so the store has to check the version again as part of the write. When that is refused, read once more so the 409 carries the row the client must merge with.\n\n**What the tests catch.** The plausible wrong answer compares versions in JavaScript and then calls `store.put`: two interleaved saves from version 1 both pass the comparison and both return 200, and the first one's field is erased. Spreading the raw patch last lets a client set `version: 99` or a different `id`. Treating only an OLDER version as stale accepts a version the server never issued.",
+      "hints": [
+        "The client tells you which version its edit was based on; the save may only land if that is still the stored version.",
+        "Compare versions for the early answer, but also make the write conditional, because another save can arrive after your comparison. Strip the fields a patch may not touch before merging.",
+        "Read the row, answer 404 or 409 from what you see, build the next row from the stored row plus the patch without its id and version, write it through the version-comparing method, and when that is refused read again and answer 409 with the fresh row."
+      ]
+    },
+    {
+      "slug": "03-retry-on-conflict",
+      "title": "withRetryOnConflict: bounded retries that re-read",
+      "difficulty": 3,
+      "skills": [
+        "retry",
+        "read-modify-write"
+      ],
+      "instructions": "**Interview prompt.** \"Stock is decremented by many workers at once. Wrap the read-modify-write so a conflict is retried, but not forever.\"\n\n**Why it matters.** A retry that reuses the first read can never succeed, and one that reuses the first computed value erases the other writer's change. The loop has to start again from the read, and it has to stop.\n\n**Your task.** Export `async withRetryOnConflict(store, id, mutate, maxAttempts)`. One attempt is: read the row with `store.get(id)`, call the synchronous `mutate(row)` to get the changed row, and write it with `store.putIfVersion` against the version just read, with `version` one higher in the written row.\n- write accepted: resolve to `{ status: 200, row, attempts }`, where `row` is what you stored and `attempts` is how many attempts were made, counting from 1\n- write refused: start a NEW attempt with a fresh read; `mutate` must be given the fresh row\n- after `maxAttempts` refused attempts: `{ status: 409, attempts: maxAttempts }`; never fall back to `store.put`\n- row missing: `{ status: 404 }` at once\n- an error thrown by the store is not a conflict: let it reject, without another attempt\n\n`maxAttempts` is a whole number of 1 or more and counts ATTEMPTS, so 1 means no retry.\n\n**Worked example.** Stock is 100 at version 1 and a rival takes 10 just before each of your first two writes. With `mutate` taking 1 and `maxAttempts` 5 you resolve to status 200 on attempt 3, and the stored stock is 79 at version 4.",
+      "starter": "// store.get(id)                               -> Promise<row | null>\n// store.put(id, row)                          -> Promise<void>     (unconditional)\n// store.putIfVersion(id, row, expectedVersion) -> Promise<boolean>  (false = version moved on)\nexport async function withRetryOnConflict(store, id, mutate, maxAttempts) {\n  // TODO: read, mutate, conditional write; on a refused write start again from the read, at most maxAttempts times\n}\n",
+      "solution": "export async function withRetryOnConflict(store, id, mutate, maxAttempts) {\n  for (let attempts = 1; attempts <= maxAttempts; attempts++) {\n    const current = await store.get(id);\n    if (!current) return { status: 404 };\n    const row = { ...mutate(current), id: current.id, version: current.version + 1 };\n    if (await store.putIfVersion(id, row, current.version)) return { status: 200, row, attempts };\n  }\n  return { status: 409, attempts: maxAttempts };\n}\n",
+      "tests": [
+        {
+          "name": "no contention: one read, one write, one attempt",
+          "code": "const makeStore = (row, rivalWrites = 0) => {\n  let cur = row ? { ...row } : null;\n  const log = [];\n  return {\n    log,\n    peek: () => cur,\n    async get() { await null; log.push('get'); return cur ? { ...cur } : null; },\n    async put(id, r) { await null; log.push('put'); cur = { ...r }; },\n    async putIfVersion(id, r, expected) {\n      await null;\n      if (rivalWrites > 0) { rivalWrites--; cur = { ...cur, stock: cur.stock - 10, version: cur.version + 1 }; }\n      if (cur.version !== expected) { log.push('conflict'); return false; }\n      log.push('write');\n      cur = { ...r };\n      return true;\n    },\n  };\n};\nconst takeOne = (row) => ({ ...row, stock: row.stock - 1 });\nassert.equal(typeof mod.withRetryOnConflict, 'function', 'export withRetryOnConflict');\nconst store = makeStore({ id: 'sku1', stock: 100, version: 1 });\nconst r = await mod.withRetryOnConflict(store, 'sku1', takeOne, 3);\nassert.equal(r.status, 200);\nassert.equal(r.attempts, 1);\nassert.deepEqual(r.row, { id: 'sku1', stock: 99, version: 2 });\nassert.deepEqual(store.peek(), { id: 'sku1', stock: 99, version: 2 });\nassert.deepEqual(store.log, ['get', 'write']);"
+        },
+        {
+          "name": "a refused write is retried from a fresh read and no change is lost",
+          "code": "const makeStore = (row, rivalWrites = 0) => {\n  let cur = row ? { ...row } : null;\n  const log = [];\n  return {\n    log,\n    peek: () => cur,\n    async get() { await null; log.push('get'); return cur ? { ...cur } : null; },\n    async put(id, r) { await null; log.push('put'); cur = { ...r }; },\n    async putIfVersion(id, r, expected) {\n      await null;\n      if (rivalWrites > 0) { rivalWrites--; cur = { ...cur, stock: cur.stock - 10, version: cur.version + 1 }; }\n      if (cur.version !== expected) { log.push('conflict'); return false; }\n      log.push('write');\n      cur = { ...r };\n      return true;\n    },\n  };\n};\nconst takeOne = (row) => ({ ...row, stock: row.stock - 1 });\nconst store = makeStore({ id: 'sku1', stock: 100, version: 1 }, 2);\nconst r = await mod.withRetryOnConflict(store, 'sku1', takeOne, 5);\nassert.equal(r.status, 200);\nassert.equal(r.attempts, 3);\nassert.deepEqual(store.peek(), { id: 'sku1', stock: 79, version: 4 }, 'the rival took 20 and you took 1');\nassert.deepEqual(store.log, ['get', 'conflict', 'get', 'conflict', 'get', 'write']);"
+        },
+        {
+          "name": "mutate is given the fresh row on every attempt",
+          "code": "const makeStore = (row, rivalWrites = 0) => {\n  let cur = row ? { ...row } : null;\n  const log = [];\n  return {\n    log,\n    peek: () => cur,\n    async get() { await null; log.push('get'); return cur ? { ...cur } : null; },\n    async put(id, r) { await null; log.push('put'); cur = { ...r }; },\n    async putIfVersion(id, r, expected) {\n      await null;\n      if (rivalWrites > 0) { rivalWrites--; cur = { ...cur, stock: cur.stock - 10, version: cur.version + 1 }; }\n      if (cur.version !== expected) { log.push('conflict'); return false; }\n      log.push('write');\n      cur = { ...r };\n      return true;\n    },\n  };\n};\nconst takeOne = (row) => ({ ...row, stock: row.stock - 1 });\nconst seen = [];\nconst store = makeStore({ id: 'sku1', stock: 100, version: 1 }, 2);\nawait mod.withRetryOnConflict(store, 'sku1', (row) => { seen.push([row.stock, row.version]); return takeOne(row); }, 5);\nassert.deepEqual(seen, [[100, 1], [90, 2], [80, 3]]);"
+        },
+        {
+          "name": "gives up with 409 after maxAttempts and never forces the write",
+          "code": "const makeStore = (row, rivalWrites = 0) => {\n  let cur = row ? { ...row } : null;\n  const log = [];\n  return {\n    log,\n    peek: () => cur,\n    async get() { await null; log.push('get'); return cur ? { ...cur } : null; },\n    async put(id, r) { await null; log.push('put'); cur = { ...r }; },\n    async putIfVersion(id, r, expected) {\n      await null;\n      if (rivalWrites > 0) { rivalWrites--; cur = { ...cur, stock: cur.stock - 10, version: cur.version + 1 }; }\n      if (cur.version !== expected) { log.push('conflict'); return false; }\n      log.push('write');\n      cur = { ...r };\n      return true;\n    },\n  };\n};\nconst takeOne = (row) => ({ ...row, stock: row.stock - 1 });\nconst store = makeStore({ id: 'sku1', stock: 100, version: 1 }, 99);\nconst r = await mod.withRetryOnConflict(store, 'sku1', takeOne, 3);\nassert.equal(r.status, 409);\nassert.equal(r.attempts, 3);\nassert.deepEqual(store.log, ['get', 'conflict', 'get', 'conflict', 'get', 'conflict']);\nassert.deepEqual(store.peek(), { id: 'sku1', stock: 70, version: 4 }, 'only the rival wrote');"
+        },
+        {
+          "name": "maxAttempts 1 means a single attempt and no retry (boundary)",
+          "code": "const makeStore = (row, rivalWrites = 0) => {\n  let cur = row ? { ...row } : null;\n  const log = [];\n  return {\n    log,\n    peek: () => cur,\n    async get() { await null; log.push('get'); return cur ? { ...cur } : null; },\n    async put(id, r) { await null; log.push('put'); cur = { ...r }; },\n    async putIfVersion(id, r, expected) {\n      await null;\n      if (rivalWrites > 0) { rivalWrites--; cur = { ...cur, stock: cur.stock - 10, version: cur.version + 1 }; }\n      if (cur.version !== expected) { log.push('conflict'); return false; }\n      log.push('write');\n      cur = { ...r };\n      return true;\n    },\n  };\n};\nconst takeOne = (row) => ({ ...row, stock: row.stock - 1 });\nconst store = makeStore({ id: 'sku1', stock: 100, version: 1 }, 1);\nconst r = await mod.withRetryOnConflict(store, 'sku1', takeOne, 1);\nassert.equal(r.status, 409);\nassert.equal(r.attempts, 1);\nassert.deepEqual(store.log, ['get', 'conflict']);\nassert.deepEqual(store.peek(), { id: 'sku1', stock: 90, version: 2 });"
+        },
+        {
+          "name": "a store error is not a conflict: it rejects without another attempt",
+          "code": "const makeStore = (row, rivalWrites = 0) => {\n  let cur = row ? { ...row } : null;\n  const log = [];\n  return {\n    log,\n    peek: () => cur,\n    async get() { await null; log.push('get'); return cur ? { ...cur } : null; },\n    async put(id, r) { await null; log.push('put'); cur = { ...r }; },\n    async putIfVersion(id, r, expected) {\n      await null;\n      if (rivalWrites > 0) { rivalWrites--; cur = { ...cur, stock: cur.stock - 10, version: cur.version + 1 }; }\n      if (cur.version !== expected) { log.push('conflict'); return false; }\n      log.push('write');\n      cur = { ...r };\n      return true;\n    },\n  };\n};\nconst takeOne = (row) => ({ ...row, stock: row.stock - 1 });\nlet calls = 0;\nconst broken = {\n  async get() { await null; return { id: 'sku1', stock: 5, version: 1 }; },\n  async put() { throw new Error('put must not be called'); },\n  async putIfVersion() { await null; calls++; throw new Error('db down'); },\n};\nawait assert.rejects(mod.withRetryOnConflict(broken, 'sku1', takeOne, 4), /db down/);\nassert.equal(calls, 1);"
+        },
+        {
+          "name": "a missing row is a 404 after one read",
+          "code": "const makeStore = (row, rivalWrites = 0) => {\n  let cur = row ? { ...row } : null;\n  const log = [];\n  return {\n    log,\n    peek: () => cur,\n    async get() { await null; log.push('get'); return cur ? { ...cur } : null; },\n    async put(id, r) { await null; log.push('put'); cur = { ...r }; },\n    async putIfVersion(id, r, expected) {\n      await null;\n      if (rivalWrites > 0) { rivalWrites--; cur = { ...cur, stock: cur.stock - 10, version: cur.version + 1 }; }\n      if (cur.version !== expected) { log.push('conflict'); return false; }\n      log.push('write');\n      cur = { ...r };\n      return true;\n    },\n  };\n};\nconst takeOne = (row) => ({ ...row, stock: row.stock - 1 });\nconst store = makeStore(null);\nconst r = await mod.withRetryOnConflict(store, 'gone', takeOne, 4);\nassert.equal(r.status, 404);\nassert.deepEqual(store.log, ['get']);"
+        }
+      ],
+      "explanation": "Everything that depends on the row lives INSIDE the loop:\n\n```js\nfor (let attempts = 1; attempts <= maxAttempts; attempts++) {\n  const current = await store.get(id);\n  if (!current) return { status: 404 };\n  const row = { ...mutate(current), id: current.id, version: current.version + 1 };\n  if (await store.putIfVersion(id, row, current.version)) return { status: 200, row, attempts };\n}\nreturn { status: 409, attempts: maxAttempts };\n```\n\nA refused write means the row changed, so the next attempt needs the new version AND a change computed from the new values. A thrown error is left alone: `await` rethrows it out of the loop, which is what you want for \"database down\".\n\n**What the tests catch.** The plausible wrong answer reads once and loops only around the write: every retry carries the old version, so it ends in 409 where a real retry succeeds. Re-reading only the version while reusing the first computed row passes the version check and writes stock 99, erasing the rival's 20. Calling `store.put` when the attempts run out, and treating the limit as a number of retries rather than attempts, each fail their own test.",
+      "hints": [
+        "A retry must repeat the whole read-modify-write, not just the write.",
+        "Put the read inside the loop so every attempt computes its change from the row as it is now, count attempts rather than retries, and give up with a conflict when the count is used up.",
+        "Loop from one up to the attempt limit, and inside the loop read the row, stop with 404 when it is missing, build the next row from the mutation of the fresh row with the version raised by one, and finish with 200 as soon as the conditional write is accepted. After the loop answer 409."
+      ]
+    }
+  ]
+}

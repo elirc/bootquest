@@ -1,0 +1,262 @@
+{
+  "format": "fundamentals-authoring@1",
+  "track": "js",
+  "topic": "31-sql-indexes-and-query-plans",
+  "title": "SQL indexes and query plans",
+  "level": "advanced",
+  "summary": "What an index is and what it costs, reading SCAN versus SEARCH in a query plan, column order in composite indexes, covering indexes, and predicates an index cannot serve.",
+  "lesson": "## What an index is\n\nAn index is a sorted copy of some columns (a B-tree) with a pointer back to each row. Finding a value takes a few page reads, where a table without one must be read from end to end. The price is paid on writes: every insert, update and delete maintains every index on the table.\n\n## Reading the plan\n\nAsk the database what it will do. In SQLite, put `EXPLAIN QUERY PLAN` in front of the query:\n\n- `SCAN orders`: every row is read.\n- `SEARCH orders USING INDEX i (customer_id=?)`: the index is used to jump to the matching entries.\n- `USING COVERING INDEX`: the index holds every column the query reads, so the table is not visited.\n- `USE TEMP B-TREE FOR ORDER BY`: the rows are sorted in a separate step.\n\nPostgres uses `EXPLAIN` and reports Seq Scan, Index Scan and Index Only Scan. Note that `EXPLAIN ANALYZE` really executes the statement.\n\n**Failure story.** An orders page took 40 ms on a developer laptop with 500 rows and 9 seconds in production with six million. `WHERE customer_id = ?` had no index, and nobody had read the plan. Small tables hide scans.\n\n## Column order in a composite index\n\nAn index on `(customer_id, status, created_at)` is sorted by customer, then by status within a customer, then by date. It can seek on a leftmost prefix: `customer_id` alone, `customer_id` with `status`, or both plus a range on `created_at`. It cannot seek on `status` alone, just as a phone book sorted by surname does not help you find everyone called Maria.\n\nPut the columns compared with `=` first, then one column used for a range or for sorting. With equality on the leading columns the entries are already in `created_at` order, so `ORDER BY created_at` needs no sort step.\n\n## Sargable predicates\n\nThe index is ordered by the stored value. Wrap the column in a function or in arithmetic and that order is useless: `substr(created_at, 1, 10) = ?`, `lower(email) = ?`, `price * 2 > ?` and `LIKE '%son'` all scan. Keep the bare column on one side:\n\n```sql\nWHERE created_at >= ? AND created_at < ?   -- start of day, start of next day\n```\n\n**Failure story.** A \"sign-ups today\" tile ran `WHERE date(created_at) = ?`. The column was indexed, the plan still said SCAN, and the tile grew slower every week until the dashboard timed out. A half-open range fixed it with no schema change.\n\n## Do not over-index\n\nOne composite index serves several queries through its prefixes: `(a)` is redundant beside `(a, b)`. Check plans against production-sized data, because planners choose by table statistics and an empty table can get a different plan.",
+  "quiz": [
+    {
+      "prompt": "What does a line reading `SCAN orders` mean in SQLite's EXPLAIN QUERY PLAN output?",
+      "choices": [
+        "Every row of orders is read to find the matches",
+        "Orders is read through its primary key, row by row",
+        "The rows of orders are sorted before the filter runs",
+        "Orders is locked while the planner gathers statistics"
+      ],
+      "answer": 0,
+      "explanation": "SCAN is a full pass over the table (or over a whole index). SEARCH is the line you want to see for a selective filter."
+    },
+    {
+      "prompt": "A table has one index, on `(customer_id, status, created_at)`. Which WHERE clause can NOT use it to seek?",
+      "choices": [
+        "`customer_id = ?`",
+        "`customer_id = ? AND status = ?`",
+        "`status = ? AND created_at >= ?`",
+        "`customer_id = ? AND status = ? AND created_at >= ?`"
+      ],
+      "answer": 2,
+      "explanation": "An index can seek only on a leftmost prefix of its columns. Without a value for customer_id, the matching entries are scattered through the whole index."
+    },
+    {
+      "prompt": "An index exists on `(customer_id, status, created_at)`. Why does `WHERE customer_id = ? AND status = ? ORDER BY created_at DESC` need no separate sort step?",
+      "choices": [
+        "The planner keeps table rows sorted by created_at as they are inserted",
+        "For one customer and status, the index entries are in created_at order",
+        "The index stores its entries newest-first whenever DESC is requested",
+        "ORDER BY on a text column is skipped whenever an index is present"
+      ],
+      "answer": 1,
+      "explanation": "Fixing the two leading columns leaves a contiguous run of entries ordered by the third. The database reads that run backwards for DESC."
+    },
+    {
+      "prompt": "The column created_at is indexed. Why does `WHERE date(created_at) = ?` still scan the table?",
+      "choices": [
+        "date() returns text, and an index can hold numbers only",
+        "A bound parameter cannot be compared with an indexed column",
+        "The planner uses an index only when the query has a LIMIT",
+        "The index is ordered by the stored value, not by date() of it"
+      ],
+      "answer": 3,
+      "explanation": "The predicate is on a computed value the index knows nothing about. A range on the bare column (or an index on the expression) restores the seek."
+    },
+    {
+      "prompt": "Which predicate can use a plain index on `name` to seek?",
+      "choices": [
+        "`name LIKE '%son'`",
+        "`lower(name) = 'olson'`",
+        "`name >= 'O' AND name < 'P'`",
+        "`upper(substr(name, 1, 1)) = 'O'`"
+      ],
+      "answer": 2,
+      "explanation": "The range compares the bare column, so it maps to one contiguous stretch of the index. The others hide the column behind a function or start with a wildcard."
+    },
+    {
+      "prompt": "What does `USING COVERING INDEX` in a plan tell you?",
+      "choices": [
+        "The index includes every column of the table, in their declared order",
+        "Every column the query reads is in the index, so the table is skipped",
+        "The index is unique, so at most one row can match the search",
+        "The index was built for this query and is dropped afterwards"
+      ],
+      "answer": 1,
+      "explanation": "A covering index answers the query on its own. Selecting one extra column that is not in the index sends the query back to the table for each row."
+    },
+    {
+      "prompt": "What is the main cost of adding one more index to a busy table?",
+      "choices": [
+        "Every SELECT must read that index before it reads the table",
+        "The table can no longer be read while a write is in progress",
+        "Primary-key lookups slow down in step with the index count",
+        "Every insert, update and delete must also maintain that index"
+      ],
+      "answer": 3,
+      "explanation": "Reads that do not use the index ignore it. Writes cannot: each one has to keep every index in step with the table."
+    },
+    {
+      "prompt": "A table has an index on `(tenant_id)` and another on `(tenant_id, status)`. What is true of the first one?",
+      "choices": [
+        "It is redundant: the second serves tenant_id lookups by its prefix",
+        "It is required: a two-column index cannot seek on a single column",
+        "It is required: the second is used only for ORDER BY status queries",
+        "It is redundant: SQLite merges indexes that share a first column"
+      ],
+      "answer": 0,
+      "explanation": "A leftmost prefix of a composite index works like an index on those columns alone, so the single-column one only adds write cost."
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "SCAN versus SEARCH in a SQLite query plan",
+      "back": "SCAN walks a whole table or index. SEARCH uses an index (or the rowid) to jump to the entries that can match."
+    },
+    {
+      "front": "How do you order the columns of a composite index?",
+      "back": "Columns compared with equality first, then the one used for a range or for sorting. Only a leftmost prefix can be used to seek."
+    },
+    {
+      "front": "What makes a predicate non-sargable?",
+      "back": "Wrapping the indexed column in a function or arithmetic, or a LIKE pattern that starts with a wildcard. Compare the bare column instead."
+    },
+    {
+      "front": "How do you filter one calendar day on an indexed timestamp column?",
+      "back": "With a half-open range: at or after the start of the day, and before the start of the next day."
+    },
+    {
+      "front": "What is a covering index?",
+      "back": "An index that holds all the columns a query needs, so the answer comes from the index without reading table rows."
+    },
+    {
+      "front": "Why not put an index on every column?",
+      "back": "Each index is updated on every write and takes space. Prefer a few composite indexes whose prefixes serve several queries."
+    }
+  ],
+  "drills": [
+    {
+      "slug": "01-index-for-the-orders-page",
+      "title": "Add the index that turns SCAN into SEARCH",
+      "difficulty": 2,
+      "skills": [
+        "composite index",
+        "EXPLAIN QUERY PLAN",
+        "ORDER BY from an index"
+      ],
+      "instructions": "**Interview prompt.** \"The 'my orders' page is slow in production. Here is its query. What index do you add, and how do you prove it helps?\"\n\n**Why it matters.** The proof is the query plan, not a stopwatch on a laptop with 500 rows. A wrong column order still shows an index in the plan while the database filters and sorts most of the work by hand.\n\n**The query.** The tests create `orders(id, customer_id, status, created_at, total)` with no index and run:\n\n```sql\nSELECT id, total FROM orders\nWHERE customer_id = ? AND status = ?\nORDER BY created_at DESC LIMIT 20\n```\n\n**Your task.** Export `index`, a SQL string holding ONE `CREATE INDEX` statement on `orders`. The tests execute it on a real in-memory SQLite database and read `EXPLAIN QUERY PLAN` for the query above. The plan must:\n- contain a SEARCH step and no SCAN step\n- seek with both equality columns\n- contain no separate sort step (no temp B-tree for the ORDER BY)\n\nThe index must not change what the query returns, and it must not forbid two orders that share customer, status and time.\n\n**Worked example.** With no index the plan reads `SCAN orders` followed by `USE TEMP B-TREE FOR ORDER BY`.",
+      "starter": "// TODO: ONE CREATE INDEX statement on orders that serves the query in the instructions.\nexport const index = `\n  CREATE INDEX orders_created ON orders (created_at)\n`;\n",
+      "solution": "export const index = `\n  CREATE INDEX orders_customer_status_created ON orders (customer_id, status, created_at)\n`;\n",
+      "tests": [
+        {
+          "name": "exactly one index is created on orders",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec('CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, total INTEGER NOT NULL)');\nconst insert = db.prepare('INSERT INTO orders (customer_id, status, created_at, total) VALUES (?, ?, ?, ?)');\nfor (let i = 0; i < 60; i++) {\n  const day = String(1 + ((i * 7) % 28)).padStart(2, '0');\n  const second = String(i).padStart(2, '0');\n  insert.run(1 + (i % 3), i % 4 === 0 ? 'refunded' : 'paid', `2026-03-${day}T10:00:${second}Z`, 100 + i);\n}\nconst sql = 'SELECT id, total FROM orders WHERE customer_id = ? AND status = ? ORDER BY created_at DESC LIMIT 20';\nconst before = db.prepare(sql).all(2, 'paid').map((r) => ({ ...r }));\nassert.equal(typeof mod.index, 'string', 'export const index = `...`');\ndb.exec(mod.index);\nconst plan = db.prepare('EXPLAIN QUERY PLAN ' + sql).all(2, 'paid').map((r) => r.detail);\nconst search = plan.find((line) => line.startsWith('SEARCH')) ?? '';\nconst n = db.prepare(\"SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'index' AND tbl_name = 'orders'\").get().n;\nassert.equal(n, 1);"
+        },
+        {
+          "name": "the plan searches and does not scan",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec('CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, total INTEGER NOT NULL)');\nconst insert = db.prepare('INSERT INTO orders (customer_id, status, created_at, total) VALUES (?, ?, ?, ?)');\nfor (let i = 0; i < 60; i++) {\n  const day = String(1 + ((i * 7) % 28)).padStart(2, '0');\n  const second = String(i).padStart(2, '0');\n  insert.run(1 + (i % 3), i % 4 === 0 ? 'refunded' : 'paid', `2026-03-${day}T10:00:${second}Z`, 100 + i);\n}\nconst sql = 'SELECT id, total FROM orders WHERE customer_id = ? AND status = ? ORDER BY created_at DESC LIMIT 20';\nconst before = db.prepare(sql).all(2, 'paid').map((r) => ({ ...r }));\nassert.equal(typeof mod.index, 'string', 'export const index = `...`');\ndb.exec(mod.index);\nconst plan = db.prepare('EXPLAIN QUERY PLAN ' + sql).all(2, 'paid').map((r) => r.detail);\nconst search = plan.find((line) => line.startsWith('SEARCH')) ?? '';\nassert.ok(search !== '', `expected a SEARCH step, got: ${plan.join(' | ')}`);\nassert.ok(!plan.some((line) => line.startsWith('SCAN')), `unexpected SCAN step: ${plan.join(' | ')}`);"
+        },
+        {
+          "name": "both equality columns are used to seek",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec('CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, total INTEGER NOT NULL)');\nconst insert = db.prepare('INSERT INTO orders (customer_id, status, created_at, total) VALUES (?, ?, ?, ?)');\nfor (let i = 0; i < 60; i++) {\n  const day = String(1 + ((i * 7) % 28)).padStart(2, '0');\n  const second = String(i).padStart(2, '0');\n  insert.run(1 + (i % 3), i % 4 === 0 ? 'refunded' : 'paid', `2026-03-${day}T10:00:${second}Z`, 100 + i);\n}\nconst sql = 'SELECT id, total FROM orders WHERE customer_id = ? AND status = ? ORDER BY created_at DESC LIMIT 20';\nconst before = db.prepare(sql).all(2, 'paid').map((r) => ({ ...r }));\nassert.equal(typeof mod.index, 'string', 'export const index = `...`');\ndb.exec(mod.index);\nconst plan = db.prepare('EXPLAIN QUERY PLAN ' + sql).all(2, 'paid').map((r) => r.detail);\nconst search = plan.find((line) => line.startsWith('SEARCH')) ?? '';\nassert.match(search, /customer_id=\\?/);\nassert.match(search, /status=\\?/);"
+        },
+        {
+          "name": "the ORDER BY needs no separate sort step (trap)",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec('CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, total INTEGER NOT NULL)');\nconst insert = db.prepare('INSERT INTO orders (customer_id, status, created_at, total) VALUES (?, ?, ?, ?)');\nfor (let i = 0; i < 60; i++) {\n  const day = String(1 + ((i * 7) % 28)).padStart(2, '0');\n  const second = String(i).padStart(2, '0');\n  insert.run(1 + (i % 3), i % 4 === 0 ? 'refunded' : 'paid', `2026-03-${day}T10:00:${second}Z`, 100 + i);\n}\nconst sql = 'SELECT id, total FROM orders WHERE customer_id = ? AND status = ? ORDER BY created_at DESC LIMIT 20';\nconst before = db.prepare(sql).all(2, 'paid').map((r) => ({ ...r }));\nassert.equal(typeof mod.index, 'string', 'export const index = `...`');\ndb.exec(mod.index);\nconst plan = db.prepare('EXPLAIN QUERY PLAN ' + sql).all(2, 'paid').map((r) => r.detail);\nconst search = plan.find((line) => line.startsWith('SEARCH')) ?? '';\nassert.ok(search !== '', `expected a SEARCH step, got: ${plan.join(' | ')}`);\nassert.ok(!plan.some((line) => /TEMP B-TREE/.test(line)), `the plan still sorts: ${plan.join(' | ')}`);"
+        },
+        {
+          "name": "the query returns the same rows in the same order as before",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec('CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, total INTEGER NOT NULL)');\nconst insert = db.prepare('INSERT INTO orders (customer_id, status, created_at, total) VALUES (?, ?, ?, ?)');\nfor (let i = 0; i < 60; i++) {\n  const day = String(1 + ((i * 7) % 28)).padStart(2, '0');\n  const second = String(i).padStart(2, '0');\n  insert.run(1 + (i % 3), i % 4 === 0 ? 'refunded' : 'paid', `2026-03-${day}T10:00:${second}Z`, 100 + i);\n}\nconst sql = 'SELECT id, total FROM orders WHERE customer_id = ? AND status = ? ORDER BY created_at DESC LIMIT 20';\nconst before = db.prepare(sql).all(2, 'paid').map((r) => ({ ...r }));\nassert.equal(typeof mod.index, 'string', 'export const index = `...`');\ndb.exec(mod.index);\nconst plan = db.prepare('EXPLAIN QUERY PLAN ' + sql).all(2, 'paid').map((r) => r.detail);\nconst search = plan.find((line) => line.startsWith('SEARCH')) ?? '';\nassert.equal(typeof mod.index, 'string');\nassert.equal(before.length, 15);\nassert.deepEqual(db.prepare(sql).all(2, 'paid').map((r) => ({ ...r })), before);"
+        },
+        {
+          "name": "two orders with the same customer, status and time are still accepted (boundary)",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec('CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, total INTEGER NOT NULL)');\nconst insert = db.prepare('INSERT INTO orders (customer_id, status, created_at, total) VALUES (?, ?, ?, ?)');\nfor (let i = 0; i < 60; i++) {\n  const day = String(1 + ((i * 7) % 28)).padStart(2, '0');\n  const second = String(i).padStart(2, '0');\n  insert.run(1 + (i % 3), i % 4 === 0 ? 'refunded' : 'paid', `2026-03-${day}T10:00:${second}Z`, 100 + i);\n}\nconst sql = 'SELECT id, total FROM orders WHERE customer_id = ? AND status = ? ORDER BY created_at DESC LIMIT 20';\nconst before = db.prepare(sql).all(2, 'paid').map((r) => ({ ...r }));\nassert.equal(typeof mod.index, 'string', 'export const index = `...`');\ndb.exec(mod.index);\nconst plan = db.prepare('EXPLAIN QUERY PLAN ' + sql).all(2, 'paid').map((r) => r.detail);\nconst search = plan.find((line) => line.startsWith('SEARCH')) ?? '';\nassert.equal(typeof mod.index, 'string');\ninsert.run(2, 'paid', '2026-03-30T09:00:00Z', 5);\ninsert.run(2, 'paid', '2026-03-30T09:00:00Z', 6);\nassert.equal(db.prepare(\"SELECT COUNT(*) AS n FROM orders WHERE created_at = '2026-03-30T09:00:00Z'\").get().n, 2);"
+        }
+      ],
+      "explanation": "```sql\nCREATE INDEX orders_customer_status_created ON orders (customer_id, status, created_at)\n```\n\nThe plan becomes `SEARCH orders USING INDEX ... (customer_id=? AND status=?)` with no sort line. The two equality columns lead, so the database seeks to one contiguous run of entries, and inside that run the entries are already in `created_at` order. It reads the run backwards and stops after 20.\n\nThe plausible wrong answer is an index on `(customer_id)` alone, or on `(customer_id, created_at, status)`. Both show SEARCH in the plan, which looks like success. The first still filters by status row by row and sorts the survivors (the trap test sees `USE TEMP B-TREE FOR ORDER BY`). The second avoids the sort but cannot seek on status, because the date column sits in between: the test \"both equality columns are used to seek\" catches it.\n\nThe order of the two equality columns between themselves does not matter for this query; pick the one that lets other queries reuse the prefix. A `UNIQUE` index would turn a performance change into a business rule. Postgres takes the same statement and shows an Index Scan with no Sort node.",
+      "hints": [
+        "A composite index is sorted by its first column, then by the second within the first, and so on.",
+        "Lead with the columns the query pins to a single value, and finish with the column the result is sorted by, so the matching entries sit next to each other in the order you want.",
+        "Create one ordinary index on orders whose columns are customer id, then status, then the creation time."
+      ]
+    },
+    {
+      "slug": "02-sargable-day-filter",
+      "title": "Rewrite a predicate so the index can be used",
+      "difficulty": 2,
+      "skills": [
+        "sargable predicates",
+        "half-open ranges",
+        "EXPLAIN QUERY PLAN"
+      ],
+      "instructions": "**Interview prompt.** \"This query has an index on the column it filters by and still scans the table. Why? Fix the query, not the schema.\"\n\n**Why it matters.** An index is sorted by the stored value. Call a function on the column and the database has to compute it for every row. The repair is usually a range on the bare column, and ranges have edges that are easy to get wrong.\n\n**The table.** `events(id, user_id, created_at)` with an index `events_created_at` on `created_at`. Timestamps are UTC text in the fixed-width form that `toISOString()` produces, such as `2026-03-10T14:05:09.120Z`. Text in this form sorts in time order.\n\n**Your task.** Export `query`, a SQL string with one named parameter, `$day`, which you may use more than once: a day as `YYYY-MM-DD` (the tests bind it by name). It returns the `id` of every event of that UTC day, ordered by `created_at` and then `id`. The starter returns the right rows. Keep that result and change the plan:\n- `EXPLAIN QUERY PLAN` must show a SEARCH that uses `events_created_at`, and no SCAN\n- every instant of the day counts, from its first to its last millisecond\n- midnight belongs to the day that begins\n\n**Worked example.** For `2026-03-10` an event at `2026-03-10T23:59:59.999Z` is returned and one at `2026-03-11T00:00:00.000Z` is not.",
+      "starter": "// TODO: same rows, but EXPLAIN QUERY PLAN must show SEARCH ... events_created_at, not SCAN.\nexport const query = `\n  SELECT id FROM events\n  WHERE substr(created_at, 1, 10) = $day\n  ORDER BY created_at, id\n`;\n",
+      "solution": "export const query = `\n  SELECT id FROM events\n  WHERE created_at >= $day AND created_at < date($day, '+1 day')\n  ORDER BY created_at, id\n`;\n",
+      "tests": [
+        {
+          "name": "returns the ids of that day's events in time order",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec(`\n  CREATE TABLE events (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, created_at TEXT NOT NULL);\n  CREATE INDEX events_created_at ON events (created_at);\n  INSERT INTO events (id, user_id, created_at) VALUES\n    (1, 7, '2026-03-10T14:05:09.120Z'),\n    (2, 8, '2026-03-09T23:59:59.999Z'),\n    (3, 7, '2026-03-10T00:00:00.000Z'),\n    (4, 9, '2026-03-11T00:00:00.000Z'),\n    (5, 8, '2026-03-10T23:59:59.999Z'),\n    (6, 7, '2026-03-10T08:30:00.000Z'),\n    (7, 9, '2026-02-28T12:00:00.000Z'),\n    (8, 9, '2026-03-01T00:00:00.000Z'),\n    (9, 7, '2026-03-10T23:59:59.000Z');\n`);\nassert.equal(typeof mod.query, 'string', 'export const query = `...`');\nconst idsFor = (day) => db.prepare(mod.query).all({ day }).map((r) => r.id);\nconst plan = db.prepare('EXPLAIN QUERY PLAN ' + mod.query).all({ day: '2026-03-10' }).map((r) => r.detail);\nassert.deepEqual(idsFor('2026-03-10'), [3, 6, 1, 9, 5]);"
+        },
+        {
+          "name": "the plan searches the created_at index",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec(`\n  CREATE TABLE events (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, created_at TEXT NOT NULL);\n  CREATE INDEX events_created_at ON events (created_at);\n  INSERT INTO events (id, user_id, created_at) VALUES\n    (1, 7, '2026-03-10T14:05:09.120Z'),\n    (2, 8, '2026-03-09T23:59:59.999Z'),\n    (3, 7, '2026-03-10T00:00:00.000Z'),\n    (4, 9, '2026-03-11T00:00:00.000Z'),\n    (5, 8, '2026-03-10T23:59:59.999Z'),\n    (6, 7, '2026-03-10T08:30:00.000Z'),\n    (7, 9, '2026-02-28T12:00:00.000Z'),\n    (8, 9, '2026-03-01T00:00:00.000Z'),\n    (9, 7, '2026-03-10T23:59:59.000Z');\n`);\nassert.equal(typeof mod.query, 'string', 'export const query = `...`');\nconst idsFor = (day) => db.prepare(mod.query).all({ day }).map((r) => r.id);\nconst plan = db.prepare('EXPLAIN QUERY PLAN ' + mod.query).all({ day: '2026-03-10' }).map((r) => r.detail);\nassert.ok(plan.some((line) => /^SEARCH events USING (COVERING )?INDEX events_created_at/.test(line)), `plan: ${plan.join(' | ')}`);"
+        },
+        {
+          "name": "no step of the plan scans the table",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec(`\n  CREATE TABLE events (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, created_at TEXT NOT NULL);\n  CREATE INDEX events_created_at ON events (created_at);\n  INSERT INTO events (id, user_id, created_at) VALUES\n    (1, 7, '2026-03-10T14:05:09.120Z'),\n    (2, 8, '2026-03-09T23:59:59.999Z'),\n    (3, 7, '2026-03-10T00:00:00.000Z'),\n    (4, 9, '2026-03-11T00:00:00.000Z'),\n    (5, 8, '2026-03-10T23:59:59.999Z'),\n    (6, 7, '2026-03-10T08:30:00.000Z'),\n    (7, 9, '2026-02-28T12:00:00.000Z'),\n    (8, 9, '2026-03-01T00:00:00.000Z'),\n    (9, 7, '2026-03-10T23:59:59.000Z');\n`);\nassert.equal(typeof mod.query, 'string', 'export const query = `...`');\nconst idsFor = (day) => db.prepare(mod.query).all({ day }).map((r) => r.id);\nconst plan = db.prepare('EXPLAIN QUERY PLAN ' + mod.query).all({ day: '2026-03-10' }).map((r) => r.detail);\nassert.ok(plan.length > 0);\nassert.ok(!plan.some((line) => line.startsWith('SCAN')), `plan: ${plan.join(' | ')}`);"
+        },
+        {
+          "name": "the last second and the last millisecond of the day are included (trap)",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec(`\n  CREATE TABLE events (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, created_at TEXT NOT NULL);\n  CREATE INDEX events_created_at ON events (created_at);\n  INSERT INTO events (id, user_id, created_at) VALUES\n    (1, 7, '2026-03-10T14:05:09.120Z'),\n    (2, 8, '2026-03-09T23:59:59.999Z'),\n    (3, 7, '2026-03-10T00:00:00.000Z'),\n    (4, 9, '2026-03-11T00:00:00.000Z'),\n    (5, 8, '2026-03-10T23:59:59.999Z'),\n    (6, 7, '2026-03-10T08:30:00.000Z'),\n    (7, 9, '2026-02-28T12:00:00.000Z'),\n    (8, 9, '2026-03-01T00:00:00.000Z'),\n    (9, 7, '2026-03-10T23:59:59.000Z');\n`);\nassert.equal(typeof mod.query, 'string', 'export const query = `...`');\nconst idsFor = (day) => db.prepare(mod.query).all({ day }).map((r) => r.id);\nconst plan = db.prepare('EXPLAIN QUERY PLAN ' + mod.query).all({ day: '2026-03-10' }).map((r) => r.detail);\nconst ids = idsFor('2026-03-10');\nassert.ok(ids.includes(9), 'event 9 at 23:59:59.000Z');\nassert.ok(ids.includes(5), 'event 5 at 23:59:59.999Z');\nassert.deepEqual(idsFor('2026-03-09'), [2]);"
+        },
+        {
+          "name": "midnight belongs to the day that begins (boundary)",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec(`\n  CREATE TABLE events (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, created_at TEXT NOT NULL);\n  CREATE INDEX events_created_at ON events (created_at);\n  INSERT INTO events (id, user_id, created_at) VALUES\n    (1, 7, '2026-03-10T14:05:09.120Z'),\n    (2, 8, '2026-03-09T23:59:59.999Z'),\n    (3, 7, '2026-03-10T00:00:00.000Z'),\n    (4, 9, '2026-03-11T00:00:00.000Z'),\n    (5, 8, '2026-03-10T23:59:59.999Z'),\n    (6, 7, '2026-03-10T08:30:00.000Z'),\n    (7, 9, '2026-02-28T12:00:00.000Z'),\n    (8, 9, '2026-03-01T00:00:00.000Z'),\n    (9, 7, '2026-03-10T23:59:59.000Z');\n`);\nassert.equal(typeof mod.query, 'string', 'export const query = `...`');\nconst idsFor = (day) => db.prepare(mod.query).all({ day }).map((r) => r.id);\nconst plan = db.prepare('EXPLAIN QUERY PLAN ' + mod.query).all({ day: '2026-03-10' }).map((r) => r.detail);\nassert.ok(idsFor('2026-03-10').includes(3), 'event 3 at 2026-03-10T00:00:00.000Z');\nassert.ok(!idsFor('2026-03-10').includes(4), 'event 4 at 2026-03-11T00:00:00.000Z');\nassert.deepEqual(idsFor('2026-03-11'), [4]);"
+        },
+        {
+          "name": "a day at the end of a month and an empty day both work",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec(`\n  CREATE TABLE events (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, created_at TEXT NOT NULL);\n  CREATE INDEX events_created_at ON events (created_at);\n  INSERT INTO events (id, user_id, created_at) VALUES\n    (1, 7, '2026-03-10T14:05:09.120Z'),\n    (2, 8, '2026-03-09T23:59:59.999Z'),\n    (3, 7, '2026-03-10T00:00:00.000Z'),\n    (4, 9, '2026-03-11T00:00:00.000Z'),\n    (5, 8, '2026-03-10T23:59:59.999Z'),\n    (6, 7, '2026-03-10T08:30:00.000Z'),\n    (7, 9, '2026-02-28T12:00:00.000Z'),\n    (8, 9, '2026-03-01T00:00:00.000Z'),\n    (9, 7, '2026-03-10T23:59:59.000Z');\n`);\nassert.equal(typeof mod.query, 'string', 'export const query = `...`');\nconst idsFor = (day) => db.prepare(mod.query).all({ day }).map((r) => r.id);\nconst plan = db.prepare('EXPLAIN QUERY PLAN ' + mod.query).all({ day: '2026-03-10' }).map((r) => r.detail);\nassert.deepEqual(idsFor('2026-02-28'), [7]);\nassert.deepEqual(idsFor('2026-03-01'), [8]);\nassert.deepEqual(idsFor('2026-03-05'), []);"
+        }
+      ],
+      "explanation": "```sql\nSELECT id FROM events\nWHERE created_at >= $day AND created_at < date($day, '+1 day')\nORDER BY created_at, id\n```\n\nThe column stands alone on the left of both comparisons, so the plan becomes `SEARCH events USING COVERING INDEX events_created_at (created_at>? AND created_at<?)`. The function call that remains is applied to the parameter, once, and not to the column.\n\nThe range is half-open: from the start of the day, up to but not including the start of the next. The plausible wrong answer closes it with an end-of-day literal, `created_at <= $day || 'T23:59:59'`. That is sargable and passes a casual check, but it drops `23:59:59.000Z` and `23:59:59.999Z`, which both sort after the shorter literal: the trap test catches it. The other tempting rewrites, `date(created_at) = $day` and `created_at LIKE $day || '%'`, return the right rows and still scan, so the plan tests reject them.\n\nIn application code you would normally compute both bounds and pass two parameters. `date(x, '+1 day')` is SQLite; Postgres numbers its parameters and writes `$1::date + 1` and has real timestamp types.",
+      "hints": [
+        "An index on a column cannot be used through a function applied to that column.",
+        "Describe the day as a stretch of stored values with a first value that belongs to it and a first value that no longer does, and compare the untouched column against those two.",
+        "Keep rows whose timestamp is greater than or equal to the day parameter and strictly less than the following day, which SQLite can compute from the same parameter with its date function and a plus one day modifier."
+      ]
+    },
+    {
+      "slug": "03-one-index-three-queries",
+      "title": "Pick one index that serves three queries",
+      "difficulty": 3,
+      "skills": [
+        "leftmost prefix",
+        "covering index",
+        "index budget"
+      ],
+      "instructions": "**Interview prompt.** \"These three queries all hit the tickets table. You may add one index. Which one, and what does each plan look like afterwards?\"\n\n**Why it matters.** Every index is paid for on each write. Three single-purpose indexes triple that cost when one well-ordered composite index would serve all three queries through its prefixes.\n\n**The queries.** The tests create `tickets(id, tenant_id, status, created_at, title)` with no index and use:\n\n```sql\n-- A: all tickets of a tenant\nSELECT id, title FROM tickets WHERE tenant_id = ?\n-- B: how many tickets of a tenant have a status\nSELECT COUNT(*) AS n FROM tickets WHERE tenant_id = ? AND status = ?\n-- C: a tenant's tickets with a status, since a date\nSELECT id, title FROM tickets WHERE tenant_id = ? AND status = ? AND created_at >= ?\n```\n\n**Your task.** Export `index`, a SQL string holding ONE `CREATE INDEX` statement on `tickets`. The tests execute it on a real in-memory SQLite database and read `EXPLAIN QUERY PLAN` for each query:\n- A seeks on `tenant_id`\n- B seeks on `tenant_id` and `status` and is answered from the index alone (a covering index)\n- C seeks on `tenant_id`, `status` and the `created_at` range\n- no plan contains a SCAN, and the three results stay the same\n\n**Worked example.** An index that starts with `status` gives B and C a SEARCH, but A becomes a SCAN: A has no value for the leading column.",
+      "starter": "// TODO: ONE CREATE INDEX statement on tickets that serves queries A, B and C.\nexport const index = `\n  CREATE INDEX tickets_status ON tickets (status)\n`;\n",
+      "solution": "export const index = `\n  CREATE INDEX tickets_tenant_status_created ON tickets (tenant_id, status, created_at)\n`;\n",
+      "tests": [
+        {
+          "name": "exactly one index is created on tickets",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec('CREATE TABLE tickets (id INTEGER PRIMARY KEY, tenant_id INTEGER NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, title TEXT NOT NULL)');\nconst insert = db.prepare('INSERT INTO tickets (tenant_id, status, created_at, title) VALUES (?, ?, ?, ?)');\nfor (let i = 0; i < 48; i++) {\n  const day = String(1 + ((i * 5) % 28)).padStart(2, '0');\n  insert.run(1 + (i % 3), ['open', 'closed', 'open', 'waiting'][i % 4], `2026-04-${day}`, `ticket ${i}`);\n}\nconst A = 'SELECT id, title FROM tickets WHERE tenant_id = ?';\nconst B = 'SELECT COUNT(*) AS n FROM tickets WHERE tenant_id = ? AND status = ?';\nconst C = 'SELECT id, title FROM tickets WHERE tenant_id = ? AND status = ? AND created_at >= ?';\nconst all = (sql, ...params) => db.prepare(sql).all(...params).map((r) => ({ ...r })).sort((x, y) => (x.id ?? 0) - (y.id ?? 0));\nconst before = { a: all(A, 2), b: all(B, 2, 'open'), c: all(C, 2, 'open', '2026-04-15'), none: all(A, 99) };\nassert.equal(typeof mod.index, 'string', 'export const index = `...`');\ndb.exec(mod.index);\nconst plan = (sql, ...params) => db.prepare('EXPLAIN QUERY PLAN ' + sql).all(...params).map((r) => r.detail).join(' | ');\nconst n = db.prepare(\"SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'index' AND tbl_name = 'tickets'\").get().n;\nassert.equal(n, 1);"
+        },
+        {
+          "name": "query A seeks on tenant_id",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec('CREATE TABLE tickets (id INTEGER PRIMARY KEY, tenant_id INTEGER NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, title TEXT NOT NULL)');\nconst insert = db.prepare('INSERT INTO tickets (tenant_id, status, created_at, title) VALUES (?, ?, ?, ?)');\nfor (let i = 0; i < 48; i++) {\n  const day = String(1 + ((i * 5) % 28)).padStart(2, '0');\n  insert.run(1 + (i % 3), ['open', 'closed', 'open', 'waiting'][i % 4], `2026-04-${day}`, `ticket ${i}`);\n}\nconst A = 'SELECT id, title FROM tickets WHERE tenant_id = ?';\nconst B = 'SELECT COUNT(*) AS n FROM tickets WHERE tenant_id = ? AND status = ?';\nconst C = 'SELECT id, title FROM tickets WHERE tenant_id = ? AND status = ? AND created_at >= ?';\nconst all = (sql, ...params) => db.prepare(sql).all(...params).map((r) => ({ ...r })).sort((x, y) => (x.id ?? 0) - (y.id ?? 0));\nconst before = { a: all(A, 2), b: all(B, 2, 'open'), c: all(C, 2, 'open', '2026-04-15'), none: all(A, 99) };\nassert.equal(typeof mod.index, 'string', 'export const index = `...`');\ndb.exec(mod.index);\nconst plan = (sql, ...params) => db.prepare('EXPLAIN QUERY PLAN ' + sql).all(...params).map((r) => r.detail).join(' | ');\nconst a = plan(A, 2);\nassert.match(a, /SEARCH tickets USING (COVERING )?INDEX \\S+ \\(tenant_id=\\?/, `plan A: ${a}`);"
+        },
+        {
+          "name": "query B seeks on tenant and status and is covered by the index",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec('CREATE TABLE tickets (id INTEGER PRIMARY KEY, tenant_id INTEGER NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, title TEXT NOT NULL)');\nconst insert = db.prepare('INSERT INTO tickets (tenant_id, status, created_at, title) VALUES (?, ?, ?, ?)');\nfor (let i = 0; i < 48; i++) {\n  const day = String(1 + ((i * 5) % 28)).padStart(2, '0');\n  insert.run(1 + (i % 3), ['open', 'closed', 'open', 'waiting'][i % 4], `2026-04-${day}`, `ticket ${i}`);\n}\nconst A = 'SELECT id, title FROM tickets WHERE tenant_id = ?';\nconst B = 'SELECT COUNT(*) AS n FROM tickets WHERE tenant_id = ? AND status = ?';\nconst C = 'SELECT id, title FROM tickets WHERE tenant_id = ? AND status = ? AND created_at >= ?';\nconst all = (sql, ...params) => db.prepare(sql).all(...params).map((r) => ({ ...r })).sort((x, y) => (x.id ?? 0) - (y.id ?? 0));\nconst before = { a: all(A, 2), b: all(B, 2, 'open'), c: all(C, 2, 'open', '2026-04-15'), none: all(A, 99) };\nassert.equal(typeof mod.index, 'string', 'export const index = `...`');\ndb.exec(mod.index);\nconst plan = (sql, ...params) => db.prepare('EXPLAIN QUERY PLAN ' + sql).all(...params).map((r) => r.detail).join(' | ');\nconst b = plan(B, 2, 'open');\nassert.match(b, /SEARCH tickets USING COVERING INDEX/, `plan B: ${b}`);\nassert.match(b, /tenant_id=\\?/, `plan B: ${b}`);\nassert.match(b, /status=\\?/, `plan B: ${b}`);"
+        },
+        {
+          "name": "query C seeks on tenant, status and the date range (trap)",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec('CREATE TABLE tickets (id INTEGER PRIMARY KEY, tenant_id INTEGER NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, title TEXT NOT NULL)');\nconst insert = db.prepare('INSERT INTO tickets (tenant_id, status, created_at, title) VALUES (?, ?, ?, ?)');\nfor (let i = 0; i < 48; i++) {\n  const day = String(1 + ((i * 5) % 28)).padStart(2, '0');\n  insert.run(1 + (i % 3), ['open', 'closed', 'open', 'waiting'][i % 4], `2026-04-${day}`, `ticket ${i}`);\n}\nconst A = 'SELECT id, title FROM tickets WHERE tenant_id = ?';\nconst B = 'SELECT COUNT(*) AS n FROM tickets WHERE tenant_id = ? AND status = ?';\nconst C = 'SELECT id, title FROM tickets WHERE tenant_id = ? AND status = ? AND created_at >= ?';\nconst all = (sql, ...params) => db.prepare(sql).all(...params).map((r) => ({ ...r })).sort((x, y) => (x.id ?? 0) - (y.id ?? 0));\nconst before = { a: all(A, 2), b: all(B, 2, 'open'), c: all(C, 2, 'open', '2026-04-15'), none: all(A, 99) };\nassert.equal(typeof mod.index, 'string', 'export const index = `...`');\ndb.exec(mod.index);\nconst plan = (sql, ...params) => db.prepare('EXPLAIN QUERY PLAN ' + sql).all(...params).map((r) => r.detail).join(' | ');\nconst c = plan(C, 2, 'open', '2026-04-15');\nassert.match(c, /SEARCH tickets USING (COVERING )?INDEX/, `plan C: ${c}`);\nassert.match(c, /tenant_id=\\?/, `plan C: ${c}`);\nassert.match(c, /status=\\?/, `plan C: ${c}`);\nassert.match(c, /created_at>\\?/, `plan C: ${c}`);"
+        },
+        {
+          "name": "no query scans the table",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec('CREATE TABLE tickets (id INTEGER PRIMARY KEY, tenant_id INTEGER NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, title TEXT NOT NULL)');\nconst insert = db.prepare('INSERT INTO tickets (tenant_id, status, created_at, title) VALUES (?, ?, ?, ?)');\nfor (let i = 0; i < 48; i++) {\n  const day = String(1 + ((i * 5) % 28)).padStart(2, '0');\n  insert.run(1 + (i % 3), ['open', 'closed', 'open', 'waiting'][i % 4], `2026-04-${day}`, `ticket ${i}`);\n}\nconst A = 'SELECT id, title FROM tickets WHERE tenant_id = ?';\nconst B = 'SELECT COUNT(*) AS n FROM tickets WHERE tenant_id = ? AND status = ?';\nconst C = 'SELECT id, title FROM tickets WHERE tenant_id = ? AND status = ? AND created_at >= ?';\nconst all = (sql, ...params) => db.prepare(sql).all(...params).map((r) => ({ ...r })).sort((x, y) => (x.id ?? 0) - (y.id ?? 0));\nconst before = { a: all(A, 2), b: all(B, 2, 'open'), c: all(C, 2, 'open', '2026-04-15'), none: all(A, 99) };\nassert.equal(typeof mod.index, 'string', 'export const index = `...`');\ndb.exec(mod.index);\nconst plan = (sql, ...params) => db.prepare('EXPLAIN QUERY PLAN ' + sql).all(...params).map((r) => r.detail).join(' | ');\nfor (const p of [plan(A, 2), plan(B, 2, 'open'), plan(C, 2, 'open', '2026-04-15')]) {\n  assert.match(p, /SEARCH/, `plan: ${p}`);\n  assert.doesNotMatch(p, /SCAN/, `plan: ${p}`);\n}"
+        },
+        {
+          "name": "the results are unchanged, and a tenant without tickets gets none (boundary)",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec('CREATE TABLE tickets (id INTEGER PRIMARY KEY, tenant_id INTEGER NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, title TEXT NOT NULL)');\nconst insert = db.prepare('INSERT INTO tickets (tenant_id, status, created_at, title) VALUES (?, ?, ?, ?)');\nfor (let i = 0; i < 48; i++) {\n  const day = String(1 + ((i * 5) % 28)).padStart(2, '0');\n  insert.run(1 + (i % 3), ['open', 'closed', 'open', 'waiting'][i % 4], `2026-04-${day}`, `ticket ${i}`);\n}\nconst A = 'SELECT id, title FROM tickets WHERE tenant_id = ?';\nconst B = 'SELECT COUNT(*) AS n FROM tickets WHERE tenant_id = ? AND status = ?';\nconst C = 'SELECT id, title FROM tickets WHERE tenant_id = ? AND status = ? AND created_at >= ?';\nconst all = (sql, ...params) => db.prepare(sql).all(...params).map((r) => ({ ...r })).sort((x, y) => (x.id ?? 0) - (y.id ?? 0));\nconst before = { a: all(A, 2), b: all(B, 2, 'open'), c: all(C, 2, 'open', '2026-04-15'), none: all(A, 99) };\nassert.equal(typeof mod.index, 'string', 'export const index = `...`');\ndb.exec(mod.index);\nconst plan = (sql, ...params) => db.prepare('EXPLAIN QUERY PLAN ' + sql).all(...params).map((r) => r.detail).join(' | ');\nassert.equal(typeof mod.index, 'string');\nassert.equal(before.a.length, 16);\nassert.deepEqual(all(A, 2), before.a);\nassert.deepEqual(all(B, 2, 'open'), before.b);\nassert.deepEqual(all(C, 2, 'open', '2026-04-15'), before.c);\nassert.deepEqual(all(A, 99), []);"
+        }
+      ],
+      "explanation": "```sql\nCREATE INDEX tickets_tenant_status_created ON tickets (tenant_id, status, created_at)\n```\n\nEach query uses a longer prefix of the same index:\n- A: `SEARCH ... (tenant_id=?)`\n- B: `SEARCH ... USING COVERING INDEX ... (tenant_id=? AND status=?)`. The count needs no column outside the index, so the table is never read.\n- C: `SEARCH ... (tenant_id=? AND status=? AND created_at>?)`\n\nThe order follows from the queries. `tenant_id` is in all three, so it leads. `status` is compared with equality, so it comes before `created_at`, which is compared with a range.\n\nThe plausible wrong answer is `(tenant_id, created_at, status)`: \"tenant first, then the rest\". Every plan still says SEARCH, but only on the tenant. In B and C the status is checked entry by entry, and for C the range comes first and stops the seek there. The trap test reads the terms inside the parentheses and catches it. Starting with `status` fails more loudly, with a SCAN for A.\n\nCreating all three prefixes as separate indexes passes every plan check and fails the first test: the two shorter ones are pure write cost. Postgres applies the same prefix rule.",
+      "hints": [
+        "An index can seek on a leftmost prefix of its columns, and a prefix may end in one range.",
+        "Find the column all three queries pin down, then order the remaining columns so that the ones tested for a single value come before the one tested for a range.",
+        "Create one index on tickets with the tenant id first, the status second and the creation date third."
+      ]
+    }
+  ]
+}

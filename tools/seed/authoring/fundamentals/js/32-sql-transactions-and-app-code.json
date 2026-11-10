@@ -1,0 +1,263 @@
+{
+  "format": "fundamentals-authoring@1",
+  "track": "js",
+  "topic": "32-sql-transactions-and-app-code",
+  "title": "SQL transactions and application code",
+  "level": "advanced",
+  "summary": "Atomic multi-statement writes with rollback, lost updates and the versioned UPDATE, bound parameters against injection, upsert, and keyset pagination written in SQL.",
+  "lesson": "## Atomicity\n\nA transaction turns several statements into one unit: `BEGIN`, the statements, `COMMIT`. If anything fails, `ROLLBACK` undoes all of it. In application code that is a try/catch: commit at the end of the try, roll back and rethrow in the catch.\n\n**Failure story.** A wallet transfer ran the debit and the credit as two separate statements. A deploy restarted the process between them. Money left one account and arrived nowhere, and support reconciled balances by hand for a week.\n\nAn `UPDATE` that matches no row is not an error. It reports zero changed rows, so check the count, or a transfer to a mistyped account \"succeeds\". Keep transactions short and never call another service inside one.\n\n## Lost updates\n\nRead, compute, write back loses updates: two requests read stock 5 and both write 4. Three repairs:\n\n- Let the database do the arithmetic: `SET stock = stock - 1 WHERE id = ? AND stock > 0`.\n- Optimistic: `UPDATE docs SET title = ?, version = version + 1 WHERE id = ? AND version = ?`. Zero changed rows means someone else wrote first: answer 409.\n- Pessimistic: Postgres locks the row with `SELECT ... FOR UPDATE` until commit. SQLite has no such clause; it allows one writer at a time, and `BEGIN IMMEDIATE` takes the write lock up front.\n\n## Parameters, never string building\n\nGluing input into SQL lets input become SQL. Send the statement with placeholders (`?`, or `$1` in Postgres) and the values separately; a value can then never change the statement's structure.\n\n**Failure story.** A product search concatenated the term into a query that ended in `AND tenant_id = 7`. A visitor typed a quote followed by a comment marker, the tenant filter was commented out, and the page listed every customer's products.\n\nParameters carry values only. A column name or a sort direction must come from an allow-list in code. Inside a `LIKE` pattern, a `%` or `_` typed by the user is still a wildcard: escape it and declare the escape character with `ESCAPE`.\n\n## Upsert\n\n\"Insert, or update when it exists\" written as a select followed by an insert is a race. Use one statement, which needs a unique constraint on the conflict column:\n\n```sql\nINSERT INTO settings (user_id, theme) VALUES (?, ?)\nON CONFLICT (user_id) DO UPDATE SET theme = excluded.theme;\n```\n\nPostgres and SQLite share this syntax; MySQL writes `ON DUPLICATE KEY UPDATE`.\n\n## Keyset pagination in SQL\n\n```sql\nSELECT id, created_at FROM posts\nWHERE (created_at, id) < (?, ?)\nORDER BY created_at DESC, id DESC LIMIT 20;\n```\n\nThe row comparison continues exactly after the last row of the previous page, and an index on `(created_at, id)` seeks straight to it. `OFFSET 100000` reads and throws away 100,000 rows first.",
+  "quiz": [
+    {
+      "prompt": "A handler runs a debit UPDATE and then a credit UPDATE as two separate auto-committed statements. The process dies after the first one. What is stored?",
+      "choices": [
+        "Neither change, because the connection was not closed cleanly",
+        "Both changes, because the database replays the second statement",
+        "The debit only, because each statement committed on its own",
+        "Neither change, because statements on one connection share a unit"
+      ],
+      "answer": 2,
+      "explanation": "Without an explicit transaction every statement is its own transaction. Wrapping both in BEGIN ... COMMIT makes the pair all-or-nothing."
+    },
+    {
+      "prompt": "`UPDATE accounts SET balance = balance + 50 WHERE id = ?` is run with an id that is not in the table. What happens?",
+      "choices": [
+        "It fails with a constraint error and is rolled back",
+        "It succeeds and reports zero changed rows",
+        "It inserts a new account with a balance of 50",
+        "It succeeds and reports one changed row"
+      ],
+      "answer": 1,
+      "explanation": "Matching nothing is a valid outcome for an UPDATE. The caller has to read the changed-row count to notice."
+    },
+    {
+      "prompt": "Two requests each read stock = 5 and each then run `UPDATE items SET stock = 4 WHERE id = 1`. What is the result?",
+      "choices": [
+        "Stock is 4: one of the decrements was lost",
+        "Stock is 3: both of the decrements applied",
+        "Stock is 5: the two writes cancelled out",
+        "Stock is 4: the second write was rejected"
+      ],
+      "answer": 0,
+      "explanation": "Both writes succeed and store the same stale result. `SET stock = stock - 1` makes the database do the arithmetic on the current value."
+    },
+    {
+      "prompt": "`UPDATE docs SET title = ?, version = version + 1 WHERE id = ? AND version = ?` reports zero changed rows, and a row with that id exists. What should the API answer?",
+      "choices": [
+        "404 Not Found: the document is gone",
+        "200 OK: there was nothing to write",
+        "500 Internal Server Error: the write failed",
+        "409 Conflict: the row changed since it was read"
+      ],
+      "answer": 3,
+      "explanation": "The id matched and the version did not, so another writer got there first. The client must re-read and decide what to do with its edit."
+    },
+    {
+      "prompt": "Why can a value passed as a bound parameter (`WHERE name = ?`) not inject SQL?",
+      "choices": [
+        "The driver strips quotes and comment markers out of the value",
+        "The value travels apart from the SQL text and is never parsed as SQL",
+        "The database rejects every value that contains an SQL keyword",
+        "The value is encrypted before it is compared with the column"
+      ],
+      "answer": 1,
+      "explanation": "The statement is parsed with a placeholder in it; the value is only ever data. Nothing is stripped, so a name like O'Brien is stored exactly as typed."
+    },
+    {
+      "prompt": "Which part of a query can NOT be supplied as a bound parameter?",
+      "choices": [
+        "The value compared in a WHERE clause",
+        "The pattern on the right of a LIKE",
+        "The column name in an ORDER BY",
+        "The number of rows given to LIMIT"
+      ],
+      "answer": 2,
+      "explanation": "Parameters stand for values. Identifiers and keywords are part of the statement structure, so a sort column must be chosen from an allow-list in code."
+    },
+    {
+      "prompt": "What does `INSERT ... ON CONFLICT (user_id) DO UPDATE SET theme = excluded.theme` need in order to work?",
+      "choices": [
+        "A unique constraint or primary key on user_id",
+        "An explicit transaction around the statement",
+        "A trigger that fires before every insert",
+        "A SELECT that locks the matching row first"
+      ],
+      "answer": 0,
+      "explanation": "The conflict target must be something the database can conflict on: a unique index. Without one the statement is rejected."
+    },
+    {
+      "prompt": "Why does `WHERE (created_at, id) < (?, ?) ORDER BY created_at DESC, id DESC LIMIT 20` stay fast on page 5,000 when OFFSET does not?",
+      "choices": [
+        "Row comparisons are cached between pages; OFFSET results are recomputed",
+        "A LIMIT without OFFSET lets the database skip the ORDER BY step",
+        "The cursor holds a lock that keeps the earlier pages in memory",
+        "An index seeks straight to the cursor; OFFSET reads the skipped rows"
+      ],
+      "answer": 3,
+      "explanation": "With an index on (created_at, id) the query starts at the cursor position. OFFSET has to produce and discard every earlier row on each request."
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "What does a transaction guarantee about a group of statements?",
+      "back": "Atomicity: either every statement takes effect at commit, or none does after a rollback."
+    },
+    {
+      "front": "Why check the changed-row count after an UPDATE?",
+      "back": "A statement that matches nothing is not an error. Zero changed rows is how you learn that the row was missing or its version had moved."
+    },
+    {
+      "front": "Optimistic concurrency in one SQL statement",
+      "back": "Put the expected version in the WHERE clause and increment it in the SET. Zero changed rows means a concurrent writer won."
+    },
+    {
+      "front": "What can bound parameters not replace?",
+      "back": "Identifiers and keywords: table names, column names, sort direction. Pick those from an allow-list in code; parameters carry values only."
+    },
+    {
+      "front": "What is an upsert?",
+      "back": "One statement that inserts a row or, when a unique key already exists, updates that row. It removes the select-then-insert race."
+    },
+    {
+      "front": "Pessimistic locking: Postgres versus SQLite",
+      "back": "Postgres locks rows with SELECT ... FOR UPDATE until commit. SQLite has no row locks: one writer at a time, and BEGIN IMMEDIATE claims the write lock up front."
+    }
+  ],
+  "drills": [
+    {
+      "slug": "01-atomic-transfer",
+      "title": "A transfer that rolls back on failure",
+      "difficulty": 2,
+      "skills": [
+        "transactions",
+        "rollback",
+        "changed-row count"
+      ],
+      "instructions": "**Interview prompt.** \"Move money between two accounts. Now tell me every way this can leave the data wrong.\"\n\n**Why it matters.** Two updates are two chances to stop in the middle. And one of the failure modes throws no error at all: an update aimed at an account that does not exist changes nothing and reports success.\n\n**The database.** `db` is a synchronous SQLite handle (Node's `node:sqlite`): `db.exec(sql)` runs statements, and `db.prepare(sql).run(...params)` returns an object whose `changes` property is the number of changed rows. The table is `accounts(id, balance)` with a check constraint that keeps `balance` at zero or above.\n\n**Your task.** Export `transfer(db, fromId, toId, amount)`. On success it moves `amount` from one account to the other and returns nothing. It throws an `Error`, and leaves every balance exactly as it was, when:\n- `amount` is not a positive integer\n- either account does not exist\n- the source account does not hold enough\n\nAfter a failed call no transaction may be left open on `db`: the next call must work normally.\n\n**Worked example.** Account 1 holds 100 and account 99 does not exist. A transfer of 40 from 1 to 99 throws, and account 1 still holds 100.",
+      "starter": "export function transfer(db, fromId, toId, amount) {\n  // TODO: make this all-or-nothing, and notice when an account does not exist\n  db.prepare('UPDATE accounts SET balance = balance - ? WHERE id = ?').run(amount, fromId);\n  db.prepare('UPDATE accounts SET balance = balance + ? WHERE id = ?').run(amount, toId);\n}\n",
+      "solution": "export function transfer(db, fromId, toId, amount) {\n  if (!Number.isInteger(amount) || amount <= 0) throw new Error('amount must be a positive integer');\n  db.exec('BEGIN IMMEDIATE');\n  try {\n    const debit = db.prepare('UPDATE accounts SET balance = balance - ? WHERE id = ?').run(amount, fromId);\n    if (debit.changes !== 1) throw new Error('unknown source account');\n    const credit = db.prepare('UPDATE accounts SET balance = balance + ? WHERE id = ?').run(amount, toId);\n    if (credit.changes !== 1) throw new Error('unknown destination account');\n    db.exec('COMMIT');\n  } catch (err) {\n    db.exec('ROLLBACK');\n    throw err;\n  }\n}\n",
+      "tests": [
+        {
+          "name": "moves the amount and keeps the total unchanged",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec(`\n  CREATE TABLE accounts (id INTEGER PRIMARY KEY, balance INTEGER NOT NULL CHECK (balance >= 0));\n  INSERT INTO accounts (id, balance) VALUES (1, 100), (2, 20), (3, 0);\n`);\nassert.equal(typeof mod.transfer, 'function', 'export function transfer');\nconst balance = (id) => db.prepare('SELECT balance FROM accounts WHERE id = ?').get(id)?.balance;\nconst total = () => db.prepare('SELECT SUM(balance) AS t FROM accounts').get().t;\nmod.transfer(db, 1, 2, 40);\nassert.equal(balance(1), 60);\nassert.equal(balance(2), 60);\nmod.transfer(db, 1, 3, 60);\nassert.equal(balance(1), 0, 'the whole balance may be moved');\nassert.equal(total(), 120);"
+        },
+        {
+          "name": "insufficient funds: throws and both balances are unchanged",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec(`\n  CREATE TABLE accounts (id INTEGER PRIMARY KEY, balance INTEGER NOT NULL CHECK (balance >= 0));\n  INSERT INTO accounts (id, balance) VALUES (1, 100), (2, 20), (3, 0);\n`);\nassert.equal(typeof mod.transfer, 'function', 'export function transfer');\nconst balance = (id) => db.prepare('SELECT balance FROM accounts WHERE id = ?').get(id)?.balance;\nconst total = () => db.prepare('SELECT SUM(balance) AS t FROM accounts').get().t;\nassert.throws(() => mod.transfer(db, 2, 1, 21));\nassert.equal(balance(2), 20);\nassert.equal(balance(1), 100);"
+        },
+        {
+          "name": "an unknown destination: throws and the source keeps its money (trap)",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec(`\n  CREATE TABLE accounts (id INTEGER PRIMARY KEY, balance INTEGER NOT NULL CHECK (balance >= 0));\n  INSERT INTO accounts (id, balance) VALUES (1, 100), (2, 20), (3, 0);\n`);\nassert.equal(typeof mod.transfer, 'function', 'export function transfer');\nconst balance = (id) => db.prepare('SELECT balance FROM accounts WHERE id = ?').get(id)?.balance;\nconst total = () => db.prepare('SELECT SUM(balance) AS t FROM accounts').get().t;\nassert.throws(() => mod.transfer(db, 1, 99, 40));\nassert.equal(balance(1), 100);\nassert.equal(total(), 120);"
+        },
+        {
+          "name": "an unknown source: throws and the destination gains nothing",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec(`\n  CREATE TABLE accounts (id INTEGER PRIMARY KEY, balance INTEGER NOT NULL CHECK (balance >= 0));\n  INSERT INTO accounts (id, balance) VALUES (1, 100), (2, 20), (3, 0);\n`);\nassert.equal(typeof mod.transfer, 'function', 'export function transfer');\nconst balance = (id) => db.prepare('SELECT balance FROM accounts WHERE id = ?').get(id)?.balance;\nconst total = () => db.prepare('SELECT SUM(balance) AS t FROM accounts').get().t;\nassert.throws(() => mod.transfer(db, 99, 2, 40));\nassert.equal(balance(2), 20);\nassert.equal(total(), 120);"
+        },
+        {
+          "name": "a zero, negative or fractional amount is refused (boundary)",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec(`\n  CREATE TABLE accounts (id INTEGER PRIMARY KEY, balance INTEGER NOT NULL CHECK (balance >= 0));\n  INSERT INTO accounts (id, balance) VALUES (1, 100), (2, 20), (3, 0);\n`);\nassert.equal(typeof mod.transfer, 'function', 'export function transfer');\nconst balance = (id) => db.prepare('SELECT balance FROM accounts WHERE id = ?').get(id)?.balance;\nconst total = () => db.prepare('SELECT SUM(balance) AS t FROM accounts').get().t;\nassert.throws(() => mod.transfer(db, 1, 2, 0));\nassert.throws(() => mod.transfer(db, 2, 1, -50));\nassert.throws(() => mod.transfer(db, 1, 2, 1.5));\nassert.equal(balance(1), 100);\nassert.equal(balance(2), 20);"
+        },
+        {
+          "name": "no transaction is left open after a failure",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec(`\n  CREATE TABLE accounts (id INTEGER PRIMARY KEY, balance INTEGER NOT NULL CHECK (balance >= 0));\n  INSERT INTO accounts (id, balance) VALUES (1, 100), (2, 20), (3, 0);\n`);\nassert.equal(typeof mod.transfer, 'function', 'export function transfer');\nconst balance = (id) => db.prepare('SELECT balance FROM accounts WHERE id = ?').get(id)?.balance;\nconst total = () => db.prepare('SELECT SUM(balance) AS t FROM accounts').get().t;\nassert.throws(() => mod.transfer(db, 1, 99, 40));\nassert.throws(() => mod.transfer(db, 2, 1, 500));\ndb.exec('BEGIN');\ndb.exec('ROLLBACK');\nmod.transfer(db, 1, 2, 10);\nassert.equal(balance(1), 90);\nassert.equal(balance(2), 30);"
+        }
+      ],
+      "explanation": "```js\ndb.exec('BEGIN IMMEDIATE');\ntry {\n  const debit = db.prepare('UPDATE accounts SET balance = balance - ? WHERE id = ?').run(amount, fromId);\n  if (debit.changes !== 1) throw new Error('unknown source account');\n  const credit = db.prepare('UPDATE accounts SET balance = balance + ? WHERE id = ?').run(amount, toId);\n  if (credit.changes !== 1) throw new Error('unknown destination account');\n  db.exec('COMMIT');\n} catch (err) {\n  db.exec('ROLLBACK');\n  throw err;\n}\n```\n\nThe transaction makes the pair atomic, the catch block rolls back whatever the failed attempt wrote, and the check constraint turns an overdraft into an error that takes the same path.\n\nThe plausible wrong answer wraps both updates in a transaction and stops there. It handles the overdraft, because the constraint throws. It does not handle a destination that does not exist: that update changes zero rows, throws nothing, and the commit makes the debit permanent. The trap test catches it. You have to read the changed-row count yourself.\n\nA version without try/catch fails differently: the error escapes with the transaction still open, and the next `BEGIN` fails. The amount check matters as well: a negative amount is a transfer in the other direction that the caller was never authorised to make.\n\nIn Postgres the same shape applies. Most drivers offer a helper that takes a callback and commits or rolls back for you.",
+      "hints": [
+        "Atomicity: a group of statements that either all take effect or all disappear.",
+        "Open one unit of work around both writes, undo it on every failure path before passing the error on, and treat a write that touched no row as a failure even though the database did not complain.",
+        "Validate the amount first, then begin a transaction, run the debit and the credit, throw when either reports a changed-row count other than one, commit at the end, and in the catch block roll back and rethrow."
+      ]
+    },
+    {
+      "slug": "02-versioned-update",
+      "title": "A versioned UPDATE that reports conflicts",
+      "difficulty": 2,
+      "skills": [
+        "optimistic concurrency",
+        "conditional UPDATE",
+        "changed-row count"
+      ],
+      "instructions": "**Interview prompt.** \"Two people edit the same document. The second save silently overwrites the first. Fix it in the data layer.\"\n\n**Why it matters.** Reading the version, comparing it in JavaScript and then writing is a check followed by an act: another request can commit between the two statements. The comparison has to happen inside the statement that writes.\n\n**The database.** `db` is a synchronous SQLite handle (Node's `node:sqlite`): `db.prepare(sql).run(...params)` returns an object with a `changes` count, and `db.prepare(sql).get(...params)` returns one row or `undefined`. The table is `docs(id, title, version)`.\n\n**Your task.** Export `updateTitle(db, id, title, expectedVersion)`. It returns:\n- `{ status: 'ok', version }` with the new version (the old one plus one) when the stored version equals `expectedVersion`; the title is written\n- `{ status: 'conflict', version }` with the version now stored when the row exists but its version differs; nothing is written\n- `{ status: 'not_found' }` when no row has that id\n\nDo not open a transaction. One test lets another writer commit between two of your statements, the way a second request would; that writer's title must survive.\n\n**Worked example.** The document is at version 1. A save with `expectedVersion` 1 returns `{ status: 'ok', version: 2 }`. A second save that still says 1 returns `{ status: 'conflict', version: 2 }`.",
+      "starter": "export function updateTitle(db, id, title, expectedVersion) {\n  // TODO: last write wins here. Make a stale expectedVersion a conflict, and report a missing row.\n  db.prepare('UPDATE docs SET title = ?, version = version + 1 WHERE id = ?').run(title, id);\n  return { status: 'ok', version: expectedVersion + 1 };\n}\n",
+      "solution": "export function updateTitle(db, id, title, expectedVersion) {\n  const result = db\n    .prepare('UPDATE docs SET title = ?, version = version + 1 WHERE id = ? AND version = ?')\n    .run(title, id, expectedVersion);\n  if (result.changes === 1) return { status: 'ok', version: expectedVersion + 1 };\n  const row = db.prepare('SELECT version FROM docs WHERE id = ?').get(id);\n  return row ? { status: 'conflict', version: row.version } : { status: 'not_found' };\n}\n",
+      "tests": [
+        {
+          "name": "a matching version writes the title and returns the next version",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec(`\n  CREATE TABLE docs (id INTEGER PRIMARY KEY, title TEXT NOT NULL, version INTEGER NOT NULL);\n  INSERT INTO docs (id, title, version) VALUES (1, 'Draft', 1), (2, 'Other', 7);\n`);\nassert.equal(typeof mod.updateTitle, 'function', 'export function updateTitle');\nconst doc = (id) => ({ ...db.prepare('SELECT title, version FROM docs WHERE id = ?').get(id) });\nassert.deepEqual(mod.updateTitle(db, 1, 'Final', 1), { status: 'ok', version: 2 });\nassert.deepEqual(doc(1), { title: 'Final', version: 2 });\nassert.deepEqual(doc(2), { title: 'Other', version: 7 }, 'other rows are untouched');"
+        },
+        {
+          "name": "a stale version returns a conflict with the stored version and writes nothing",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec(`\n  CREATE TABLE docs (id INTEGER PRIMARY KEY, title TEXT NOT NULL, version INTEGER NOT NULL);\n  INSERT INTO docs (id, title, version) VALUES (1, 'Draft', 1), (2, 'Other', 7);\n`);\nassert.equal(typeof mod.updateTitle, 'function', 'export function updateTitle');\nconst doc = (id) => ({ ...db.prepare('SELECT title, version FROM docs WHERE id = ?').get(id) });\nassert.deepEqual(mod.updateTitle(db, 2, 'Mine', 6), { status: 'conflict', version: 7 });\nassert.deepEqual(doc(2), { title: 'Other', version: 7 });"
+        },
+        {
+          "name": "an unknown id returns not_found",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec(`\n  CREATE TABLE docs (id INTEGER PRIMARY KEY, title TEXT NOT NULL, version INTEGER NOT NULL);\n  INSERT INTO docs (id, title, version) VALUES (1, 'Draft', 1), (2, 'Other', 7);\n`);\nassert.equal(typeof mod.updateTitle, 'function', 'export function updateTitle');\nconst doc = (id) => ({ ...db.prepare('SELECT title, version FROM docs WHERE id = ?').get(id) });\nassert.deepEqual(mod.updateTitle(db, 99, 'Ghost', 1), { status: 'not_found' });\nassert.equal(db.prepare('SELECT COUNT(*) AS n FROM docs').get().n, 2);"
+        },
+        {
+          "name": "two editors with the same version: the first wins, the second gets a conflict",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec(`\n  CREATE TABLE docs (id INTEGER PRIMARY KEY, title TEXT NOT NULL, version INTEGER NOT NULL);\n  INSERT INTO docs (id, title, version) VALUES (1, 'Draft', 1), (2, 'Other', 7);\n`);\nassert.equal(typeof mod.updateTitle, 'function', 'export function updateTitle');\nconst doc = (id) => ({ ...db.prepare('SELECT title, version FROM docs WHERE id = ?').get(id) });\nassert.deepEqual(mod.updateTitle(db, 1, 'From Ada', 1), { status: 'ok', version: 2 });\nassert.deepEqual(mod.updateTitle(db, 1, 'From Ben', 1), { status: 'conflict', version: 2 });\nassert.deepEqual(doc(1), { title: 'From Ada', version: 2 });"
+        },
+        {
+          "name": "a writer who commits between your statements is not overwritten (trap)",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec(`\n  CREATE TABLE docs (id INTEGER PRIMARY KEY, title TEXT NOT NULL, version INTEGER NOT NULL);\n  INSERT INTO docs (id, title, version) VALUES (1, 'Draft', 1), (2, 'Other', 7);\n`);\nassert.equal(typeof mod.updateTitle, 'function', 'export function updateTitle');\nconst doc = (id) => ({ ...db.prepare('SELECT title, version FROM docs WHERE id = ?').get(id) });\n// a handle that lets another writer commit right after your first read, as a concurrent request would\nlet slippedIn = false;\nconst racing = {\n  exec: (sql) => db.exec(sql),\n  prepare(sql) {\n    const statement = db.prepare(sql);\n    const afterRead = (rows) => {\n      if (!slippedIn && /^\\s*select/i.test(sql)) {\n        slippedIn = true;\n        db.exec(\"UPDATE docs SET title = 'Theirs', version = version + 1 WHERE id = 1\");\n      }\n      return rows;\n    };\n    return {\n      run: (...params) => statement.run(...params),\n      get: (...params) => afterRead(statement.get(...params)),\n      all: (...params) => afterRead(statement.all(...params)),\n    };\n  },\n};\nconst result = mod.updateTitle(racing, 1, 'Mine', 1);\nif (slippedIn) {\n  assert.deepEqual(result, { status: 'conflict', version: 2 });\n  assert.deepEqual(doc(1), { title: 'Theirs', version: 2 });\n} else {\n  assert.deepEqual(result, { status: 'ok', version: 2 });\n  assert.deepEqual(doc(1), { title: 'Mine', version: 2 });\n}"
+        },
+        {
+          "name": "the title is bound as a value: quotes and SQL in it are stored as typed (boundary)",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec(`\n  CREATE TABLE docs (id INTEGER PRIMARY KEY, title TEXT NOT NULL, version INTEGER NOT NULL);\n  INSERT INTO docs (id, title, version) VALUES (1, 'Draft', 1), (2, 'Other', 7);\n`);\nassert.equal(typeof mod.updateTitle, 'function', 'export function updateTitle');\nconst doc = (id) => ({ ...db.prepare('SELECT title, version FROM docs WHERE id = ?').get(id) });\nconst title = \"O'Brien's \\\"notes\\\"; DROP TABLE docs; --\";\nassert.deepEqual(mod.updateTitle(db, 1, title, 1), { status: 'ok', version: 2 });\nassert.deepEqual(doc(1), { title, version: 2 });"
+        }
+      ],
+      "explanation": "```js\nconst result = db\n  .prepare('UPDATE docs SET title = ?, version = version + 1 WHERE id = ? AND version = ?')\n  .run(title, id, expectedVersion);\nif (result.changes === 1) return { status: 'ok', version: expectedVersion + 1 };\nconst row = db.prepare('SELECT version FROM docs WHERE id = ?').get(id);\nreturn row ? { status: 'conflict', version: row.version } : { status: 'not_found' };\n```\n\nThe version test and the write are one statement, so no other writer can get between them. The changed-row count is the verdict; the follow-up read only decides which kind of \"no\" to report.\n\nThe plausible wrong answer reads the row, compares `row.version` with `expectedVersion` in JavaScript and then updates by id alone. Every sequential test passes. The trap test lets a second writer commit right after that first read: the comparison was made against a version that is already gone, and the update overwrites the other writer's title. Keeping the version in the `WHERE` clause of the update is what makes the check hold.\n\nAn HTTP layer maps the three results to 200, 409 and 404. Postgres can return the new version from the update itself with `RETURNING version`; SQLite supports that clause too, from 3.35.",
+      "hints": [
+        "Optimistic concurrency: the write itself must verify that the row is still the one the client saw.",
+        "Make the expected version part of the condition that selects the row to change, then let the number of rows the write touched tell you whether it happened. Only look the row up afterwards to explain a miss.",
+        "Run a single update that sets the title and increments the version where both the id and the version match. If one row changed report ok with the next version. Otherwise read the version by id and report a conflict when a row exists and not found when none does."
+      ]
+    },
+    {
+      "slug": "03-parameterised-search",
+      "title": "A search that an injection string cannot widen",
+      "difficulty": 3,
+      "skills": [
+        "bound parameters",
+        "SQL injection",
+        "LIKE escaping",
+        "tenant filter"
+      ],
+      "instructions": "**Interview prompt.** \"This product search builds its SQL by concatenation. Show me an input that breaks it, then fix it.\"\n\n**Why it matters.** The query carries a tenant filter. Input that can change the shape of the statement can remove that filter, and then a search box lists other customers' data. Binding the values closes that hole, and leaves a smaller one: the wildcard characters of `LIKE`.\n\n**The database.** `db` is a synchronous SQLite handle (Node's `node:sqlite`): `db.prepare(sql).all(...params)` returns the rows. The table is `products(id, tenant_id, name)`.\n\n**Your task.** Export `searchProducts(db, tenantId, term)`. It returns an array of `{ id, name }` objects: the products of that tenant whose name contains `term`, ordered by name and then id.\n- matching uses SQLite's `LIKE`, which ignores ASCII letter case\n- no value of `term` or `tenantId` may ever return another tenant's rows or throw a syntax error\n- a quote in the term is an ordinary character\n- a percent sign or an underscore in the term matches only that character\n- an empty term returns all of the tenant's products\n\n**Worked example.** For tenant 1 the term `mug` finds \"Travel mug\" and \"Blue MUG large\". The term `%` finds only \"50% cotton tee\".",
+      "starter": "export function searchProducts(db, tenantId, term) {\n  // TODO: this is injectable, and % or _ in the term act as wildcards. Bind the values.\n  const sql =\n    \"SELECT id, name FROM products WHERE tenant_id = \" + tenantId +\n    \" AND name LIKE '%\" + term + \"%' ORDER BY name, id\";\n  return db.prepare(sql).all().map((row) => ({ id: row.id, name: row.name }));\n}\n",
+      "solution": "export function searchProducts(db, tenantId, term) {\n  const escaped = String(term).replace(/[\\\\%_]/g, (ch) => '\\\\' + ch);\n  return db\n    .prepare(\"SELECT id, name FROM products WHERE tenant_id = ? AND name LIKE ? ESCAPE '\\\\' ORDER BY name, id\")\n    .all(tenantId, '%' + escaped + '%')\n    .map((row) => ({ id: row.id, name: row.name }));\n}\n",
+      "tests": [
+        {
+          "name": "finds the tenant's products whose name contains the term, ignoring case",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec(`\n  CREATE TABLE products (id INTEGER PRIMARY KEY, tenant_id INTEGER NOT NULL, name TEXT NOT NULL);\n  INSERT INTO products (id, tenant_id, name) VALUES\n    (1, 1, 'Travel mug'),\n    (2, 1, 'O''Neil travel mug'),\n    (3, 1, '50% cotton tee'),\n    (4, 1, 'gift_card'),\n    (5, 1, 'Blue MUG large'),\n    (6, 1, 'Notebook'),\n    (7, 2, 'Secret mug prototype'),\n    (8, 2, '100% wool scarf'),\n    (9, 2, 'gift card');\n`);\nassert.equal(typeof mod.searchProducts, 'function', 'export function searchProducts');\nconst ids = (tenantId, term) => mod.searchProducts(db, tenantId, term).map((r) => r.id);\nassert.deepEqual(mod.searchProducts(db, 1, 'mug').map((r) => ({ ...r })), [\n  { id: 5, name: 'Blue MUG large' },\n  { id: 2, name: \"O'Neil travel mug\" },\n  { id: 1, name: 'Travel mug' },\n]);"
+        },
+        {
+          "name": "never returns another tenant's rows",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec(`\n  CREATE TABLE products (id INTEGER PRIMARY KEY, tenant_id INTEGER NOT NULL, name TEXT NOT NULL);\n  INSERT INTO products (id, tenant_id, name) VALUES\n    (1, 1, 'Travel mug'),\n    (2, 1, 'O''Neil travel mug'),\n    (3, 1, '50% cotton tee'),\n    (4, 1, 'gift_card'),\n    (5, 1, 'Blue MUG large'),\n    (6, 1, 'Notebook'),\n    (7, 2, 'Secret mug prototype'),\n    (8, 2, '100% wool scarf'),\n    (9, 2, 'gift card');\n`);\nassert.equal(typeof mod.searchProducts, 'function', 'export function searchProducts');\nconst ids = (tenantId, term) => mod.searchProducts(db, tenantId, term).map((r) => r.id);\nassert.deepEqual(ids(2, 'mug'), [7]);\nassert.deepEqual(ids(1, 'secret'), []);\nassert.deepEqual(ids(1, '').sort(), [1, 2, 3, 4, 5, 6], 'an empty term lists the tenant, and only the tenant');\nassert.deepEqual(ids(3, 'mug'), []);"
+        },
+        {
+          "name": "an injection string in the term cannot widen the result (trap)",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec(`\n  CREATE TABLE products (id INTEGER PRIMARY KEY, tenant_id INTEGER NOT NULL, name TEXT NOT NULL);\n  INSERT INTO products (id, tenant_id, name) VALUES\n    (1, 1, 'Travel mug'),\n    (2, 1, 'O''Neil travel mug'),\n    (3, 1, '50% cotton tee'),\n    (4, 1, 'gift_card'),\n    (5, 1, 'Blue MUG large'),\n    (6, 1, 'Notebook'),\n    (7, 2, 'Secret mug prototype'),\n    (8, 2, '100% wool scarf'),\n    (9, 2, 'gift card');\n`);\nassert.equal(typeof mod.searchProducts, 'function', 'export function searchProducts');\nconst ids = (tenantId, term) => mod.searchProducts(db, tenantId, term).map((r) => r.id);\nassert.deepEqual(ids(1, \"' OR 1=1 --\"), []);\nassert.deepEqual(ids(1, \"%' OR '1'='1\"), []);\nassert.deepEqual(ids(1, \"zzz' UNION SELECT id, name FROM products --\"), []);"
+        },
+        {
+          "name": "an injection string in the tenant id cannot widen the result",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec(`\n  CREATE TABLE products (id INTEGER PRIMARY KEY, tenant_id INTEGER NOT NULL, name TEXT NOT NULL);\n  INSERT INTO products (id, tenant_id, name) VALUES\n    (1, 1, 'Travel mug'),\n    (2, 1, 'O''Neil travel mug'),\n    (3, 1, '50% cotton tee'),\n    (4, 1, 'gift_card'),\n    (5, 1, 'Blue MUG large'),\n    (6, 1, 'Notebook'),\n    (7, 2, 'Secret mug prototype'),\n    (8, 2, '100% wool scarf'),\n    (9, 2, 'gift card');\n`);\nassert.equal(typeof mod.searchProducts, 'function', 'export function searchProducts');\nconst ids = (tenantId, term) => mod.searchProducts(db, tenantId, term).map((r) => r.id);\nassert.deepEqual(ids('1 OR 1=1', 'mug'), []);\nassert.deepEqual(ids('2 OR tenant_id = 1', 'tee'), []);"
+        },
+        {
+          "name": "a quote in the term is an ordinary character",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec(`\n  CREATE TABLE products (id INTEGER PRIMARY KEY, tenant_id INTEGER NOT NULL, name TEXT NOT NULL);\n  INSERT INTO products (id, tenant_id, name) VALUES\n    (1, 1, 'Travel mug'),\n    (2, 1, 'O''Neil travel mug'),\n    (3, 1, '50% cotton tee'),\n    (4, 1, 'gift_card'),\n    (5, 1, 'Blue MUG large'),\n    (6, 1, 'Notebook'),\n    (7, 2, 'Secret mug prototype'),\n    (8, 2, '100% wool scarf'),\n    (9, 2, 'gift card');\n`);\nassert.equal(typeof mod.searchProducts, 'function', 'export function searchProducts');\nconst ids = (tenantId, term) => mod.searchProducts(db, tenantId, term).map((r) => r.id);\nassert.deepEqual(ids(1, \"O'Neil\"), [2]);\nassert.deepEqual(ids(1, \"'\"), [2]);"
+        },
+        {
+          "name": "a percent sign or an underscore in the term matches only itself (boundary)",
+          "code": "const { DatabaseSync } = await import('node:sqlite');\nconst db = new DatabaseSync(':memory:');\ndb.exec(`\n  CREATE TABLE products (id INTEGER PRIMARY KEY, tenant_id INTEGER NOT NULL, name TEXT NOT NULL);\n  INSERT INTO products (id, tenant_id, name) VALUES\n    (1, 1, 'Travel mug'),\n    (2, 1, 'O''Neil travel mug'),\n    (3, 1, '50% cotton tee'),\n    (4, 1, 'gift_card'),\n    (5, 1, 'Blue MUG large'),\n    (6, 1, 'Notebook'),\n    (7, 2, 'Secret mug prototype'),\n    (8, 2, '100% wool scarf'),\n    (9, 2, 'gift card');\n`);\nassert.equal(typeof mod.searchProducts, 'function', 'export function searchProducts');\nconst ids = (tenantId, term) => mod.searchProducts(db, tenantId, term).map((r) => r.id);\nassert.deepEqual(ids(1, '%'), [3]);\nassert.deepEqual(ids(1, '_'), [4]);\nassert.deepEqual(ids(2, 'gift_card'), []);\nassert.deepEqual(ids(1, '50%'), [3]);"
+        }
+      ],
+      "explanation": "```js\nconst escaped = String(term).replace(/[\\\\%_]/g, (ch) => '\\\\' + ch);\nreturn db\n  .prepare(\"SELECT id, name FROM products WHERE tenant_id = ? AND name LIKE ? ESCAPE '\\\\' ORDER BY name, id\")\n  .all(tenantId, '%' + escaped + '%')\n  .map((row) => ({ id: row.id, name: row.name }));\n```\n\nBoth values are bound. The statement the database parses contains two placeholders and nothing from the user, so `' OR 1=1 --` is simply a string that no product name contains. The tenant filter is bound too: a number glued into SQL is just as injectable as a string.\n\nThe plausible wrong answer stops at \"I used parameters\": it binds `'%' + term + '%'` unchanged. Injection is gone, but a term of `%` or `_` is still a wildcard and returns the tenant's whole catalogue. The boundary test catches it. Escape the two wildcards and the escape character itself, and name that character with `ESCAPE`.\n\nDoubling quotes by hand is the other tempting repair. It is easy to get wrong for one dialect or another, and it does nothing for the tenant id.\n\nPostgres uses the same `LIKE ... ESCAPE` rules, numbered placeholders, and `ILIKE` for a case-insensitive match, since its `LIKE` is case-sensitive.",
+      "hints": [
+        "Keep the statement and the data apart: the statement text must be the same for every input.",
+        "Hand both the tenant and the search pattern to the database as values, never as part of the statement text. Then deal with the two characters that still have a special meaning inside a pattern.",
+        "Put a backslash in front of every backslash, percent sign and underscore in the term, wrap the result in percent signs, and bind it together with the tenant id to a statement whose pattern comparison declares the backslash as its escape character."
+      ]
+    }
+  ]
+}

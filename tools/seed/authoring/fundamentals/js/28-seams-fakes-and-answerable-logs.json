@@ -1,0 +1,254 @@
+{
+  "format": "fundamentals-authoring@1",
+  "track": "js",
+  "topic": "28-seams-fakes-and-answerable-logs",
+  "title": "Seams, fakes and answerable logs",
+  "level": "advanced",
+  "summary": "Injecting the clock and id generator, fakes versus stubs and mocks, characterization tests checked with mutants before a refactor, and structured request logs that answer incident questions without leaking secrets.",
+  "lesson": "## Seams: where a test takes control\n\nA seam is a place where behaviour can change without editing the code at that spot (Michael Feathers). A handler's hidden inputs are the clock, id generation and randomness: with `new Date()` or `crypto.randomUUID()` inside it, a test cannot pin the output and can only assert loose ranges. Pass them in instead, `createInvite({ clock, newId, store }, input)`, and read the clock once per operation, so every timestamp of one action comes from the same instant.\n\nFailure story: a billing test computed \"one month from now\" with the real clock. It passed for months, then failed on the last days of every January: `setUTCMonth` on 31 January 2025 rolls over to 3 March. With an injected clock that date is just another test case.\n\n## Fakes, stubs and mocks\n\nA **stub** returns canned answers. A **fake** is a small working implementation, such as an in-memory repository that keeps rows and enforces uniqueness. A **mock** records calls so the test can assert on them. Prefer fakes for stores and clocks: the test checks outcomes, so a refactor that keeps behaviour keeps the tests green. Mock only where the interaction is the behaviour, such as \"exactly one email was sent\".\n\n## Characterization tests before a refactor\n\nBefore changing untested code, pin what it does today, odd results included: feed inputs and record the outputs as expected values, even where they disagree with the spec. Choose inputs on every decision: the exact threshold, a fractional value where rounding happens, and the combination of flags whose order matters. Then check the suite with mutants: turn `>=` into `>`, `ceil` into `floor`, swap two steps. Each mutant must fail at least one test; typical values such as 20, 80 or whole kilos kill none of them.\n\nFailure story: a shipping-fee clean-up passed its three happy-path tests while turning `subtotal >= 50` into `subtotal > 50`. For a month, orders of exactly 50.00 paid shipping.\n\n## Logs that answer questions\n\nWrite one structured JSON line per request: `requestId` (taken from the incoming header or generated at the edge), `tenantId`, `userId`, method, path, status, `durationMs` and a level derived from the status. Then \"which tenants saw 500s between 14:02 and 14:10?\" is a query, not an afternoon of grep.\n\nFailure story: during an outage the only log line was \"error saving order\", with no tenant and no request id, and finding the affected customers took a day.\n\n## Never log secrets\n\nBuild the line from an allow-list of fields; never spread the request, the headers or the body, because a deny-list misses the next secret someone adds. Strip the query string from logged paths, since reset codes and tokens travel in URLs. Passwords, tokens and the `Authorization` and `Cookie` headers never reach a log.",
+  "quiz": [
+    {
+      "prompt": "In Michael Feathers' sense, what is a seam?",
+      "choices": [
+        "A place where behaviour can change without editing the code at that spot",
+        "A boundary between two modules where all of their shared state is kept",
+        "A comment that marks the code which is safe to delete during a refactor",
+        "A test that runs the old and the new implementation side by side at once"
+      ],
+      "answer": 0,
+      "explanation": "Passing a clock or id generator in as a parameter creates a seam: a test supplies its own without touching the handler."
+    },
+    {
+      "prompt": "A handler sets `createdAt = new Date().toISOString()`. Why is that a problem for its tests?",
+      "choices": [
+        "toISOString uses local time, so CI and laptops produce different strings",
+        "new Date() is cached per process, so every test sees the same instant",
+        "A test cannot pin the value, so it can only assert a loose time range",
+        "The Date constructor is slower than Date.now, so the tests time out"
+      ],
+      "answer": 2,
+      "explanation": "The real clock is a hidden input. toISOString always formats in UTC; the problem is that the instant itself is outside the test's control."
+    },
+    {
+      "prompt": "A date is 31 January 2025 (UTC). What does `d.setUTCMonth(d.getUTCMonth() + 1)` turn it into?",
+      "choices": [
+        "`2025-02-28`",
+        "`2025-03-03`",
+        "`2025-02-31`",
+        "`2025-03-01`"
+      ],
+      "answer": 1,
+      "explanation": "February 2025 has 28 days, so day 31 of February overflows by three days into March. A real-clock test meets this only on a few days a year; an injected clock makes it a test case."
+    },
+    {
+      "prompt": "Why prefer an in-memory fake store over a mock that expects an insert call followed by a findById call?",
+      "choices": [
+        "Fakes run inside the database transaction, so their data rolls back by itself",
+        "Mocks cannot return promises, so async repositories need a fake instead",
+        "A fake records every call, and the test compares them with a golden list",
+        "The test then checks outcomes, so a refactor that keeps behaviour stays green"
+      ],
+      "answer": 3,
+      "explanation": "A mock pins the call sequence, so changing how the code talks to the store breaks the test even when the result is right. A fake lets the test assert on the state."
+    },
+    {
+      "prompt": "Before refactoring an untested fee function you write characterization tests. Where do their expected values come from?",
+      "choices": [
+        "From what the code returns today, odd results included",
+        "From what the product spec says the fee ought to be",
+        "From what the refactored version returns once it is done",
+        "From a fresh reimplementation that follows the old docs"
+      ],
+      "answer": 0,
+      "explanation": "The goal is to prove the refactor changed nothing, so the tests pin current behaviour. Fixing a wrong result is a separate, deliberate change."
+    },
+    {
+      "prompt": "How do you check that a characterization suite is strong enough to refactor behind?",
+      "choices": [
+        "Confirm it reaches full line coverage of the legacy function first",
+        "Run it twice and confirm that both runs give the same results",
+        "Plant small mutants, like >= turned into >, and see each one fail",
+        "Confirm there is at least one test case for each exported function"
+      ],
+      "answer": 2,
+      "explanation": "Coverage shows a line ran, not that a change to it would be noticed. A mutant that survives marks a behaviour the suite does not pin."
+    },
+    {
+      "prompt": "Which kind of logging lets you answer \"which tenants saw 500s between 14:02 and 14:10?\" with one query?",
+      "choices": [
+        "A free-text line such as \"error saving order\" written at error level",
+        "A stack trace printed to stderr whenever a request handler throws",
+        "A count of 500 responses per minute, kept in the process memory",
+        "One JSON line per request with tenantId, status, requestId and time"
+      ],
+      "answer": 3,
+      "explanation": "Structured fields can be filtered and grouped. Free text, stack traces and in-memory counters do not say which tenant or request was affected."
+    },
+    {
+      "prompt": "Why build a request log line from an allow-list instead of deleting `password` from a copy of the request?",
+      "choices": [
+        "Object spread drops nested fields, so headers never reach the copy anyway",
+        "A deny-list misses the next secret field someone adds, like a cookie",
+        "Deleting a key from a copy also deletes it from the original request",
+        "Log indexes reject lines with unknown keys, so unlisted fields drop anyway"
+      ],
+      "answer": 1,
+      "explanation": "With an allow-list a new field stays out until someone decides to log it. Spread is shallow, so nested headers and bodies are copied by reference and would be logged."
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "What is a seam?",
+      "back": "A point where a test can swap behaviour without editing the code there, such as a clock or id generator passed in as a parameter."
+    },
+    {
+      "front": "Why read the clock only once per operation?",
+      "back": "Two readings can differ, so the timestamps of one action disagree; a single reading keeps createdAt and expiresAt consistent and testable."
+    },
+    {
+      "front": "Stub, fake and mock",
+      "back": "A stub returns canned answers, a fake is a small working implementation, and a mock records calls so that the test can assert on them."
+    },
+    {
+      "front": "What is a characterization test?",
+      "back": "A test that records how untested code behaves now, surprising outputs and all, so that a refactor can prove it changed nothing."
+    },
+    {
+      "front": "Which fields make a request log line answerable?",
+      "back": "The ids that locate it (request, tenant, user), what was asked (method and path), the outcome (status and a level derived from it) and how many milliseconds it took."
+    },
+    {
+      "front": "What must never reach a log?",
+      "back": "Passwords, tokens, the Authorization and Cookie headers, raw request bodies, and query strings, which can carry reset codes and tokens."
+    }
+  ],
+  "drills": [
+    {
+      "slug": "01-inject-clock-and-ids",
+      "title": "createInvite: inject the clock and the id generator",
+      "difficulty": 2,
+      "skills": [
+        "seams",
+        "dependency injection",
+        "time"
+      ],
+      "instructions": "**Interview prompt.** \"This invite handler is untestable: every run has a new id and a new timestamp. Refactor it so a test can pin both, without changing what it stores.\"\n\n**Why it matters.** The clock and the id generator are hidden inputs. Taking them as dependencies turns \"roughly now\" assertions into exact ones, and reading the clock once per operation keeps the timestamps of one action consistent.\n\n**Your task.** Rewrite the two exports so they use only the injected `deps`, never the real clock or `node:crypto`:\n- `deps.clock.now()` returns the current time in ms; `deps.newId()` returns the next id; `deps.store.insert(invite)` stores an invite\n- `createInvite(deps, { email, tenantId })` returns, and inserts exactly once, `{ id, email, tenantId, createdAt, expiresAt }`: the email trimmed and lower-cased, `createdAt` the ISO string of ONE clock reading, and `expiresAt` the ISO string of exactly seven days after that same reading\n- `isExpired(deps, invite)` is `true` from the instant `expiresAt` is reached onwards, and `false` before it\n\n**Worked example.** With the clock at `Date.UTC(2030, 0, 1)` and `newId` returning `'inv_1'`, `createInvite(deps, { email: ' Ada@Example.com ', tenantId: 't1' })` returns `{ id: 'inv_1', email: 'ada@example.com', tenantId: 't1', createdAt: '2030-01-01T00:00:00.000Z', expiresAt: '2030-01-08T00:00:00.000Z' }`.",
+      "starter": "import { randomUUID } from 'node:crypto';\n\nconst WEEK_MS = 7 * 24 * 60 * 60 * 1000;\n\n// TODO: legacy code: take the clock and the id generator from deps instead of the globals\nexport function createInvite(deps, input) {\n  const invite = {\n    id: randomUUID(),\n    email: input.email.trim().toLowerCase(),\n    tenantId: input.tenantId,\n    createdAt: new Date().toISOString(),\n    expiresAt: new Date(Date.now() + WEEK_MS).toISOString(),\n  };\n  deps.store.insert(invite);\n  return invite;\n}\n\nexport function isExpired(deps, invite) {\n  return Date.now() > Date.parse(invite.expiresAt);\n}\n",
+      "solution": "const WEEK_MS = 7 * 24 * 60 * 60 * 1000;\n\nexport function createInvite(deps, input) {\n  const now = deps.clock.now();\n  const invite = {\n    id: deps.newId(),\n    email: input.email.trim().toLowerCase(),\n    tenantId: input.tenantId,\n    createdAt: new Date(now).toISOString(),\n    expiresAt: new Date(now + WEEK_MS).toISOString(),\n  };\n  deps.store.insert(invite);\n  return invite;\n}\n\nexport function isExpired(deps, invite) {\n  return deps.clock.now() >= Date.parse(invite.expiresAt);\n}\n",
+      "tests": [
+        {
+          "name": "createdAt comes from the injected clock",
+          "code": "assert.equal(typeof mod.createInvite, 'function', 'export createInvite');\nconst deps = { clock: { now: () => Date.UTC(2030, 0, 1) }, newId: () => 'inv_1', store: { insert() {} } };\nconst invite = mod.createInvite(deps, { email: 'ada@example.com', tenantId: 't1' });\nassert.equal(invite.createdAt, '2030-01-01T00:00:00.000Z');\nassert.equal(invite.expiresAt, '2030-01-08T00:00:00.000Z');"
+        },
+        {
+          "name": "the id comes from the injected generator",
+          "code": "let n = 0;\nconst deps = { clock: { now: () => 0 }, newId: () => 'inv_' + ++n, store: { insert() {} } };\nassert.equal(mod.createInvite(deps, { email: 'a@x.io', tenantId: 't1' }).id, 'inv_1');\nassert.equal(mod.createInvite(deps, { email: 'b@x.io', tenantId: 't1' }).id, 'inv_2');"
+        },
+        {
+          "name": "expiresAt is seven days after the same clock reading as createdAt (trap)",
+          "code": "let t = Date.UTC(2030, 5, 30, 23, 59, 59, 990);\nconst deps = { clock: { now: () => (t += 5) }, newId: () => 'inv_9', store: { insert() {} } };\nconst invite = mod.createInvite(deps, { email: 'ada@example.com', tenantId: 't1' });\nassert.equal(invite.createdAt, '2030-06-30T23:59:59.995Z', 'createdAt is the first reading');\nassert.equal(Date.parse(invite.expiresAt) - Date.parse(invite.createdAt), 7 * 24 * 60 * 60 * 1000, 'both timestamps must come from one reading of the clock');"
+        },
+        {
+          "name": "the invite is stored once, normalised, and returned",
+          "code": "const inserted = [];\nconst deps = { clock: { now: () => Date.UTC(2030, 0, 1) }, newId: () => 'inv_1', store: { insert: (x) => inserted.push(x) } };\nconst invite = mod.createInvite(deps, { email: '  Ada@Example.COM ', tenantId: 't7' });\nassert.equal(inserted.length, 1);\nassert.deepEqual(inserted[0], invite);\nassert.deepEqual(invite, { id: 'inv_1', email: 'ada@example.com', tenantId: 't7', createdAt: '2030-01-01T00:00:00.000Z', expiresAt: '2030-01-08T00:00:00.000Z' });"
+        },
+        {
+          "name": "an invite expires exactly at expiresAt (boundary)",
+          "code": "assert.equal(typeof mod.isExpired, 'function', 'export isExpired');\nconst invite = { id: 'inv_1', expiresAt: '2030-01-08T00:00:00.000Z' };\nconst at = (ms) => ({ clock: { now: () => ms } });\nconst expiry = Date.UTC(2030, 0, 8);\nassert.equal(mod.isExpired(at(expiry - 1), invite), false, 'one millisecond before expiry');\nassert.equal(mod.isExpired(at(expiry), invite), true, 'at the expiry instant');\nassert.equal(mod.isExpired(at(expiry + 1), invite), true);"
+        }
+      ],
+      "explanation": "Read each dependency from `deps`, and the clock exactly once:\n\n```js\nconst now = deps.clock.now();\nconst invite = {\n  id: deps.newId(),\n  email: input.email.trim().toLowerCase(),\n  tenantId: input.tenantId,\n  createdAt: new Date(now).toISOString(),\n  expiresAt: new Date(now + WEEK_MS).toISOString(),\n};\n```\n\nand compare with `>=` in `isExpired`. Seven days in milliseconds is safe here because ISO strings are UTC; there is no daylight-saving shift.\n\nThe tests catch a plausible-wrong refactor that injects the clock but still reads it twice: on a real or advancing clock the two readings differ, so `expiresAt` is not exactly a week after `createdAt` (the fake clock in the trap test advances 5 ms per reading). Keeping the legacy `>` makes an invite still valid at its exact expiry instant.",
+      "hints": [
+        "Seams: make the clock and the id generator parameters, so a test decides what time it is and which id comes next.",
+        "Replace every global time and id call with the injected dependencies, take a single reading of the clock and derive both timestamps from it, and treat an invite as expired from its expiry instant onwards.",
+        "Call the injected clock once, build createdAt from that reading and expiresAt from the same reading plus seven days in milliseconds, take the id from newId, insert and hand back the invite, and in isExpired compare the clock with the parsed expiry using greater-or-equal."
+      ]
+    },
+    {
+      "slug": "02-characterization-cases",
+      "title": "Characterization cases that kill mutants",
+      "difficulty": 2,
+      "skills": [
+        "characterization tests",
+        "mutation testing",
+        "boundaries"
+      ],
+      "instructions": "**Interview prompt.** \"Nobody dares touch `shippingFee`: it has no tests. Before we refactor it, write the cases that pin what it does today.\"\n\n**Why it matters.** A characterization suite records current behaviour, odd results included, so a refactor can prove it changed nothing. Its strength is measured with mutants: small, plausible edits to the code that a good suite notices.\n\nThe legacy function (it is also in the starter, so you can call it):\n\n```js\nfunction shippingFee({ subtotal, weightKg, express, country }) {\n  let fee = subtotal >= 50 ? 0 : 7;\n  if (weightKg > 10) fee += Math.ceil(weightKg - 10) * 2;\n  if (express) fee *= 2;\n  if (country !== 'US') fee += 15;\n  return fee;\n}\n```\n\n**Your task.** Export `cases`: an array of 1 to 8 entries `{ order, expected }`, where `order` is `{ subtotal, weightKg, express, country }` (two numbers, a boolean and a string) and `expected` is a number.\n- every `expected` must equal what the legacy function returns for its `order`, even where that looks wrong\n- the grader runs your cases against three planted mutants of the function: one changes a comparison, one changes a rounding, and one swaps the order of two steps; every mutant must disagree with at least one of your cases\n\n**Worked example.** `{ order: { subtotal: 20, weightKg: 1, express: false, country: 'US' }, expected: 7 }` is a valid case, but it kills none of the mutants.",
+      "starter": "// Legacy code: do not change it. Pin what it does today.\nfunction shippingFee({ subtotal, weightKg, express, country }) {\n  let fee = subtotal >= 50 ? 0 : 7;\n  if (weightKg > 10) fee += Math.ceil(weightKg - 10) * 2;\n  if (express) fee *= 2;\n  if (country !== 'US') fee += 15;\n  return fee;\n}\n\n// TODO: 1 to 8 cases of { order, expected } that pin shippingFee's behaviour\nexport const cases = [];\n",
+      "solution": "// Legacy code: do not change it. Pin what it does today.\nfunction shippingFee({ subtotal, weightKg, express, country }) {\n  let fee = subtotal >= 50 ? 0 : 7;\n  if (weightKg > 10) fee += Math.ceil(weightKg - 10) * 2;\n  if (express) fee *= 2;\n  if (country !== 'US') fee += 15;\n  return fee;\n}\n\nconst orders = [\n  { subtotal: 50, weightKg: 1, express: false, country: 'US' },\n  { subtotal: 49.99, weightKg: 1, express: false, country: 'US' },\n  { subtotal: 20, weightKg: 10.5, express: false, country: 'US' },\n  { subtotal: 20, weightKg: 1, express: true, country: 'DE' },\n  { subtotal: 60, weightKg: 1, express: true, country: 'US' },\n];\n\nexport const cases = orders.map((order) => ({ order, expected: shippingFee(order) }));\n",
+      "tests": [
+        {
+          "name": "exports 1 to 8 well-formed cases",
+          "code": "assert.ok(Array.isArray(mod.cases), 'export an array named cases');\nassert.ok(mod.cases.length >= 1 && mod.cases.length <= 8, 'between 1 and 8 cases, got ' + mod.cases.length);\nfor (const c of mod.cases) {\n  const o = c.order;\n  assert.ok(o && typeof o.subtotal === 'number' && typeof o.weightKg === 'number' && typeof o.express === 'boolean' && typeof o.country === 'string', 'bad order: ' + JSON.stringify(o));\n  assert.equal(typeof c.expected, 'number', 'expected must be a number');\n}"
+        },
+        {
+          "name": "every case matches what the legacy code returns today",
+          "code": "const legacy = ({ subtotal, weightKg, express, country }) => {\n  let fee = subtotal >= 50 ? 0 : 7;\n  if (weightKg > 10) fee += Math.ceil(weightKg - 10) * 2;\n  if (express) fee *= 2;\n  if (country !== 'US') fee += 15;\n  return fee;\n};\nassert.ok(Array.isArray(mod.cases) && mod.cases.length > 0, 'export a non-empty cases array');\nfor (const c of mod.cases) assert.equal(c.expected, legacy(c.order), 'legacy returns ' + legacy(c.order) + ' for ' + JSON.stringify(c.order));"
+        },
+        {
+          "name": "kills the boundary mutant, free shipping only above 50 (trap)",
+          "code": "const mutant = ({ subtotal, weightKg, express, country }) => {\n  let fee = subtotal > 50 ? 0 : 7;\n  if (weightKg > 10) fee += Math.ceil(weightKg - 10) * 2;\n  if (express) fee *= 2;\n  if (country !== 'US') fee += 15;\n  return fee;\n};\nassert.ok(Array.isArray(mod.cases), 'export cases');\nassert.ok(mod.cases.some((c) => mutant(c.order) !== c.expected), 'no case notices when >= 50 becomes > 50');"
+        },
+        {
+          "name": "kills the rounding mutant, extra kilos rounded down",
+          "code": "const mutant = ({ subtotal, weightKg, express, country }) => {\n  let fee = subtotal >= 50 ? 0 : 7;\n  if (weightKg > 10) fee += Math.floor(weightKg - 10) * 2;\n  if (express) fee *= 2;\n  if (country !== 'US') fee += 15;\n  return fee;\n};\nassert.ok(Array.isArray(mod.cases), 'export cases');\nassert.ok(mod.cases.some((c) => mutant(c.order) !== c.expected), 'no case notices when ceil becomes floor');"
+        },
+        {
+          "name": "kills the step-order mutant, surcharge added before the express doubling",
+          "code": "const mutant = ({ subtotal, weightKg, express, country }) => {\n  let fee = subtotal >= 50 ? 0 : 7;\n  if (weightKg > 10) fee += Math.ceil(weightKg - 10) * 2;\n  if (country !== 'US') fee += 15;\n  if (express) fee *= 2;\n  return fee;\n};\nassert.ok(Array.isArray(mod.cases), 'export cases');\nassert.ok(mod.cases.some((c) => mutant(c.order) !== c.expected), 'no case notices when the international surcharge moves before the express doubling');"
+        }
+      ],
+      "explanation": "Put one input on each decision the code makes, and let the legacy function supply the expected values:\n\n```js\nconst orders = [\n  { subtotal: 50, weightKg: 1, express: false, country: 'US' },     // exactly on the threshold\n  { subtotal: 49.99, weightKg: 1, express: false, country: 'US' },  // just below it\n  { subtotal: 20, weightKg: 10.5, express: false, country: 'US' },  // a fractional extra kilo\n  { subtotal: 20, weightKg: 1, express: true, country: 'DE' },      // express AND international\n  { subtotal: 60, weightKg: 1, express: true, country: 'US' },      // odd today: express on a free order costs 0\n];\nexport const cases = orders.map((order) => ({ order, expected: shippingFee(order) }));\n```\n\nGenerating expected values from the current code is the \"golden master\" form of characterization: the skill is in choosing the inputs.\n\nThe tests catch two plausible-wrong suites. Typical values (subtotals of 20, 30 and 80, whole-kilo weights, express only on domestic orders) all pass on the legacy code and kill none of the mutants: whole kilos round the same way up and down, 80 is free under both comparisons, and doubling commutes with the surcharge when only one of them applies. Writing the expected value the spec promises (express is never free, so 7) instead of what the code returns (0) fails the characterization itself.",
+      "hints": [
+        "A characterization suite is only as strong as its inputs: each case should sit exactly where one detail of the code makes a difference.",
+        "Find the three decisions in the function, choose an input that lands exactly on each one, including a weight with a fractional part above the limit and an order where two rules interact, and take each expected value from what the legacy function actually returns.",
+        "Use one order at a subtotal of exactly fifty, one heavy order whose weight ends in half a kilo above ten, and one express order shipped outside the US, and set each expected value to the output of the legacy function for that order."
+      ]
+    },
+    {
+      "slug": "03-answerable-request-log",
+      "title": "logRequest: one answerable, secret-free line",
+      "difficulty": 2,
+      "skills": [
+        "structured logging",
+        "allow-lists",
+        "security"
+      ],
+      "instructions": "**Interview prompt.** \"During the last incident nobody could say which tenants were affected, and last year we leaked passwords into the log index. Write the request logger.\"\n\n**Why it matters.** A structured line per request turns incident questions into queries. Building it from an allow-list, instead of copying the request and deleting known secrets, keeps tokens, cookies and bodies out even when someone adds a new field.\n\n**Your task.** Export `logRequest(ctx)` returning ONE line of JSON (no newline inside). `ctx` holds `requestId`, `tenantId` (may be absent), `user` (may be absent, otherwise `{ id, email, password? }`), `method`, `url` (path plus an optional query string), `status`, `startedAt` and `endedAt` (ms from the injected clock), `headers`, `body` and an optional `error`.\n\nThe line is an object with exactly these keys:\n- `level`: `'error'` for status 500 and above, `'warn'` for 400 to 499, otherwise `'info'`\n- `requestId`, `method` and `status` as given\n- `tenantId` and `userId`, each `null` when absent\n- `path`: the url without its query string\n- `durationMs`: the time from `startedAt` to `endedAt`, in ms\n- `error`: the error's message, only when `ctx.error` is set\n\nNothing else from `ctx` (headers, body, email, password) may appear in the line.\n\n**Worked example.** A `GET /orders/7?expand=items` for tenant `t1`, user `u5`, status 200, from 1000 to 1042 logs `{\"level\":\"info\",\"requestId\":\"r1\",\"tenantId\":\"t1\",\"userId\":\"u5\",\"method\":\"GET\",\"path\":\"/orders/7\",\"status\":200,\"durationMs\":42}`.",
+      "starter": "export function logRequest(ctx) {\n  // TODO: build the line from an allow-list of fields\n  return JSON.stringify(ctx);\n}\n",
+      "solution": "const levelFor = (status) => (status >= 500 ? 'error' : status >= 400 ? 'warn' : 'info');\n\nexport function logRequest(ctx) {\n  const entry = {\n    level: levelFor(ctx.status),\n    requestId: ctx.requestId,\n    tenantId: ctx.tenantId ?? null,\n    userId: ctx.user?.id ?? null,\n    method: ctx.method,\n    path: ctx.url.split('?')[0],\n    status: ctx.status,\n    durationMs: ctx.endedAt - ctx.startedAt,\n  };\n  if (ctx.error) entry.error = String(ctx.error.message ?? ctx.error);\n  return JSON.stringify(entry);\n}\n",
+      "tests": [
+        {
+          "name": "one JSON line with the request's identifiers",
+          "code": "assert.equal(typeof mod.logRequest, 'function', 'export logRequest');\nconst line = mod.logRequest({\n  requestId: 'r1', tenantId: 't1', user: { id: 'u5', email: 'ada@example.com' }, method: 'GET', url: '/orders/7?expand=items',\n  status: 200, startedAt: 1000, endedAt: 1042, headers: { 'user-agent': 'curl/8' }, body: undefined,\n});\nassert.equal(typeof line, 'string');\nassert.ok(!line.includes('\\n'), 'one line');\nassert.deepEqual(JSON.parse(line), { level: 'info', requestId: 'r1', tenantId: 't1', userId: 'u5', method: 'GET', path: '/orders/7', status: 200, durationMs: 42 });"
+        },
+        {
+          "name": "durationMs comes from the injected timestamps, and 0 is kept (trap)",
+          "code": "const base = { requestId: 'r2', tenantId: 't1', user: { id: 'u1' }, method: 'GET', url: '/health', status: 200, headers: {}, body: undefined };\nassert.equal(JSON.parse(mod.logRequest({ ...base, startedAt: 5000, endedAt: 5250 })).durationMs, 250);\nconst zero = JSON.parse(mod.logRequest({ ...base, startedAt: 7000, endedAt: 7000 }));\nassert.ok(Object.hasOwn(zero, 'durationMs'), 'a 0 ms request still has durationMs');\nassert.equal(zero.durationMs, 0);"
+        },
+        {
+          "name": "passwords, tokens, cookies and bodies never reach the line",
+          "code": "const line = mod.logRequest({\n  requestId: 'r3', tenantId: 't9', user: { id: 'u2', email: 'bob@example.com', password: 'hunter2' }, method: 'POST', url: '/login',\n  status: 401, startedAt: 0, endedAt: 12,\n  headers: { authorization: 'Bearer s3cr3t-token', cookie: 'sid=abc123session', 'user-agent': 'x' },\n  body: { email: 'bob@example.com', password: 'hunter2', cardNumber: '4111111111111111' },\n});\nfor (const secret of ['hunter2', 's3cr3t-token', 'abc123session', '4111111111111111', 'bob@example.com']) {\n  assert.ok(!line.includes(secret), 'leaked ' + secret + ' in ' + line);\n}\nassert.deepEqual(Object.keys(JSON.parse(line)).sort(), ['durationMs', 'level', 'method', 'path', 'requestId', 'status', 'tenantId', 'userId']);"
+        },
+        {
+          "name": "the query string is cut from the path, so a token in the URL is not logged",
+          "code": "const line = mod.logRequest({\n  requestId: 'r4', tenantId: 't1', method: 'GET', url: '/password-reset?token=t0k3n-xyz&email=a%40b.c',\n  status: 302, startedAt: 0, endedAt: 3, headers: {}, body: undefined,\n});\nassert.equal(JSON.parse(line).path, '/password-reset');\nassert.ok(!line.includes('t0k3n-xyz'), 'the reset token leaked into the log');"
+        },
+        {
+          "name": "level follows the status, and a 5xx carries the error message",
+          "code": "const base = { requestId: 'r5', tenantId: 't1', user: { id: 'u1' }, method: 'PUT', url: '/orders/1', startedAt: 0, endedAt: 9, headers: {}, body: undefined };\nconst failed = JSON.parse(mod.logRequest({ ...base, status: 503, error: new Error('db down') }));\nassert.equal(failed.level, 'error');\nassert.equal(failed.error, 'db down');\nconst missing = JSON.parse(mod.logRequest({ ...base, status: 404 }));\nassert.equal(missing.level, 'warn');\nassert.ok(!Object.hasOwn(missing, 'error'), 'no error key without an error');\nassert.equal(JSON.parse(mod.logRequest({ ...base, status: 204 })).level, 'info');\nassert.equal(JSON.parse(mod.logRequest({ ...base, status: 499 })).level, 'warn');"
+        },
+        {
+          "name": "an anonymous request still has tenantId and userId, as null",
+          "code": "const entry = JSON.parse(mod.logRequest({ requestId: 'r6', method: 'GET', url: '/public', status: 200, startedAt: 0, endedAt: 1, headers: {}, body: undefined }));\nassert.ok(Object.hasOwn(entry, 'tenantId') && Object.hasOwn(entry, 'userId'), 'both keys present');\nassert.equal(entry.tenantId, null);\nassert.equal(entry.userId, null);"
+        }
+      ],
+      "explanation": "Build a fresh object from named fields only:\n\n```js\nconst entry = {\n  level: levelFor(ctx.status),\n  requestId: ctx.requestId,\n  tenantId: ctx.tenantId ?? null,\n  userId: ctx.user?.id ?? null,\n  method: ctx.method,\n  path: ctx.url.split('?')[0],\n  status: ctx.status,\n  durationMs: ctx.endedAt - ctx.startedAt,\n};\nif (ctx.error) entry.error = String(ctx.error.message ?? ctx.error);\nreturn JSON.stringify(entry);\n```\n\n`JSON.stringify` without indentation escapes any newline inside a value, so the result is always one line.\n\nThe tests catch two plausible-wrong loggers. Copying the request and filtering a deny-list of key names (`password`, `authorization`, `token`) still leaks the session cookie, the card number in the body and the email, because nobody listed them. An allow-list that logs the full `url` leaks the reset token from the query string, and writing the duration as `ms || undefined` silently drops `durationMs` for a 0 ms request.",
+      "hints": [
+        "Allow-list logging: you name each field that goes into the line, rather than removing the ones that must not.",
+        "Build a fresh object holding only the listed fields, fill a missing tenant or user with null, work out the duration from the two timestamps, cut the query string off the url, pick the level from the status range, and add the error message only when there is an error.",
+        "Create a new object with level, requestId, tenantId or null, the user's id or null, method, the url up to the question mark, status and the end time minus the start time, add the error message if there is one, and serialise it as JSON without indentation."
+      ]
+    }
+  ]
+}

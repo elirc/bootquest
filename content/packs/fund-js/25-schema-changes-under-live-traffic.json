@@ -1,0 +1,246 @@
+{
+ "format": "bootquest-pack@1",
+ "source": "fund-js",
+ "course": {
+  "id": "25-schema-changes-under-live-traffic",
+  "order": 25,
+  "title": "Schema changes under live traffic",
+  "description": "Why a migration never ships atomically with a deploy: expand, backfill, contract; renames and NOT NULL columns in steps; resumable, idempotent backfills; and dual writes with a read switch.",
+  "prerequisites": []
+ },
+ "modules": [
+  {
+   "id": "25-schema-changes-under-live-traffic",
+   "title": "Schema changes under live traffic",
+   "lessons": [
+    {
+     "id": "drills",
+     "title": "Schema changes under live traffic",
+     "explanation": "Why a migration never ships atomically with a deploy: expand, backfill, contract; renames and NOT NULL columns in steps; resumable, idempotent backfills; and dual writes with a read switch."
+    }
+   ]
+  }
+ ],
+ "units": [
+  {
+   "unit": {
+    "key": "fund-js/25-schema-changes-under-live-traffic/01-migration-plan-lint",
+    "track": "js",
+    "kind": "drill",
+    "title": "checkPlan: lint a migration plan for live traffic",
+    "phase": "25-schema-changes-under-live-traffic",
+    "difficulty": 2,
+    "competencies": [
+     "language-fluency"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-js",
+       "language": "js",
+       "tests": [
+        {
+         "name": "a safe expand, backfill, contract plan has no problems",
+         "code": "assert.equal(typeof mod.checkPlan, 'function', 'export checkPlan');\nconst plan = [\n  { op: 'addColumn', table: 'users', column: 'fullName', nullable: true },\n  { op: 'backfill', table: 'users', from: 'name', to: 'fullName' },\n  { op: 'dropColumn', table: 'users', column: 'name' },\n];\nassert.deepEqual(mod.checkPlan(plan), []);"
+        },
+        {
+         "name": "a one-step rename is rejected",
+         "code": "assert.deepEqual(mod.checkPlan([{ op: 'renameColumn', table: 'users', from: 'name', to: 'fullName' }]), [{ step: 0, code: 'one-step-rename' }]);"
+        },
+        {
+         "name": "a NOT NULL column with no default or a null default is rejected",
+         "code": "const plan = [\n  { op: 'addColumn', table: 'orders', column: 'tenantId', nullable: false },\n  { op: 'addColumn', table: 'orders', column: 'region', nullable: false, default: null },\n  { op: 'addColumn', table: 'orders', column: 'note', nullable: true },\n];\nassert.deepEqual(mod.checkPlan(plan), [\n  { step: 0, code: 'not-null-without-default' },\n  { step: 1, code: 'not-null-without-default' },\n]);"
+        },
+        {
+         "name": "defaults of 0, empty string and false are real defaults (trap)",
+         "code": "const plan = [\n  { op: 'addColumn', table: 'orders', column: 'retries', nullable: false, default: 0 },\n  { op: 'addColumn', table: 'orders', column: 'note', nullable: false, default: '' },\n  { op: 'addColumn', table: 'orders', column: 'archived', nullable: false, default: false },\n];\nassert.deepEqual(mod.checkPlan(plan), [], 'a falsy default is still a default');"
+        },
+        {
+         "name": "dropping a column before the backfill that copies it is rejected",
+         "code": "const plan = [\n  { op: 'addColumn', table: 'users', column: 'fullName', nullable: true },\n  { op: 'dropColumn', table: 'users', column: 'name' },\n  { op: 'backfill', table: 'users', from: 'name', to: 'fullName' },\n];\nassert.deepEqual(mod.checkPlan(plan), [{ step: 1, code: 'drop-before-backfill' }]);"
+        },
+        {
+         "name": "only a later backfill from the same table and column blocks a drop",
+         "code": "const plan = [\n  { op: 'dropColumn', table: 'orders', column: 'name' },\n  { op: 'dropColumn', table: 'users', column: 'nickname' },\n  { op: 'backfill', table: 'users', from: 'name', to: 'fullName' },\n  { op: 'dropColumn', table: 'users', column: 'name' },\n];\nassert.deepEqual(mod.checkPlan(plan), [], 'orders.name is another column; users.name is dropped after its backfill');"
+        },
+        {
+         "name": "problems come back in step order, one per offending step",
+         "code": "const plan = [\n  { op: 'renameColumn', table: 'users', from: 'email', to: 'login' },\n  { op: 'addColumn', table: 'users', column: 'fullName', nullable: true },\n  { op: 'dropColumn', table: 'users', column: 'name' },\n  { op: 'addColumn', table: 'users', column: 'plan', nullable: false },\n  { op: 'backfill', table: 'users', from: 'name', to: 'fullName' },\n  { op: 'backfill', table: 'users', from: 'name', to: 'displayName' },\n];\nassert.deepEqual(mod.checkPlan(plan), [\n  { step: 0, code: 'one-step-rename' },\n  { step: 2, code: 'drop-before-backfill' },\n  { step: 3, code: 'not-null-without-default' },\n]);"
+        }
+       ],
+       "timeoutMs": 8000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "25-schema-changes-under-live-traffic/01-migration-plan-lint",
+    "type": "code",
+    "module": "25-schema-changes-under-live-traffic",
+    "lesson": "drills",
+    "position": 0,
+    "skills": [
+     "expand/contract",
+     "schema migrations"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "fund-js/25-schema-changes-under-live-traffic/02-resumable-backfill",
+    "track": "js",
+    "kind": "drill",
+    "title": "backfill: resumable, idempotent batches",
+    "phase": "25-schema-changes-under-live-traffic",
+    "difficulty": 3,
+    "competencies": [
+     "language-fluency"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-js",
+       "language": "js",
+       "tests": [
+        {
+         "name": "fills every unset row with the trimmed, lower-cased email",
+         "code": "assert.equal(typeof mod.backfill, 'function', 'export backfill');\nconst makeStore = (rows, failOnAttempt = 0) => {\n  const s = { rows: new Map(rows.map((r) => [r.id, { emailNormalized: null, ...r }])), checkpoint: 0, saved: [], reads: [], writes: 0, attempts: 0 };\n  s.loadCheckpoint = async () => s.checkpoint;\n  s.saveCheckpoint = async (id) => { s.checkpoint = id; s.saved.push(id); };\n  s.readAfter = async (afterId, limit) => { s.reads.push(afterId); return [...s.rows.values()].filter((r) => r.id > afterId).sort((a, b) => a.id - b.id).slice(0, limit).map((r) => ({ ...r })); };\n  s.write = async (id, value) => { s.attempts += 1; if (s.attempts === failOnAttempt) throw new Error('connection reset'); s.writes += 1; s.rows.get(id).emailNormalized = value; };\n  return s;\n};\nconst ids = [2, 3, 5, 8, 13, 21, 34];\nconst s = makeStore(ids.map((id) => ({ id, email: '  User' + id + '@Example.COM ' })));\nassert.equal(await mod.backfill(s, 3), 7);\nfor (const id of ids) assert.equal(s.rows.get(id).emailNormalized, 'user' + id + '@example.com');"
+        },
+        {
+         "name": "saves the last id of every batch as the checkpoint",
+         "code": "const makeStore = (rows, failOnAttempt = 0) => {\n  const s = { rows: new Map(rows.map((r) => [r.id, { emailNormalized: null, ...r }])), checkpoint: 0, saved: [], reads: [], writes: 0, attempts: 0 };\n  s.loadCheckpoint = async () => s.checkpoint;\n  s.saveCheckpoint = async (id) => { s.checkpoint = id; s.saved.push(id); };\n  s.readAfter = async (afterId, limit) => { s.reads.push(afterId); return [...s.rows.values()].filter((r) => r.id > afterId).sort((a, b) => a.id - b.id).slice(0, limit).map((r) => ({ ...r })); };\n  s.write = async (id, value) => { s.attempts += 1; if (s.attempts === failOnAttempt) throw new Error('connection reset'); s.writes += 1; s.rows.get(id).emailNormalized = value; };\n  return s;\n};\nconst s = makeStore([2, 3, 5, 8, 13, 21, 34].map((id) => ({ id, email: 'u' + id + '@x.io' })));\nawait mod.backfill(s, 3);\nassert.deepEqual(s.saved, [5, 21, 34]);\nassert.deepEqual(s.reads.slice(0, 3), [0, 5, 21], 'each read starts after the previous batch');"
+        },
+        {
+         "name": "rows the new code already filled are left alone, even an empty string (trap)",
+         "code": "const makeStore = (rows, failOnAttempt = 0) => {\n  const s = { rows: new Map(rows.map((r) => [r.id, { emailNormalized: null, ...r }])), checkpoint: 0, saved: [], reads: [], writes: 0, attempts: 0 };\n  s.loadCheckpoint = async () => s.checkpoint;\n  s.saveCheckpoint = async (id) => { s.checkpoint = id; s.saved.push(id); };\n  s.readAfter = async (afterId, limit) => { s.reads.push(afterId); return [...s.rows.values()].filter((r) => r.id > afterId).sort((a, b) => a.id - b.id).slice(0, limit).map((r) => ({ ...r })); };\n  s.write = async (id, value) => { s.attempts += 1; if (s.attempts === failOnAttempt) throw new Error('connection reset'); s.writes += 1; s.rows.get(id).emailNormalized = value; };\n  return s;\n};\nconst s = makeStore([\n  { id: 1, email: 'A@x.io' },\n  { id: 2, email: 'B@x.io', emailNormalized: 'b+new@x.io' },\n  { id: 3, email: '   ', emailNormalized: '' },\n  { id: 4, email: 'D@X.io' },\n]);\nassert.equal(await mod.backfill(s, 2), 2);\nassert.equal(s.rows.get(2).emailNormalized, 'b+new@x.io', 'a value written by the new code is never overwritten');\nassert.equal(s.writes, 2, 'an empty string is a value: the row with id 3 is done');\nassert.equal(s.rows.get(4).emailNormalized, 'd@x.io');"
+        },
+        {
+         "name": "running again from scratch writes nothing",
+         "code": "const makeStore = (rows, failOnAttempt = 0) => {\n  const s = { rows: new Map(rows.map((r) => [r.id, { emailNormalized: null, ...r }])), checkpoint: 0, saved: [], reads: [], writes: 0, attempts: 0 };\n  s.loadCheckpoint = async () => s.checkpoint;\n  s.saveCheckpoint = async (id) => { s.checkpoint = id; s.saved.push(id); };\n  s.readAfter = async (afterId, limit) => { s.reads.push(afterId); return [...s.rows.values()].filter((r) => r.id > afterId).sort((a, b) => a.id - b.id).slice(0, limit).map((r) => ({ ...r })); };\n  s.write = async (id, value) => { s.attempts += 1; if (s.attempts === failOnAttempt) throw new Error('connection reset'); s.writes += 1; s.rows.get(id).emailNormalized = value; };\n  return s;\n};\nconst s = makeStore([{ id: 1, email: '   ' }, { id: 2, email: 'Max@Y.io' }, { id: 3, email: 'Eve@Y.io' }]);\nassert.equal(await mod.backfill(s, 2), 3);\ns.checkpoint = 0;\nassert.equal(await mod.backfill(s, 2), 0, 'a re-run over finished rows must write nothing');\nassert.equal(s.writes, 3);"
+        },
+        {
+         "name": "after a crash mid-batch the next run resumes at the checkpoint and loses no row",
+         "code": "const makeStore = (rows, failOnAttempt = 0) => {\n  const s = { rows: new Map(rows.map((r) => [r.id, { emailNormalized: null, ...r }])), checkpoint: 0, saved: [], reads: [], writes: 0, attempts: 0 };\n  s.loadCheckpoint = async () => s.checkpoint;\n  s.saveCheckpoint = async (id) => { s.checkpoint = id; s.saved.push(id); };\n  s.readAfter = async (afterId, limit) => { s.reads.push(afterId); return [...s.rows.values()].filter((r) => r.id > afterId).sort((a, b) => a.id - b.id).slice(0, limit).map((r) => ({ ...r })); };\n  s.write = async (id, value) => { s.attempts += 1; if (s.attempts === failOnAttempt) throw new Error('connection reset'); s.writes += 1; s.rows.get(id).emailNormalized = value; };\n  return s;\n};\nconst s = makeStore([2, 3, 5, 8, 13, 21, 34].map((id) => ({ id, email: 'U' + id + '@x.io' })), 5);\nawait assert.rejects(mod.backfill(s, 3), /connection reset/);\nassert.equal(s.checkpoint, 5, 'the half-written batch must not be checkpointed');\ns.reads.length = 0;\nassert.equal(await mod.backfill(s, 3), 3, 'rows 13, 21 and 34 are left; row 8 was written before the crash');\nassert.equal(s.reads[0], 5, 'the second run starts after the checkpoint, not from the beginning');\nassert.equal(s.writes, 7, 'every row written exactly once across both runs');\nfor (const r of s.rows.values()) assert.notEqual(r.emailNormalized, null, 'row ' + r.id + ' was never filled');"
+        },
+        {
+         "name": "an empty table finishes after one read",
+         "code": "const makeStore = (rows, failOnAttempt = 0) => {\n  const s = { rows: new Map(rows.map((r) => [r.id, { emailNormalized: null, ...r }])), checkpoint: 0, saved: [], reads: [], writes: 0, attempts: 0 };\n  s.loadCheckpoint = async () => s.checkpoint;\n  s.saveCheckpoint = async (id) => { s.checkpoint = id; s.saved.push(id); };\n  s.readAfter = async (afterId, limit) => { s.reads.push(afterId); return [...s.rows.values()].filter((r) => r.id > afterId).sort((a, b) => a.id - b.id).slice(0, limit).map((r) => ({ ...r })); };\n  s.write = async (id, value) => { s.attempts += 1; if (s.attempts === failOnAttempt) throw new Error('connection reset'); s.writes += 1; s.rows.get(id).emailNormalized = value; };\n  return s;\n};\nconst s = makeStore([]);\nassert.equal(await mod.backfill(s, 100), 0);\nassert.deepEqual(s.reads, [0]);"
+        }
+       ],
+       "timeoutMs": 8000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "25-schema-changes-under-live-traffic/02-resumable-backfill",
+    "type": "code",
+    "module": "25-schema-changes-under-live-traffic",
+    "lesson": "drills",
+    "position": 1,
+    "skills": [
+     "backfills",
+     "checkpoints",
+     "idempotency"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "fund-js/25-schema-changes-under-live-traffic/03-dual-write-repository",
+    "track": "js",
+    "kind": "drill",
+    "title": "makeUserRepo: a repository for every migration phase",
+    "phase": "25-schema-changes-under-live-traffic",
+    "difficulty": 2,
+    "competencies": [
+     "language-fluency"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-js",
+       "language": "js",
+       "tests": [
+        {
+         "name": "dual-write saves both columns, so old and new readers agree",
+         "code": "assert.equal(typeof mod.makeUserRepo, 'function', 'export makeUserRepo');\nconst makeDb = (columns, rows = []) => {\n  const cols = new Set(columns);\n  const raw = new Map(rows.map((r) => [r.id, { ...r }]));\n  return {\n    columns: cols,\n    raw,\n    async get(id) { const r = raw.get(id); return r ? { ...r } : null; },\n    async put(id, patch) {\n      for (const c of Object.keys(patch)) if (!cols.has(c)) throw new Error('no such column: ' + c);\n      raw.set(id, { ...(raw.get(id) ?? { id }), ...patch });\n    },\n  };\n};\nconst db = makeDb(['id', 'name', 'fullName']);\nconst repo = mod.makeUserRepo(db, 'dual-write');\nawait repo.save(1, 'Ada Lovelace');\nassert.deepEqual(db.raw.get(1), { id: 1, name: 'Ada Lovelace', fullName: 'Ada Lovelace' });\nassert.deepEqual(await repo.get(1), { id: 1, fullName: 'Ada Lovelace' });"
+        },
+        {
+         "name": "dual-write reads the old column even when the new one is stale (trap)",
+         "code": "const makeDb = (columns, rows = []) => {\n  const cols = new Set(columns);\n  const raw = new Map(rows.map((r) => [r.id, { ...r }]));\n  return {\n    columns: cols,\n    raw,\n    async get(id) { const r = raw.get(id); return r ? { ...r } : null; },\n    async put(id, patch) {\n      for (const c of Object.keys(patch)) if (!cols.has(c)) throw new Error('no such column: ' + c);\n      raw.set(id, { ...(raw.get(id) ?? { id }), ...patch });\n    },\n  };\n};\nconst db = makeDb(['id', 'name', 'fullName'], [\n  { id: 2, name: 'Grace Hopper', fullName: 'Grace H' },\n  { id: 3, name: 'Alan Turing', fullName: null },\n]);\nconst repo = mod.makeUserRepo(db, 'dual-write');\nassert.deepEqual(await repo.get(2), { id: 2, fullName: 'Grace Hopper' }, 'an old pod renamed her after the last dual write');\nassert.deepEqual(await repo.get(3), { id: 3, fullName: 'Alan Turing' });"
+        },
+        {
+         "name": "read-new reads the new column but keeps the old one current",
+         "code": "const makeDb = (columns, rows = []) => {\n  const cols = new Set(columns);\n  const raw = new Map(rows.map((r) => [r.id, { ...r }]));\n  return {\n    columns: cols,\n    raw,\n    async get(id) { const r = raw.get(id); return r ? { ...r } : null; },\n    async put(id, patch) {\n      for (const c of Object.keys(patch)) if (!cols.has(c)) throw new Error('no such column: ' + c);\n      raw.set(id, { ...(raw.get(id) ?? { id }), ...patch });\n    },\n  };\n};\nconst db = makeDb(['id', 'name', 'fullName'], [{ id: 4, name: 'Edsger', fullName: 'Edsger Dijkstra' }]);\nconst repo = mod.makeUserRepo(db, 'read-new');\nassert.deepEqual(await repo.get(4), { id: 4, fullName: 'Edsger Dijkstra' });\nawait repo.save(4, 'E. W. Dijkstra');\nassert.equal(db.raw.get(4).name, 'E. W. Dijkstra', 'old readers and a rollback still read name');\nassert.equal(db.raw.get(4).fullName, 'E. W. Dijkstra');"
+        },
+        {
+         "name": "new-only never writes the dropped column",
+         "code": "const makeDb = (columns, rows = []) => {\n  const cols = new Set(columns);\n  const raw = new Map(rows.map((r) => [r.id, { ...r }]));\n  return {\n    columns: cols,\n    raw,\n    async get(id) { const r = raw.get(id); return r ? { ...r } : null; },\n    async put(id, patch) {\n      for (const c of Object.keys(patch)) if (!cols.has(c)) throw new Error('no such column: ' + c);\n      raw.set(id, { ...(raw.get(id) ?? { id }), ...patch });\n    },\n  };\n};\nconst db = makeDb(['id', 'fullName'], [{ id: 5, fullName: 'Barbara Liskov' }]);\nconst repo = mod.makeUserRepo(db, 'new-only');\nawait repo.save(5, 'Barbara H. Liskov');\nawait repo.save(6, 'Ken Thompson');\nassert.deepEqual(await repo.get(5), { id: 5, fullName: 'Barbara H. Liskov' });\nassert.deepEqual(db.raw.get(6), { id: 6, fullName: 'Ken Thompson' });"
+        },
+        {
+         "name": "a missing row is null in every phase",
+         "code": "const makeDb = (columns, rows = []) => {\n  const cols = new Set(columns);\n  const raw = new Map(rows.map((r) => [r.id, { ...r }]));\n  return {\n    columns: cols,\n    raw,\n    async get(id) { const r = raw.get(id); return r ? { ...r } : null; },\n    async put(id, patch) {\n      for (const c of Object.keys(patch)) if (!cols.has(c)) throw new Error('no such column: ' + c);\n      raw.set(id, { ...(raw.get(id) ?? { id }), ...patch });\n    },\n  };\n};\nfor (const phase of ['dual-write', 'read-new', 'new-only']) {\n  const db = makeDb(phase === 'new-only' ? ['id', 'fullName'] : ['id', 'name', 'fullName'], [{ id: 1, name: 'A', fullName: 'A' }]);\n  assert.equal(await mod.makeUserRepo(db, phase).get(99), null, phase);\n}"
+        },
+        {
+         "name": "an unknown phase is refused when the repo is created",
+         "code": "const db = { columns: new Set(['id', 'name', 'fullName']), async get() { return null; }, async put() {} };\nassert.throws(() => mod.makeUserRepo(db, 'contract'), /contract/);\nassert.throws(() => mod.makeUserRepo(db, 'Dual-Write'), /Dual-Write/, 'phase names are exact');"
+        }
+       ],
+       "timeoutMs": 8000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "25-schema-changes-under-live-traffic/03-dual-write-repository",
+    "type": "code",
+    "module": "25-schema-changes-under-live-traffic",
+    "lesson": "drills",
+    "position": 2,
+    "skills": [
+     "dual writes",
+     "expand/contract"
+    ]
+   }
+  }
+ ],
+ "content": {
+  "fund-js/25-schema-changes-under-live-traffic/01-migration-plan-lint": {
+   "instructions": "**Skills:** expand/contract · schema migrations  \n**Level:** ★★☆\n\n**Interview prompt.** \"Our migrations run during the rollout, while the previous release still serves traffic. Write a lint that rejects plans which would break the running version.\"\n\n**Why it matters.** Three mistakes cause most migration outages: renaming a column in one step, adding a NOT NULL column without a default, and dropping a column before the backfill that copies it out has run. A lint in CI catches all three before a reviewer has to.\n\n**Your task.** Export `checkPlan(steps)`. `steps` is an ordered array of plain objects, each one of:\n- `{ op: 'addColumn', table, column, nullable, default }` (the `default` key may be absent)\n- `{ op: 'backfill', table, from, to }` copies column `from` into column `to`\n- `{ op: 'dropColumn', table, column }`\n- `{ op: 'renameColumn', table, from, to }`\n\nReturn an array of problems `{ step, code }`, where `step` is the step's 0-based index, in step order and at most one per step. An empty array means the plan is safe.\n- `'one-step-rename'` for every `renameColumn`\n- `'not-null-without-default'` for an `addColumn` with `nullable: false` whose default is missing or `null`. Any other default, including `0`, `''` and `false`, is a real default.\n- `'drop-before-backfill'` for a `dropColumn` when a LATER `backfill` on the same table copies from that column\n\n**Worked example.** A plan that drops `users.name` at step 0 and backfills `fullName` from `users.name` at step 1 gives `[{ step: 0, code: 'drop-before-backfill' }]`.\n",
+   "starter": "export function checkPlan(steps) {\n  // TODO: return a { step, code } problem for each step that would break the running release\n  return [];\n}\n",
+   "solution": "export function checkPlan(steps) {\n  const problems = [];\n  steps.forEach((s, i) => {\n    if (s.op === 'renameColumn') {\n      problems.push({ step: i, code: 'one-step-rename' });\n    } else if (s.op === 'addColumn') {\n      if (s.nullable === false && (s.default === undefined || s.default === null)) {\n        problems.push({ step: i, code: 'not-null-without-default' });\n      }\n    } else if (s.op === 'dropColumn') {\n      const copiedLater = steps\n        .slice(i + 1)\n        .some((b) => b.op === 'backfill' && b.table === s.table && b.from === s.column);\n      if (copiedLater) problems.push({ step: i, code: 'drop-before-backfill' });\n    }\n  });\n  return problems;\n}\n",
+   "explanation": "Walk the steps once with their index. A rename and a NOT NULL add are local checks; a drop looks ahead:\n\n```js\n} else if (s.op === 'dropColumn') {\n  const copiedLater = steps\n    .slice(i + 1)\n    .some((b) => b.op === 'backfill' && b.table === s.table && b.from === s.column);\n  if (copiedLater) problems.push({ step: i, code: 'drop-before-backfill' });\n}\n```\n\nThe tests catch two plausible-wrong versions. A truthiness check such as `!s.default` rejects the valid defaults `0`, `''` and `false`, while `default: null` must still be rejected, so compare against `undefined` and `null` explicitly. A drop check that ignores the table, or that also looks at EARLIER backfills, flags the correct contract step of a safe plan. The NOT NULL rule mirrors the databases: once a table has rows, SQLite and Postgres both refuse `ADD COLUMN ... NOT NULL` without a non-null default.",
+   "hints": [
+    "Each step can be judged on its own, except a drop, which has to look at the steps that come after it.",
+    "Go through the steps in order, keeping each one's position. A rename is always a problem. A non-nullable add is a problem only when it has no real default, and zero, an empty string or false all count as real defaults. A drop is a problem when a later backfill on the same table copies from that column.",
+    "For a drop, scan only the steps after its index for a backfill whose table equals the drop's table and whose source column equals the dropped column. For an add, compare the default with undefined and with null explicitly instead of testing its truthiness."
+   ]
+  },
+  "fund-js/25-schema-changes-under-live-traffic/02-resumable-backfill": {
+   "instructions": "**Skills:** backfills · checkpoints · idempotency  \n**Level:** ★★★\n\n**Interview prompt.** \"Fill the new `email_normalized` column for 40 million users without downtime. The job will be killed at some point; make that harmless.\"\n\n**Why it matters.** A backfill runs for hours next to live traffic. It must work in small keyed batches, survive a crash without losing or redoing work, and never overwrite a value the new code has already written.\n\n**Your task.** Export `async backfill(store, batchSize)`. Every store method may return a promise:\n- `store.loadCheckpoint()` gives the id after which to start (`0` when the job has never run)\n- `store.readAfter(afterId, limit)` gives up to `limit` rows `{ id, email, emailNormalized }` whose id is greater than `afterId`, in ascending id order\n- `store.write(id, value)` sets that row's `emailNormalized`\n- `store.saveCheckpoint(id)` records progress\n\nRules:\n- the normalised value is the email, trimmed and lower-cased\n- write only rows whose `emailNormalized` is `null`; a row the new code already filled, even with an empty string, is left alone\n- once a batch's writes are done, save the id of the batch's LAST row as the checkpoint, then read the next batch after it\n- stop when a read returns fewer rows than `batchSize`\n- resolve with the number of rows this run wrote; when a write fails, let its error reject the call (the next run resumes)\n\n**Worked example.** Rows 2, 3, 5 and 8 with a batch size of 3: the read after 0 gives rows 2, 3 and 5 (write them, checkpoint 5), the read after 5 gives row 8 (write it, checkpoint 8, stop). The call resolves to 4.\n",
+   "starter": "export async function backfill(store, batchSize) {\n  // TODO: keyed batches from the checkpoint, write only unset rows, checkpoint after each batch\n  return 0;\n}\n",
+   "solution": "const normalize = (email) => email.trim().toLowerCase();\n\nexport async function backfill(store, batchSize) {\n  let after = await store.loadCheckpoint();\n  let written = 0;\n  for (;;) {\n    const rows = await store.readAfter(after, batchSize);\n    for (const row of rows) {\n      if (row.emailNormalized !== null) continue;\n      await store.write(row.id, normalize(row.email));\n      written++;\n    }\n    if (rows.length > 0) {\n      after = rows[rows.length - 1].id;\n      await store.saveCheckpoint(after);\n    }\n    if (rows.length < batchSize) return written;\n  }\n}\n",
+   "explanation": "Read keyed batches from the saved position, write only unset rows, and move the checkpoint only after the batch is written:\n\n```js\nlet after = await store.loadCheckpoint();\nfor (;;) {\n  const rows = await store.readAfter(after, batchSize);\n  for (const row of rows) {\n    if (row.emailNormalized !== null) continue;   // done by the new code or an earlier run\n    await store.write(row.id, normalize(row.email));\n    written++;\n  }\n  if (rows.length > 0) {\n    after = rows[rows.length - 1].id;\n    await store.saveCheckpoint(after);           // AFTER the writes\n  }\n  if (rows.length < batchSize) return written;\n}\n```\n\nThe tests catch three plausible-wrong versions. Saving the checkpoint BEFORE the batch's writes means a crash mid-batch is resumed after rows that were never written, and they stay NULL forever. Starting every run from 0 ignores the checkpoint (wasted hours on a big table). Testing `if (row.emailNormalized)` by truthiness treats the empty string as unset, so every run rewrites those rows and the job is never idempotent.",
+   "hints": [
+    "Keyset batching with a checkpoint: read a batch strictly after the last finished key, and record that key only when the batch is done.",
+    "Start from the stored progress marker, handle one batch at a time in key order, skip rows that already have a value, and an empty string is a value, record progress only once the whole batch has been written, and finish when a batch comes back short.",
+    "Loop: read up to the batch size after the current position, write the normalised email for each row whose new field is exactly null, then move the position to the last row's id and save it, and stop once a read returns fewer rows than the batch size."
+   ]
+  },
+  "fund-js/25-schema-changes-under-live-traffic/03-dual-write-repository": {
+   "instructions": "**Skills:** dual writes · expand/contract  \n**Level:** ★★☆\n\n**Interview prompt.** \"We are moving `users.name` to a new `fullName` column. Write the repository the app uses through all three phases of the migration.\"\n\n**Why it matters.** While a column moves, old pods, reports and a possible rollback still read the old column as the new code moves to the new one. The repository decides, per phase, which columns a save writes and which column a read trusts. Get the reads wrong and users see stale names; get the writes wrong and the old readers break.\n\n**Your task.** Export `makeUserRepo(db, phase)` returning `{ save(id, fullName), get(id) }`; both may be async. The fake `db` has:\n- `db.columns`, a `Set` of the table's column names\n- `db.get(id)`, the raw row object, or `null`\n- `db.put(id, patch)`, which merges the fields of `patch` into the row (creating it) and throws for a field that is not in `db.columns`\n\nThe phases:\n- `'dual-write'` (the new column exists, old pods may still be running): `save` writes both `name` and `fullName`, and `get` trusts `name`\n- `'read-new'` (every pod dual-writes and the backfill is done): `save` still writes both, and `get` trusts `fullName`\n- `'new-only'` (the `name` column has been dropped): `save` writes only `fullName`, and `get` trusts `fullName`\n\n`get` resolves to `{ id, fullName }`, or `null` when the row does not exist. Creating a repo with any other phase throws an error whose message contains the phase.\n\n**Worked example.** In `'dual-write'`, after `save(1, 'Ada Lovelace')` the raw row is `{ id: 1, name: 'Ada Lovelace', fullName: 'Ada Lovelace' }`, and `get(1)` resolves to `{ id: 1, fullName: 'Ada Lovelace' }`.\n",
+   "starter": "export function makeUserRepo(db, phase) {\n  // TODO: per phase, choose the columns save writes and the column get reads\n  return {\n    async save(id, fullName) {},\n    async get(id) {\n      return null;\n    },\n  };\n}\n",
+   "solution": "const PHASES = {\n  'dual-write': { writeOld: true, readFrom: 'name' },\n  'read-new': { writeOld: true, readFrom: 'fullName' },\n  'new-only': { writeOld: false, readFrom: 'fullName' },\n};\n\nexport function makeUserRepo(db, phase) {\n  if (!Object.hasOwn(PHASES, phase)) throw new Error(`unknown migration phase: ${phase}`);\n  const { writeOld, readFrom } = PHASES[phase];\n  return {\n    async save(id, fullName) {\n      await db.put(id, writeOld ? { name: fullName, fullName } : { fullName });\n    },\n    async get(id) {\n      const row = await db.get(id);\n      return row ? { id, fullName: row[readFrom] } : null;\n    },\n  };\n}\n",
+   "explanation": "Describe the phases as data and let `save` and `get` follow it:\n\n```js\nconst PHASES = {\n  'dual-write': { writeOld: true,  readFrom: 'name' },\n  'read-new':   { writeOld: true,  readFrom: 'fullName' },\n  'new-only':   { writeOld: false, readFrom: 'fullName' },\n};\nif (!Object.hasOwn(PHASES, phase)) throw new Error(`unknown migration phase: ${phase}`);\n```\n\n`Object.hasOwn` (not `PHASES[phase]` alone) also refuses names such as `'toString'` that every object inherits.\n\nThe tests catch two plausible-wrong versions. A \"smart\" read of `row.fullName ?? row.name` in every phase serves Grace's stale name: while old pods still write only `name`, a set `fullName` is not proof that it is current. Switching the writes together with the reads in `'read-new'` leaves the old column frozen, so reports, old consumers and a rollback lose every later rename.",
+   "hints": [
+    "Each migration phase is two decisions: which columns a save writes, and which single column a read trusts.",
+    "Describe the three phases as data, look the phase up once when the repo is created and refuse names that are not in your description, write the old column in every phase except the last, and trust the old column for reads only in the first phase.",
+    "Keep a lookup from phase name to two settings, whether to also write the old column and which column to read, throw if the name is not an own key of that lookup, and have save and get follow those two settings."
+   ]
+  }
+ }
+}

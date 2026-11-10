@@ -1,0 +1,241 @@
+{
+ "format": "bootquest-pack@1",
+ "source": "fund-js",
+ "course": {
+  "id": "24-authorization-and-tenant-scoping",
+  "order": 24,
+  "title": "Authorization and tenant scoping",
+  "description": "Authentication versus authorization, IDOR, tenant-scoped repositories, 404 versus 403, mass assignment and allow-lists, and a deny-by-default permission function.",
+  "prerequisites": []
+ },
+ "modules": [
+  {
+   "id": "24-authorization-and-tenant-scoping",
+   "title": "Authorization and tenant scoping",
+   "lessons": [
+    {
+     "id": "drills",
+     "title": "Authorization and tenant scoping",
+     "explanation": "Authentication versus authorization, IDOR, tenant-scoped repositories, 404 versus 403, mass assignment and allow-lists, and a deny-by-default permission function."
+    }
+   ]
+  }
+ ],
+ "units": [
+  {
+   "unit": {
+    "key": "fund-js/24-authorization-and-tenant-scoping/01-tenant-scoped-repository",
+    "track": "js",
+    "kind": "drill",
+    "title": "scopedRepo: every method filters by tenant",
+    "phase": "24-authorization-and-tenant-scoping",
+    "difficulty": 2,
+    "competencies": [
+     "language-fluency"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-js",
+       "language": "js",
+       "tests": [
+        {
+         "name": "list returns only this tenant's rows",
+         "code": "const makeDb = () => {\n  const data = [\n    { id: 'inv_1', tenantId: 't1', amount: 100 },\n    { id: 'inv_2', tenantId: 't2', amount: 250 },\n    { id: 'inv_3', tenantId: 't1', amount: 40 },\n    { id: 'inv_4', tenantId: 't2', amount: 75 },\n  ];\n  let seq = 4;\n  return {\n    data,\n    all: () => data.map((r) => ({ ...r })),\n    byId: (id) => { const r = data.find((x) => x.id === id); return r ? { ...r } : null; },\n    insert: (row) => { const r = { ...row, id: 'inv_' + ++seq }; data.push(r); return { ...r }; },\n    update: (id, patch) => { const r = data.find((x) => x.id === id); if (!r) return null; Object.assign(r, patch); return { ...r }; },\n    remove: (id) => { const i = data.findIndex((x) => x.id === id); if (i < 0) return false; data.splice(i, 1); return true; },\n  };\n};\nconst stored = (db, id) => db.data.find((r) => r.id === id);\nassert.equal(typeof mod.scopedRepo, 'function', 'export scopedRepo');\nconst db = makeDb();\nassert.deepEqual(mod.scopedRepo(db, 't1').list().map((r) => r.id), ['inv_1', 'inv_3']);\nassert.deepEqual(mod.scopedRepo(db, 't2').list().map((r) => r.id), ['inv_2', 'inv_4']);\nassert.deepEqual(mod.scopedRepo(db, 't9').list(), []);"
+        },
+        {
+         "name": "get returns an own row, and null for another tenant's id exactly as for a missing id",
+         "code": "const makeDb = () => {\n  const data = [\n    { id: 'inv_1', tenantId: 't1', amount: 100 },\n    { id: 'inv_2', tenantId: 't2', amount: 250 },\n    { id: 'inv_3', tenantId: 't1', amount: 40 },\n    { id: 'inv_4', tenantId: 't2', amount: 75 },\n  ];\n  let seq = 4;\n  return {\n    data,\n    all: () => data.map((r) => ({ ...r })),\n    byId: (id) => { const r = data.find((x) => x.id === id); return r ? { ...r } : null; },\n    insert: (row) => { const r = { ...row, id: 'inv_' + ++seq }; data.push(r); return { ...r }; },\n    update: (id, patch) => { const r = data.find((x) => x.id === id); if (!r) return null; Object.assign(r, patch); return { ...r }; },\n    remove: (id) => { const i = data.findIndex((x) => x.id === id); if (i < 0) return false; data.splice(i, 1); return true; },\n  };\n};\nconst stored = (db, id) => db.data.find((r) => r.id === id);\nconst db = makeDb();\nconst repo = mod.scopedRepo(db, 't1');\nassert.deepEqual(repo.get('inv_1'), { id: 'inv_1', tenantId: 't1', amount: 100 });\nassert.equal(repo.get('inv_2'), null);\nassert.equal(repo.get('inv_404'), null);"
+        },
+        {
+         "name": "create stamps the repository's tenant even when the data names another (trap)",
+         "code": "const makeDb = () => {\n  const data = [\n    { id: 'inv_1', tenantId: 't1', amount: 100 },\n    { id: 'inv_2', tenantId: 't2', amount: 250 },\n    { id: 'inv_3', tenantId: 't1', amount: 40 },\n    { id: 'inv_4', tenantId: 't2', amount: 75 },\n  ];\n  let seq = 4;\n  return {\n    data,\n    all: () => data.map((r) => ({ ...r })),\n    byId: (id) => { const r = data.find((x) => x.id === id); return r ? { ...r } : null; },\n    insert: (row) => { const r = { ...row, id: 'inv_' + ++seq }; data.push(r); return { ...r }; },\n    update: (id, patch) => { const r = data.find((x) => x.id === id); if (!r) return null; Object.assign(r, patch); return { ...r }; },\n    remove: (id) => { const i = data.findIndex((x) => x.id === id); if (i < 0) return false; data.splice(i, 1); return true; },\n  };\n};\nconst stored = (db, id) => db.data.find((r) => r.id === id);\nconst db = makeDb();\nconst row = mod.scopedRepo(db, 't1').create({ amount: 5, tenantId: 't2' });\nassert.equal(row.tenantId, 't1');\nassert.equal(row.amount, 5);\nassert.equal(stored(db, row.id).tenantId, 't1');\nassert.deepEqual(mod.scopedRepo(db, 't2').list().map((r) => r.id), ['inv_2', 'inv_4']);"
+        },
+        {
+         "name": "update changes an own row but returns null and writes nothing for another tenant's row",
+         "code": "const makeDb = () => {\n  const data = [\n    { id: 'inv_1', tenantId: 't1', amount: 100 },\n    { id: 'inv_2', tenantId: 't2', amount: 250 },\n    { id: 'inv_3', tenantId: 't1', amount: 40 },\n    { id: 'inv_4', tenantId: 't2', amount: 75 },\n  ];\n  let seq = 4;\n  return {\n    data,\n    all: () => data.map((r) => ({ ...r })),\n    byId: (id) => { const r = data.find((x) => x.id === id); return r ? { ...r } : null; },\n    insert: (row) => { const r = { ...row, id: 'inv_' + ++seq }; data.push(r); return { ...r }; },\n    update: (id, patch) => { const r = data.find((x) => x.id === id); if (!r) return null; Object.assign(r, patch); return { ...r }; },\n    remove: (id) => { const i = data.findIndex((x) => x.id === id); if (i < 0) return false; data.splice(i, 1); return true; },\n  };\n};\nconst stored = (db, id) => db.data.find((r) => r.id === id);\nconst db = makeDb();\nconst repo = mod.scopedRepo(db, 't1');\nassert.deepEqual(repo.update('inv_1', { amount: 111 }), { id: 'inv_1', tenantId: 't1', amount: 111 });\nassert.equal(stored(db, 'inv_1').amount, 111);\nassert.equal(repo.update('inv_2', { amount: 0 }), null);\nassert.equal(stored(db, 'inv_2').amount, 250);\nassert.equal(repo.update('inv_404', { amount: 0 }), null);"
+        },
+        {
+         "name": "a patch cannot move a row to another tenant or change its id (trap)",
+         "code": "const makeDb = () => {\n  const data = [\n    { id: 'inv_1', tenantId: 't1', amount: 100 },\n    { id: 'inv_2', tenantId: 't2', amount: 250 },\n    { id: 'inv_3', tenantId: 't1', amount: 40 },\n    { id: 'inv_4', tenantId: 't2', amount: 75 },\n  ];\n  let seq = 4;\n  return {\n    data,\n    all: () => data.map((r) => ({ ...r })),\n    byId: (id) => { const r = data.find((x) => x.id === id); return r ? { ...r } : null; },\n    insert: (row) => { const r = { ...row, id: 'inv_' + ++seq }; data.push(r); return { ...r }; },\n    update: (id, patch) => { const r = data.find((x) => x.id === id); if (!r) return null; Object.assign(r, patch); return { ...r }; },\n    remove: (id) => { const i = data.findIndex((x) => x.id === id); if (i < 0) return false; data.splice(i, 1); return true; },\n  };\n};\nconst stored = (db, id) => db.data.find((r) => r.id === id);\nconst db = makeDb();\nconst repo = mod.scopedRepo(db, 't1');\nconst row = repo.update('inv_3', { amount: 41, tenantId: 't2', id: 'inv_2' });\nassert.deepEqual(row, { id: 'inv_3', tenantId: 't1', amount: 41 });\nassert.deepEqual(stored(db, 'inv_3'), { id: 'inv_3', tenantId: 't1', amount: 41 });\nassert.equal(db.data.filter((r) => r.id === 'inv_2').length, 1);"
+        },
+        {
+         "name": "remove deletes an own row and refuses another tenant's row",
+         "code": "const makeDb = () => {\n  const data = [\n    { id: 'inv_1', tenantId: 't1', amount: 100 },\n    { id: 'inv_2', tenantId: 't2', amount: 250 },\n    { id: 'inv_3', tenantId: 't1', amount: 40 },\n    { id: 'inv_4', tenantId: 't2', amount: 75 },\n  ];\n  let seq = 4;\n  return {\n    data,\n    all: () => data.map((r) => ({ ...r })),\n    byId: (id) => { const r = data.find((x) => x.id === id); return r ? { ...r } : null; },\n    insert: (row) => { const r = { ...row, id: 'inv_' + ++seq }; data.push(r); return { ...r }; },\n    update: (id, patch) => { const r = data.find((x) => x.id === id); if (!r) return null; Object.assign(r, patch); return { ...r }; },\n    remove: (id) => { const i = data.findIndex((x) => x.id === id); if (i < 0) return false; data.splice(i, 1); return true; },\n  };\n};\nconst stored = (db, id) => db.data.find((r) => r.id === id);\nconst db = makeDb();\nconst repo = mod.scopedRepo(db, 't1');\nassert.equal(repo.remove('inv_2'), false);\nassert.ok(stored(db, 'inv_2'), 'another tenant\\'s row was deleted');\nassert.equal(repo.remove('inv_404'), false);\nassert.equal(repo.remove('inv_1'), true);\nassert.equal(stored(db, 'inv_1'), undefined);\nassert.equal(db.data.length, 3);"
+        }
+       ],
+       "timeoutMs": 8000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "24-authorization-and-tenant-scoping/01-tenant-scoped-repository",
+    "type": "code",
+    "module": "24-authorization-and-tenant-scoping",
+    "lesson": "drills",
+    "position": 0,
+    "skills": [
+     "tenant scoping",
+     "IDOR"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "fund-js/24-authorization-and-tenant-scoping/02-pick-allowed-fields",
+    "track": "js",
+    "kind": "drill",
+    "title": "pickAllowed: an allow-list per role",
+    "phase": "24-authorization-and-tenant-scoping",
+    "difficulty": 2,
+    "competencies": [
+     "language-fluency"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-js",
+       "language": "js",
+       "tests": [
+        {
+         "name": "a member keeps title and notes and loses everything else",
+         "code": "assert.equal(typeof mod.pickAllowed, 'function', 'export pickAllowed');\nconst body = { title: 'Ship it', notes: 'today', status: 'done', assigneeId: 'u2', ownerId: 'u9' };\nassert.deepEqual(mod.pickAllowed(body, 'member'), { title: 'Ship it', notes: 'today' });"
+        },
+        {
+         "name": "managers and admins get their wider lists",
+         "code": "const body = { title: 'Ship it', notes: 'today', status: 'done', assigneeId: 'u2', ownerId: 'u9' };\nassert.deepEqual(mod.pickAllowed(body, 'manager'), { title: 'Ship it', notes: 'today', assigneeId: 'u2', status: 'done' });\nassert.deepEqual(mod.pickAllowed(body, 'admin'), { title: 'Ship it', notes: 'today', assigneeId: 'u2', status: 'done', ownerId: 'u9' });"
+        },
+        {
+         "name": "fields nobody listed are dropped for every role, admin included (trap)",
+         "code": "const body = { title: 'x', tenantId: 't2', id: 'tk_1', isAdmin: true, createdAt: 0, creditBalance: 1000000, role: 'admin' };\nassert.deepEqual(mod.pickAllowed(body, 'admin'), { title: 'x' });\nassert.deepEqual(mod.pickAllowed(body, 'manager'), { title: 'x' });\nassert.deepEqual(mod.pickAllowed(body, 'member'), { title: 'x' });"
+        },
+        {
+         "name": "absent fields are not invented, and null is kept as a real value (trap)",
+         "code": "const picked = mod.pickAllowed({ title: 'x' }, 'manager');\nassert.deepEqual(Object.keys(picked), ['title'], 'keys: ' + Object.keys(picked).join(','));\nassert.deepEqual(mod.pickAllowed({ notes: null, status: 'open' }, 'member'), { notes: null });\nassert.deepEqual(mod.pickAllowed({}, 'admin'), {});"
+        },
+        {
+         "name": "an unknown role gets nothing and nothing throws",
+         "code": "const body = { title: 'x', notes: 'n', ownerId: 'u9' };\nfor (const role of ['guest', '', undefined, null, 'Admin', 'constructor', 'toString', '__proto__']) {\n  assert.deepEqual(mod.pickAllowed(body, role), {}, 'role: ' + String(role));\n}"
+        },
+        {
+         "name": "the body is not modified and a non-object body gives an empty object",
+         "code": "const body = { title: 'x', ownerId: 'u9' };\nconst picked = mod.pickAllowed(body, 'member');\nassert.notEqual(picked, body);\nassert.deepEqual(body, { title: 'x', ownerId: 'u9' });\nassert.deepEqual(mod.pickAllowed(null, 'admin'), {});\nassert.deepEqual(mod.pickAllowed(undefined, 'admin'), {});\nassert.deepEqual(mod.pickAllowed('title', 'admin'), {});"
+        }
+       ],
+       "timeoutMs": 8000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "24-authorization-and-tenant-scoping/02-pick-allowed-fields",
+    "type": "code",
+    "module": "24-authorization-and-tenant-scoping",
+    "lesson": "drills",
+    "position": 1,
+    "skills": [
+     "mass assignment",
+     "allow-list"
+    ]
+   }
+  },
+  {
+   "unit": {
+    "key": "fund-js/24-authorization-and-tenant-scoping/03-can-user-do-action",
+    "track": "js",
+    "kind": "drill",
+    "title": "can: tenant, role and owner in one decision",
+    "phase": "24-authorization-and-tenant-scoping",
+    "difficulty": 2,
+    "competencies": [
+     "language-fluency"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-js",
+       "language": "js",
+       "tests": [
+        {
+         "name": "everyone in the tenant may read, owner or not (must be allowed)",
+         "code": "const user = (id, role, tenantId = 't1') => ({ id, tenantId, role });\nconst doc = (ownerId, tenantId = 't1') => ({ tenantId, ownerId });\nassert.equal(typeof mod.can, 'function', 'export can');\nassert.equal(mod.can(user('u1', 'viewer'), 'read', doc('u2')), true);\nassert.equal(mod.can(user('u1', 'member'), 'read', doc('u2')), true);\nassert.equal(mod.can(user('u1', 'admin'), 'read', doc('u2')), true);"
+        },
+        {
+         "name": "an owning member and any admin may update (must be allowed)",
+         "code": "const user = (id, role, tenantId = 't1') => ({ id, tenantId, role });\nconst doc = (ownerId, tenantId = 't1') => ({ tenantId, ownerId });\nassert.equal(mod.can(user('u1', 'member'), 'update', doc('u1')), true);\nassert.equal(mod.can(user('u7', 'admin'), 'update', doc('u1')), true);\nassert.equal(mod.can(user('u7', 'admin'), 'delete', doc('u1')), true);"
+        },
+        {
+         "name": "a member may not update a colleague's document or delete their own",
+         "code": "const user = (id, role, tenantId = 't1') => ({ id, tenantId, role });\nconst doc = (ownerId, tenantId = 't1') => ({ tenantId, ownerId });\nassert.equal(mod.can(user('u1', 'member'), 'update', doc('u2')), false);\nassert.equal(mod.can(user('u1', 'member'), 'delete', doc('u1')), false);\nassert.equal(mod.can(user('u1', 'member'), 'delete', doc('u2')), false);"
+        },
+        {
+         "name": "another tenant is refused for every role and action, admin included",
+         "code": "const user = (id, role, tenantId = 't1') => ({ id, tenantId, role });\nconst doc = (ownerId, tenantId = 't1') => ({ tenantId, ownerId });\nfor (const role of ['viewer', 'member', 'admin']) {\n  for (const action of ['read', 'update', 'delete']) {\n    assert.equal(mod.can(user('u1', role, 't1'), action, doc('u1', 't2')), false, role + ' ' + action + ' across tenants');\n  }\n}"
+        },
+        {
+         "name": "a viewer who is the owner still cannot update or delete (trap)",
+         "code": "const user = (id, role, tenantId = 't1') => ({ id, tenantId, role });\nconst doc = (ownerId, tenantId = 't1') => ({ tenantId, ownerId });\nassert.equal(mod.can(user('u1', 'viewer'), 'update', doc('u1')), false);\nassert.equal(mod.can(user('u1', 'viewer'), 'delete', doc('u1')), false);\nassert.equal(mod.can(user('u1', 'viewer'), 'read', doc('u1')), true);"
+        },
+        {
+         "name": "unknown actions, unknown roles and missing arguments are denied without throwing",
+         "code": "const user = (id, role, tenantId = 't1') => ({ id, tenantId, role });\nconst doc = (ownerId, tenantId = 't1') => ({ tenantId, ownerId });\nassert.equal(mod.can(user('u1', 'admin'), 'export', doc('u1')), false);\nassert.equal(mod.can(user('u1', 'admin'), undefined, doc('u1')), false);\nassert.equal(mod.can(user('u1', 'superuser'), 'read', doc('u1')), false);\nassert.equal(mod.can(user('u1', undefined), 'read', doc('u1')), false);\nassert.equal(mod.can(null, 'read', doc('u1')), false);\nassert.equal(mod.can(undefined, 'read', doc('u1')), false);\nassert.equal(mod.can(user('u1', 'admin'), 'read', null), false);"
+        }
+       ],
+       "timeoutMs": 8000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "24-authorization-and-tenant-scoping/03-can-user-do-action",
+    "type": "code",
+    "module": "24-authorization-and-tenant-scoping",
+    "lesson": "drills",
+    "position": 2,
+    "skills": [
+     "authorization matrix",
+     "deny by default"
+    ]
+   }
+  }
+ ],
+ "content": {
+  "fund-js/24-authorization-and-tenant-scoping/01-tenant-scoped-repository": {
+   "instructions": "**Skills:** tenant scoping · IDOR  \n**Level:** ★★☆\n\n**Interview prompt.** \"A customer changed the id in the URL and saw another company's invoice. Fix it so it cannot come back on the next endpoint somebody adds.\"\n\n**Why it matters.** Scoping one query at a time depends on nobody ever forgetting. A repository that is bound to a tenant when the request starts makes the filter part of every call, including the write paths that are usually missed.\n\n**Your task.** Export `scopedRepo(db, tenantId)`. The injected `db` is synchronous and knows nothing about tenants: `db.all()` (every row), `db.byId(id)` (a row or `null`), `db.insert(row)` (assigns an `id`, returns the stored row), `db.update(id, patch)` (returns the updated row or `null`) and `db.remove(id)` (returns `true` or `false`). Return an object with:\n- `list()`: only the rows whose `tenantId` is this repository's tenant\n- `get(id)`: the row, or `null` when it is missing OR belongs to another tenant\n- `create(data)`: inserts the data with `tenantId` set to the repository's tenant, whatever `data.tenantId` says, and returns the stored row\n- `update(id, patch)`: returns the updated row; for a missing row or another tenant's row it returns `null` and writes nothing; `tenantId` and `id` inside the patch are ignored\n- `remove(id)`: `true` when one of this tenant's rows was removed; otherwise `false`, with nothing removed\n\n**Worked example.** With invoices `inv_1` (tenant `t1`) and `inv_2` (tenant `t2`), `scopedRepo(db, 't1').get('inv_2')` is `null`, and `scopedRepo(db, 't1').remove('inv_2')` is `false` and leaves `inv_2` in place.\n",
+   "starter": "// db.all() -> row[]            db.byId(id) -> row | null       db.insert(row) -> stored row (with id)\n// db.update(id, patch) -> row | null                           db.remove(id) -> boolean\nexport function scopedRepo(db, tenantId) {\n  return {\n    list() {\n      // TODO\n    },\n    get(id) {\n      // TODO\n    },\n    create(data) {\n      // TODO\n    },\n    update(id, patch) {\n      // TODO\n    },\n    remove(id) {\n      // TODO\n    },\n  };\n}\n",
+   "solution": "export function scopedRepo(db, tenantId) {\n  const own = (id) => {\n    const row = db.byId(id);\n    return row && row.tenantId === tenantId ? row : null;\n  };\n  return {\n    list() {\n      return db.all().filter((row) => row.tenantId === tenantId);\n    },\n    get(id) {\n      return own(id);\n    },\n    create(data) {\n      return db.insert({ ...data, tenantId });\n    },\n    update(id, patch) {\n      if (!own(id)) return null;\n      const { tenantId: _tenantId, id: _id, ...fields } = patch;\n      return db.update(id, fields);\n    },\n    remove(id) {\n      return own(id) ? db.remove(id) : false;\n    },\n  };\n}\n",
+   "explanation": "One ownership lookup, used by every by-id method:\n\n```js\nconst own = (id) => {\n  const row = db.byId(id);\n  return row && row.tenantId === tenantId ? row : null;\n};\n// ...\ncreate(data) { return db.insert({ ...data, tenantId }); },\nupdate(id, patch) {\n  if (!own(id)) return null;\n  const { tenantId: _tenantId, id: _id, ...fields } = patch;\n  return db.update(id, fields);\n},\nremove(id) { return own(id) ? db.remove(id) : false; },\n```\n\nIn SQL the same idea is `WHERE id = ? AND tenant_id = ?` on every statement, UPDATE and DELETE included. Another tenant's row and a missing row give the same `null`, which the route turns into the same 404. In `create` the repository's tenant is spread LAST, so it wins over anything in the data.\n\n**What the tests catch.** The plausible wrong answer scopes `list` and `get` and then lets `update` and `remove` go to the database by id: the read tests pass while another tenant's invoice is changed or deleted. Writing `{ tenantId, ...data }` lets the body choose the tenant, and passing the patch through untouched lets a caller move a row out of its tenant.",
+   "hints": [
+    "A record id alone is never proof of access; every path to a row has to pass through the tenant filter, writes included.",
+    "Write one small ownership lookup that yields the row only when it belongs to this repository's tenant, and route every by-id method through it. Make the repository, not the caller, decide the tenant on new and changed rows.",
+    "Build a helper that fetches by id and gives back the row only when its tenant matches. Use it for get, and as the guard in update and remove. Filter the list by tenant, put the repository's tenant last when building a new row, and strip tenant and id out of a patch before passing it on."
+   ]
+  },
+  "fund-js/24-authorization-and-tenant-scoping/02-pick-allowed-fields": {
+   "instructions": "**Skills:** mass assignment · allow-list  \n**Level:** ★★☆\n\n**Interview prompt.** \"Our PATCH handler does `Object.assign(task, req.body)`. A member just made themselves the owner of someone else's task. Fix the handler's input.\"\n\n**Why it matters.** The form shows three fields, but the client can send any JSON it likes. The server has to choose which fields a caller may write, and that choice depends on the caller's role.\n\n**Your task.** Export `pickAllowed(body, role)`. The starter gives you the `ALLOWED` table of writable field names per role. Return a NEW object holding only the fields that:\n- are listed in `ALLOWED` for that role, and\n- are present as own properties of `body` (a field whose value is `null` is present; a field that is absent must not appear in the result at all)\n\nAlso:\n- a role that is not an own key of `ALLOWED` gets `{}`; the role comes from a token, so it may be any string, or missing\n- a `body` that is not an object (for example `null`) gives `{}`\n- never modify `body`, and never throw\n\n**Worked example.** `pickAllowed({ title: 'Ship it', status: 'done', ownerId: 'u9' }, 'member')` is `{ title: 'Ship it' }`. For `'manager'` the same body gives `{ title: 'Ship it', status: 'done' }`.\n",
+   "starter": "const ALLOWED = {\n  member: ['title', 'notes'],\n  manager: ['title', 'notes', 'assigneeId', 'status'],\n  admin: ['title', 'notes', 'assigneeId', 'status', 'ownerId'],\n};\n\nexport function pickAllowed(body, role) {\n  // TODO: a new object with only the fields this role may write and the body actually has\n}\n",
+   "solution": "const ALLOWED = {\n  member: ['title', 'notes'],\n  manager: ['title', 'notes', 'assigneeId', 'status'],\n  admin: ['title', 'notes', 'assigneeId', 'status', 'ownerId'],\n};\n\nexport function pickAllowed(body, role) {\n  const picked = {};\n  if (body === null || typeof body !== 'object' || !Object.hasOwn(ALLOWED, role)) return picked;\n  for (const field of ALLOWED[role]) {\n    if (Object.hasOwn(body, field)) picked[field] = body[field];\n  }\n  return picked;\n}\n",
+   "explanation": "Let the role's list drive the copy, and take a field only when the body really has it:\n\n```js\nconst picked = {};\nif (body === null || typeof body !== 'object' || !Object.hasOwn(ALLOWED, role)) return picked;\nfor (const field of ALLOWED[role]) {\n  if (Object.hasOwn(body, field)) picked[field] = body[field];\n}\nreturn picked;\n```\n\nBecause the loop runs over YOUR list, a field you never listed cannot get through, whatever the client sends. `Object.hasOwn(ALLOWED, role)` matters as much as the field check: `ALLOWED['constructor']` is not `undefined`, it is the inherited `Object` function, so a plain lookup with a `?? []` fallback throws on that role instead of failing closed.\n\n**What the tests catch.** The plausible wrong answer is a deny-list (copy the body, delete `role`, `tenantId` and `id`): `isAdmin`, `creditBalance` and `createdAt` sail through. Building the result with `Object.fromEntries` over the list invents `undefined` fields that a later update could write as NULL. Treating an unknown role as a member grants access that nobody gave, and skipping `null` values makes it impossible to clear a field.",
+   "hints": [
+    "Start from an empty object and add what is permitted, instead of starting from the body and removing what is dangerous.",
+    "Let the role's list drive the copying: go through the permitted names and take each one only if the body really has it. A role you do not recognise has no list, and so gets nothing.",
+    "Give back an empty object when the body is not an object or the table has no own entry for the role. Otherwise walk the role's field names and copy each one that is an own property of the body into a fresh object."
+   ]
+  },
+  "fund-js/24-authorization-and-tenant-scoping/03-can-user-do-action": {
+   "instructions": "**Skills:** authorization matrix · deny by default  \n**Level:** ★★☆\n\n**Interview prompt.** \"Write the permission check for documents: viewers, members and admins, in a multi-tenant app. Then tell me which tests you would write.\"\n\n**Why it matters.** Scattered `if (user.role === 'admin')` checks drift apart. One function that takes the user, the action and the resource can be tested as a table, including the rows that must be allowed.\n\n**Your task.** Export `can(user, action, resource)`, returning `true` or `false`. A user is `{ id, tenantId, role }` with role `'viewer'`, `'member'` or `'admin'`. A resource is `{ tenantId, ownerId }`. Actions are `'read'`, `'update'` and `'delete'`.\n- a different tenant: always `false`, for every role and action\n- `'read'`: every role in the resource's tenant\n- `'update'`: an admin, or a member who is the owner (`user.id` equals `resource.ownerId`)\n- `'delete'`: an admin only\n- a viewer never updates or deletes, even as the owner\n- anything unknown is `false`: an unknown action, an unknown role, a missing user or a missing resource. Never throw.\n\n**Worked example.** `can({ id: 'u1', tenantId: 't1', role: 'member' }, 'update', { tenantId: 't1', ownerId: 'u1' })` is `true`. The same user updating a resource owned by `'u2'` is `false`, and reading it is `true`.\n",
+   "starter": "// user: { id, tenantId, role }   role: 'viewer' | 'member' | 'admin'\n// resource: { tenantId, ownerId }   action: 'read' | 'update' | 'delete'\nexport function can(user, action, resource) {\n  // TODO: tenant first, then role and ownership; deny anything unknown\n}\n",
+   "solution": "const ROLES = ['viewer', 'member', 'admin'];\n\nexport function can(user, action, resource) {\n  if (!user || !resource) return false;\n  if (!ROLES.includes(user.role)) return false;\n  if (user.tenantId !== resource.tenantId) return false;\n  const isAdmin = user.role === 'admin';\n  const isOwner = user.id === resource.ownerId;\n  switch (action) {\n    case 'read':\n      return true;\n    case 'update':\n      return isAdmin || (user.role === 'member' && isOwner);\n    case 'delete':\n      return isAdmin;\n    default:\n      return false;\n  }\n}\n",
+   "explanation": "Widest boundary first, then one line per action, then a refusal for everything else:\n\n```js\nif (!user || !resource) return false;\nif (!ROLES.includes(user.role)) return false;\nif (user.tenantId !== resource.tenantId) return false;\nconst isAdmin = user.role === 'admin';\nconst isOwner = user.id === resource.ownerId;\nswitch (action) {\n  case 'read': return true;\n  case 'update': return isAdmin || (user.role === 'member' && isOwner);\n  case 'delete': return isAdmin;\n  default: return false;\n}\n```\n\nBecause the tenant check runs before any role is looked at, no later line can grant access across tenants. The `default` branch is the deny-by-default rule: a new action stays closed until someone writes its line.\n\n**What the tests catch.** The plausible wrong answer is \"admins and owners may write\" with the tenant compared only for reads: an admin of one tenant can update and delete another tenant's documents, and a member whose id matches `ownerId` in a foreign tenant can update there. A rule that lets only admins and owners read fails the must-be-allowed cases. Checking ownership without the role lets a viewer edit, and ending with `return true` allows every action nobody thought of.",
+   "hints": [
+    "Order the checks from the widest boundary to the narrowest: tenant, then role, then ownership.",
+    "Refuse early for anything you do not recognise and for a tenant mismatch, before any role is considered. Then decide each known action separately, and let everything else fall through to a refusal.",
+    "Answer false for a missing user or resource, for a role outside the three known ones, and for a different tenant. After that, read is true, update is true for an admin or for a member who is the owner, delete is true for an admin, and any other action is false."
+   ]
+  }
+ }
+}
