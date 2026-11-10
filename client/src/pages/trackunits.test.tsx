@@ -39,7 +39,7 @@ const rows = () => document.querySelectorAll<HTMLElement>('[data-unit]');
 const status = () => screen.getByTestId('track-units-status');
 // ab S4: groups start collapsed; a group header is a disclosure button, "Expand all" opens every group
 const groupButton = (name: string) => screen.getByRole('button', { name });
-const groupButtons = () => document.querySelectorAll('.tu-group > h3 > button');
+const groupButtons = () => document.querySelectorAll('.tu-group > .tu-group-head > button');
 const expandAll = () => screen.getByTestId('track-units-all');
 
 const MODULES = ['01-estimation', '02-caching', '03-queues', '04-sharding', '05-replication', '06-consistency', '07-rate-limiting', '08-storage', '09-search', '10-observability'];
@@ -93,7 +93,8 @@ describe('track units: campaign-less track (primary)', () => {
     expect(empty).toHaveTextContent('Every unit on it is listed below.');
     const sec = await section();
     expect(within(sec).getByRole('heading', { level: 2, name: 'Practice units' })).toBeInTheDocument();
-    expect(await within(sec).findByRole('heading', { level: 3, name: 'opusorganize 0/2 done' })).toBeInTheDocument();
+    // fix pass 7: a group under a tier heading (h3) is an h4
+    expect(await within(sec).findByRole('heading', { level: 4, name: 'opusorganize 0/2 done' })).toBeInTheDocument();
     // ab S4: the group starts collapsed (no rows rendered) and opens from its header
     const group = groupButton('opusorganize 0/2 done');
     expect(group).toHaveAttribute('aria-expanded', 'false');
@@ -118,7 +119,7 @@ describe('track units: campaign-less track (primary)', () => {
       const toolbar = within(sec.querySelector<HTMLElement>('.tu-toolbar')!);
       const kinds = within(toolbar.getByRole('group', { name: 'Filter by kind' }));
       // f52 U14: the group headers (the tier headings above them are h3s too)
-      const groupHeads = () => [...sec.querySelectorAll('.tu-group > h3')].map((h) => h.textContent);
+      const groupHeads = () => [...sec.querySelectorAll('.tu-group > .tu-group-head')].map((h) => h.textContent);
       // ab S4: groups start collapsed; these tests read the rows, so open every group first
       expect(rows()).toHaveLength(0);
       await r.user.click(expandAll());
@@ -416,6 +417,12 @@ describe('f52 U14: tracks without acts list core drill modules first', () => {
     expect(core!.querySelectorAll('.tu-group')).toHaveLength(10);
     expect(repo).toHaveAttribute('data-tier', 'repo');
     expect(repo!.querySelectorAll('.tu-group')).toHaveLength(29);
+    // fix pass 7: the outline is h2 (section) > h3 (tier) > h4 (group); the group keeps its styling hook
+    expect([...sec.querySelectorAll('.tu-tier-head')].map((h) => h.tagName)).toEqual(['H3', 'H3']);
+    const heads = [...sec.querySelectorAll('.tu-group > .tu-group-head')];
+    expect(heads).toHaveLength(39);
+    expect(new Set(heads.map((h) => h.tagName))).toEqual(new Set(['H4']));
+    expect(sec.querySelectorAll('.tu-group > h3')).toHaveLength(0);
   });
 
   it('agentic: repo-based groups sit under "Real-repo practice"; a tier with no group has no heading', async () => {
@@ -443,5 +450,9 @@ describe('f52 U14: tracks without acts list core drill modules first', () => {
     await user.click(within(sec).getByRole('button', { name: /Practice units/ }));
     await within(sec).findByTestId('track-units-count');
     expect(tierHeads(sec)).toEqual([]);
+    // fix pass 7: without tier headings a group is still the h3 under the section's h2
+    const heads = [...sec.querySelectorAll('.tu-group > .tu-group-head')];
+    expect(heads.length).toBeGreaterThan(0);
+    expect(new Set(heads.map((h) => h.tagName))).toEqual(new Set(['H3']));
   });
 });
