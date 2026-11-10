@@ -183,3 +183,30 @@ describe('submit attempts are readable back (GET /attempts/:id, like the server)
     expect((await api.getAttempt(q.attempt.id)).answer).toEqual({ answer: 0 });
   });
 });
+
+describe('f52 hints (mirrors server/src/api/hints-service.ts)', () => {
+  const FAILING = 'export const groupBy = () => ({});';
+
+  it('2 of 3 authored hints, only after a failed submit; 25% XP per hint; none after a pass', async () => {
+    const plain = createMockApi();
+    const fullXp = (await plain.submitUnit(DRILL, { code: PASSING, selfAssisted: false })).xp!.amount;
+    expect(await plain.getHints(DRILL)).toMatchObject({ nextAvailable: false, lockedReason: 'passed' });
+    expect(await codeOf(plain.takeHint(DRILL))).toBe('ALREADY_ANSWERED');
+
+    const api = createMockApi();
+    expect(await api.getHints(DRILL)).toEqual({ unitId: DRILL, total: 2, taken: [], nextAvailable: false, lockedReason: 'needs-fail', xpPct: 100 });
+    expect(await codeOf(api.takeHint(DRILL))).toBe('NOT_ANSWERED');
+    await api.submitUnit(DRILL, { code: FAILING, selfAssisted: false });
+    const h1 = await api.takeHint(DRILL);
+    expect(h1).toMatchObject({ total: 2, nextAvailable: true, xpPct: 75, hint: { index: 1 } });
+    expect(h1.taken).toEqual([h1.hint.text]);
+    const h2 = await api.takeHint(DRILL);
+    expect(h2).toMatchObject({ nextAvailable: false, lockedReason: 'exhausted', xpPct: 50, hint: { index: 2 } });
+    expect(JSON.stringify(h2)).not.toContain('never served');
+    expect(await codeOf(api.takeHint(DRILL))).toBe('NOT_FOUND');
+    expect((await api.submitUnit(DRILL, { code: PASSING, selfAssisted: false })).xp!.amount).toBe(Math.floor(fullXp / 2));
+
+    expect(await api.getHints(QUIZ)).toMatchObject({ total: 0, lockedReason: 'not-hintable' });
+    expect(await codeOf(api.takeHint(QUIZ))).toBe('WRONG_UNIT_KIND');
+  });
+});

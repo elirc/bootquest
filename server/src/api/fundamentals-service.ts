@@ -1,5 +1,5 @@
 import type { UnitSummary } from '@bootquest/shared/api';
-import type { FundamentalsResponse } from '@bootquest/shared/api-ext';
+import type { FundamentalsResponseExt as FundamentalsResponse } from '@bootquest/shared/api-ext';
 import { FUND_PASS_PCT, fundTopicUnitKey, type FundTrack } from '@bootquest/shared/fundamentals';
 import { getTrack, passedUnitIds, prerequisiteMap, revealedUnitIds, unitsForTrack, type UnitRecord } from '../store/queries.ts';
 import { HttpError } from './http.ts';
@@ -10,7 +10,8 @@ import { lockStateFor, type ServiceDeps } from './service.ts';
  * metadata from the loaded topics.json; unit states from the DB, the same lock rule as every unit
  * listing: track lock, then pass, then prerequisites). Serves only public fields: never a lesson, a
  * question or a key (those arrive through the unit's own detail / study-quiz flow). A topic whose unit
- * is not live on this server is omitted; a drill that is not live (quarantined) is absent.
+ * is not live on this server is omitted; a drill that is not live (quarantined) is absent. f52 C3: a topic
+ * may carry `related` ("More practice": live drills of the same track listed in related.json).
  */
 export function getFundamentals(deps: ServiceDeps, trackId: string): FundamentalsResponse {
   const { db } = deps;
@@ -33,6 +34,14 @@ export function getFundamentals(deps: ServiceDeps, trackId: string): Fundamental
     revealed: revealed.has(u.id),
     prerequisites: prereqs.get(u.id) ?? [],
   });
+  const fund = deps.seedItems.fund;
+  const relatedOf = (topicId: string): { related?: UnitSummary[] } => {
+    const units = (fund?.related(track.id, topicId) ?? []).flatMap((k) => {
+      const d = byKey.get(k);
+      return d && d.kind === 'drill' ? [summary(d)] : [];
+    });
+    return units.length ? { related: units } : {};
+  };
   const out: FundamentalsResponse['topics'] = [];
   for (const t of topics) {
     const unit = byKey.get(fundTopicUnitKey(track.id as FundTrack, t.id));
@@ -51,6 +60,9 @@ export function getFundamentals(deps: ServiceDeps, trackId: string): Fundamental
         const d = byKey.get(k);
         return d ? [summary(d)] : [];
       }),
+      // f52 C3: "More practice" = existing drills of this track's other banks (related.json); a key that is
+      // not a live drill of this track is skipped (serve.ts warns at startup)
+      ...relatedOf(t.id),
     });
   }
   return { trackId: track.id, topics: out };

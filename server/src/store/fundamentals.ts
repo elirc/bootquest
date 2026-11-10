@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { CheckSpecInput, TrackId } from '@bootquest/shared';
 import type { UnitContentEntry } from '@bootquest/shared/api';
 import {
@@ -65,9 +65,14 @@ export interface FundStore {
   topicOfItem(key: string): FundTopicRef | undefined;
   /** the topic whose study unit has this key */
   topicOfUnitKey(unitKey: string): FundTopicRef | undefined;
+  /** f52 C3: "More practice" unit keys of a topic (content/fundamentals/related.json), in listed order; [] when none */
+  related(track: FundTrack | TrackId, topicId: string): readonly string[];
 }
 
-export function mapFundStore(files: readonly FundamentalsFile[]): FundStore {
+/** f52 C3: content/fundamentals/related.json = { "<track>": { "<topicId>": ["<existing unit key>", ...] } }. */
+export type FundRelatedMap = ReadonlyMap<string, ReadonlyMap<string, readonly string[]>>;
+
+export function mapFundStore(files: readonly FundamentalsFile[], related: FundRelatedMap = new Map()): FundStore {
   const byTrack = new Map<FundTrack, FundTopic[]>();
   const quizzes = new Map<string, FundQuizItem>();
   const cards = new Map<string, FundFlashcard>();
@@ -96,6 +101,7 @@ export function mapFundStore(files: readonly FundamentalsFile[]): FundStore {
     flashcard: (k) => cards.get(k),
     topicOfItem: (k) => ofItem.get(k),
     topicOfUnitKey: (k) => ofUnit.get(k),
+    related: (t, topic) => related.get(t)?.get(topic) ?? [],
   };
 }
 
@@ -136,8 +142,84 @@ export function readFundamentalsDir(dir: string): FundamentalsFile {
   return file;
 }
 
-export function loadFundStore(dirs: readonly string[]): FundStore {
-  return mapFundStore(dirs.map((d) => readFundamentalsDir(d)));
+/**
+ * The Fundamentals store of these track dirs. f52 C3: plus the "More practice" map, by default
+ * `related.json` beside the track dirs (their parent dir); a missing file = no related units.
+ */
+export function loadFundStore(dirs: readonly string[], opts: { relatedPaths?: readonly string[]; warn?: (msg: string) => void } = {}): FundStore {
+  const relatedPaths = opts.relatedPaths ?? [...new Set(dirs.map((d) => join(dirname(d), FUND_RELATED_FILE)))];
+  return mapFundStore(
+    dirs.map((d) => readFundamentalsDir(d)),
+    readFundRelated(relatedPaths, opts.warn),
+  );
+}
+
+export const FUND_RELATED_FILE = 'related.json';
+
+const defaultWarn = (m: string): void => console.warn(`[bootquest fundamentals] ${m}`);
+
+/**
+ * f52 C3: read the "More practice" map(s). Never refuses startup: a missing file is no related units; an
+ * unreadable / malformed file or entry logs a warning and is skipped. Whether each key resolves to a live
+ * drill of the track is decided at read time (api/fundamentals-service.ts skips it; relatedKeyProblems
+ * lists it for the startup warning).
+ */
+export function readFundRelated(paths: readonly string[], warn: (msg: string) => void = defaultWarn): FundRelatedMap {
+  const out = new Map<string, Map<string, string[]>>();
+  for (const path of paths) {
+    if (!existsSync(path)) continue;
+    let doc: unknown;
+    try {
+      doc = JSON.parse(readFileSync(path, 'utf8'));
+    } catch (err) {
+      warn(`${path}: not JSON, ignored (${err instanceof Error ? err.message.slice(0, 200) : String(err)})`);
+      continue;
+    }
+    if (typeof doc !== 'object' || doc === null || Array.isArray(doc)) {
+      warn(`${path}: expected { "<track>": { "<topicId>": ["<unit key>", ...] } }, ignored`);
+      continue;
+    }
+    for (const [track, topics] of Object.entries(doc as Record<string, unknown>)) {
+      if (typeof topics !== 'object' || topics === null || Array.isArray(topics)) {
+        warn(`${path}: track "${track}" is not an object, skipped`);
+        continue;
+      }
+      const byTopic = out.get(track) ?? new Map<string, string[]>();
+      out.set(track, byTopic);
+      for (const [topic, keys] of Object.entries(topics as Record<string, unknown>)) {
+        if (!Array.isArray(keys)) {
+          warn(`${path}: ${track}/${topic} is not a list of unit keys, skipped`);
+          continue;
+        }
+        const list = byTopic.get(topic) ?? [];
+        for (const k of keys) {
+          if (typeof k === 'string' && k.trim() !== '' && !list.includes(k)) list.push(k);
+          else warn(`${path}: ${track}/${topic}: entry ${JSON.stringify(k)} is not a new unit key, skipped`);
+        }
+        byTopic.set(topic, list);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * f52 C3: the related keys that do not resolve on this DB (no live unit of that key, another track, or
+ * not a drill). For the startup warning; the API skips them.
+ */
+export function relatedKeyProblems(db: Db, store: FundStore): string[] {
+  const problems: string[] = [];
+  for (const track of store.tracks()) {
+    for (const topic of store.topics(track)) {
+      for (const key of store.related(track, topic.id)) {
+        const u = db.get<{ kind: string; track_id: string; retired_at: number | null }>('SELECT kind, track_id, retired_at FROM unit WHERE key = ?', key);
+        if (!u || u.retired_at !== null) problems.push(`${track}/${topic.id}: ${key} is not a live unit`);
+        else if (u.track_id !== track) problems.push(`${track}/${topic.id}: ${key} is on track ${u.track_id}`);
+        else if (u.kind !== 'drill') problems.push(`${track}/${topic.id}: ${key} is a ${u.kind}, not a drill`);
+      }
+    }
+  }
+  return problems;
 }
 
 /** Every content/fundamentals/<track>/ dir holding a manifest (default for the real entrypoint). */

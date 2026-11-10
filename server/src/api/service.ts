@@ -46,6 +46,7 @@ import {
 import type { UnitContentStore } from './content-store.ts';
 import { coreCountsByTrack, trackCounts } from './stats-service.ts';
 import { competencyRowsWithPromotion, explainBackPublicFor, kataPublicFor } from './ladder-service.ts';
+import { ladderRepoSlug } from '../store/ladder.ts';
 import type { SeedItemStore } from '../store/seed-items.ts';
 import { HttpError } from './http.ts';
 import { choiceOrdererFor, servedChoices, toServedIndex, toStoredAnswer } from './choice-order.ts';
@@ -374,7 +375,8 @@ async function grade(deps: ServiceDeps, spec: CheckSpec, submission: LearnerSubm
   }
 }
 
-function assertTrackOpen(db: Db, unit: UnitRecord): void {
+/** 403 TRACK_LOCKED / ACT_LOCKED: the unit is not playable (hints-service.ts reuses it). */
+export function assertTrackOpen(db: Db, unit: UnitRecord): void {
   if (getTrack(db, unit.trackId)?.locked) throw new HttpError(403, 'TRACK_LOCKED', `track ${unit.trackId} is locked`);
   // W5b: a campaign quest's unit is playable only once its act is unlocked (derived, engines/campaign.ts)
   if (questUnitUnlocked(db, unit.id) === false) {
@@ -763,6 +765,32 @@ export function gradeReview(deps: ServiceDeps, itemId: number, gradeValue: 'agai
 
 // ---------------------------------------------------------------- dashboard
 
+/** f52 C8: unit kinds answered from memory with the code hidden (never next up while anything else is open). */
+const ANSWER_FROM_MEMORY_KINDS: ReadonlySet<string> = new Set(['explain-back', 'patch-kata']);
+
+/** The repo slug of a ladder explain-back / kata unit key (`ladder/<family>/<repo>/<hash>`), else null. */
+function ebRepoSlug(key: string): string | null {
+  const m = /^ladder\/[^/]+\/([^/]+)\/[^/]+$/.exec(key);
+  return m ? m[1]! : null;
+}
+
+/**
+ * f52 C8: repo slugs whose study quest is passed: a standalone study-pack unit (`ladder/study/<repo>/...`)
+ * or a campaign quest's study unit (quest.repo), with a verified pass.
+ */
+function studiedRepoSlugs(db: Db, passed: ReadonlySet<number>): Set<string> {
+  const out = new Set<string>();
+  for (const r of db.all<{ id: number; key: string; repo: string | null }>(
+    `SELECT u.id AS id, u.key AS key, q.repo AS repo FROM unit u LEFT JOIN quest q ON q.unit_id = u.id WHERE u.kind = 'study'`,
+  )) {
+    if (!passed.has(r.id)) continue;
+    const own = /^ladder\/study\/([^/]+)\//.exec(r.key);
+    if (own) out.add(own[1]!);
+    if (r.repo) out.add(ladderRepoSlug(r.repo));
+  }
+  return out;
+}
+
 export function getDashboard(deps: ServiceDeps): DashboardResponse {
   const { db, clock } = deps;
   return db.tx(() => {
@@ -781,11 +809,18 @@ export function getDashboard(deps: ServiceDeps): DashboardResponse {
 
     const passed = passedUnitIds(db);
     const prereqs = prerequisiteMap(db);
+    let studied: Set<string> | undefined;
     const nextUp = listTracks(db)
       .filter((t) => !t.locked)
       .map((t) => {
         // written units have no check (self-assessed carve-out): never "next up"
-        const next = unitsForTrack(db, t.id).find((u) => u.kind !== 'written' && lockStateFor(u, false, passed, prereqs) === 'available');
+        const open = unitsForTrack(db, t.id).filter((u) => u.kind !== 'written' && lockStateFor(u, false, passed, prereqs) === 'available');
+        // f52 C8: an explain-back / patch kata (answered from memory) is never next up while the track has any
+        // other available unit; where those are all there is (agentic), prefer one whose repo's study quest is passed
+        const next =
+          open.find((u) => !ANSWER_FROM_MEMORY_KINDS.has(u.kind)) ??
+          open.find((u) => (studied ??= studiedRepoSlugs(db, passed)).has(ebRepoSlug(u.key) ?? '')) ??
+          open[0];
         return { trackId: t.id, unit: next ? { id: next.id, key: next.key, title: next.title, kind: next.kind } : null };
       });
 

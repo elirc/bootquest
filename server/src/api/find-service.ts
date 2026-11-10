@@ -1,5 +1,6 @@
 import type { TrackId } from '@bootquest/shared';
 import type { DrillNextResponse, UnitSearchHit, UnitSearchResponse } from '@bootquest/shared/api-ext';
+import { fundPackSource, fundTopicUnitKey, type FundTrack } from '@bootquest/shared/fundamentals';
 import type { Db } from '../db/database.ts';
 import { campaignState, type ActState } from '../engines/campaign.ts';
 import { DAY_MS, dayKey, nowMs, type Clock } from '../engines/clock.ts';
@@ -48,6 +49,40 @@ export function firstOpenDrill(ctx: FindCtx, trackId: string): DrillPick | null 
 }
 
 /**
+ * f52 U6 (W3.9): the slate's drill-set link for a language track prefers the Fundamentals ladder: the
+ * passable Fundamentals drill (`fund-<track>/<NN-topic>/<slug>`, same rule as firstOpenDrill: kind 'drill',
+ * never revealed, available) of the LOWEST topic whose lesson is open (the topic's study unit
+ * `fund/<track>/<topic>` is not locked; a drill whose topic unit is not loaded counts as open), in served
+ * order within the topic. null = the track has no such drill (the caller falls back to firstOpenDrill).
+ * Never a study (gate) unit. Used for the slate link only: firstOpenDrill and /drills/next stay as they are.
+ */
+export function firstFundamentalsDrill(ctx: FindCtx, trackId: string): DrillPick | null {
+  const track = getTrack(ctx.db, trackId);
+  if (!track || track.locked) return null;
+  const prefix = `${fundPackSource(track.id as FundTrack)}/`;
+  const units = unitsForTrack(ctx.db, track.id);
+  if (!units.some((u) => u.key.startsWith(prefix))) return null;
+  const byKey = new Map(units.map((u) => [u.key, u]));
+  const topicOf = (key: string): string => key.slice(prefix.length).split('/')[0] ?? '';
+  const topicOpen = (topic: string): boolean => {
+    const gate = byKey.get(fundTopicUnitKey(track.id as FundTrack, topic));
+    return gate === undefined || lockStateFor(gate, false, ctx.passed, ctx.prereqs) !== 'locked';
+  };
+  const picks = units
+    .filter(
+      (x) =>
+        x.kind === 'drill' &&
+        x.key.startsWith(prefix) &&
+        !ctx.revealed.has(x.id) &&
+        lockStateFor(x, false, ctx.passed, ctx.prereqs) === 'available' &&
+        topicOpen(topicOf(x.key)),
+    )
+    .sort((a, b) => (topicOf(a.key) < topicOf(b.key) ? -1 : topicOf(a.key) > topicOf(b.key) ? 1 : a.id - b.id));
+  const u = picks[0];
+  return u ? { id: u.id, key: u.key, trackId: u.trackId, title: u.title, difficulty: u.difficulty } : null;
+}
+
+/**
  * The campaign step's unit: the first track (server order) with an available quest in an unlocked
  * act; within it the in-progress quest, else the first available one. This is the rule the
  * dashboard client used to apply itself over five GET /tracks/:id/campaign calls.
@@ -66,14 +101,16 @@ export function campaignTarget(acts: readonly ActState[]): number | null {
 export type SlateItemWithTarget = SlateItem & { targetUnitId?: number | null };
 
 /**
- * GET /dashboard response mapping: a COPY of each slate item plus the unit its row links to. The
+ * GET /dashboard response mapping: a COPY of each slate item plus the unit its row links to (a drill set:
+ * the next Fundamentals drill of the track when it has one, else its first open drill). The
  * stored slate (daily_slate.items, frozen in closed days) is never touched: targetUnitId exists
  * in the response only. The review slot gets no target (it links to the review queue).
  */
 export function withSlateTargets(ctx: FindCtx, items: readonly SlateItem[]): SlateItemWithTarget[] {
   let campaign: number | null | undefined;
   return items.map((item): SlateItemWithTarget => {
-    if (item.kind === 'drill-set') return { ...item, targetUnitId: firstOpenDrill(ctx, item.track)?.id ?? null };
+    // f52 U6: a language track's drill set links to its next Fundamentals drill first
+    if (item.kind === 'drill-set') return { ...item, targetUnitId: (firstFundamentalsDrill(ctx, item.track) ?? firstOpenDrill(ctx, item.track))?.id ?? null };
     if (item.kind === 'campaign-step') {
       if (campaign === undefined) campaign = campaignTarget(campaignState(ctx.db));
       return { ...item, targetUnitId: campaign };

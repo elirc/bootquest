@@ -22,7 +22,7 @@ import { defaultSeedItemDirs, loadSeedItemStoreWithStats, withFundamentals, type
 import { DEFAULT_AUTHORED_UNITS, ladderContentEntries, loadLadderIntoDb, readAuthoredUnits, readKataDifficulty, type LadderInputs, type LadderLoadStats } from '../store/ladder.ts';
 import { reconcileSeededReviewCards, type ReviewCardReconcileStats } from '../store/review-cards.ts';
 import { loadStudyQuestsIntoDb, type StudyQuestLoadStats } from '../store/study-quests.ts';
-import { defaultFundamentalsDirs, fundContentEntries, loadFundamentalsIntoDb, loadFundStore, type FundLoadStats } from '../store/fundamentals.ts';
+import { defaultFundamentalsDirs, fundContentEntries, loadFundamentalsIntoDb, loadFundStore, relatedKeyProblems, type FundLoadStats } from '../store/fundamentals.ts';
 
 /**
  * Real entrypoint: `node --import tsx server/src/api/serve.ts`
@@ -268,6 +268,11 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
     const seedItems = fund ? withFundamentals(seedOnly, fund) : seedOnly;
     const fundamentals = fund ? loadFundamentalsIntoDb(db, fund, clock) : null;
     if (fund) sources.push(fundContentEntries(fund));
+    // f52 C3: a "More practice" key that does not resolve is skipped at read time; say so once, never refuse startup
+    const relatedProblems = fund ? relatedKeyProblems(db, fund) : [];
+    if (relatedProblems.length) {
+      console.warn(`[bootquest api] fundamentals related.json: ${relatedProblems.length} key(s) skipped: ${relatedProblems.slice(0, 5).join('; ')}${relatedProblems.length > 5 ? '; ...' : ''}`);
+    }
     // W7: the ladder units (explain-back / G2 / kata bank / retests) + the authored G3/G4 units
     const authoredPath = (env.BOOTQUEST_AUTHORED_UNITS ?? '').trim();
     const authored = authoredPath ? readAuthoredUnits(resolve(authoredPath)) : null;

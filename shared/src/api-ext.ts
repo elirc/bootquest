@@ -278,3 +278,55 @@ export const FundamentalsResponse = z
   })
   .strict();
 export type FundamentalsResponse = z.infer<typeof FundamentalsResponse>;
+
+// ---- f52 S: progressive hints (U13, council ruling 6) -----------------------------------------------------
+// GET /units/:id/hints: what the player may show. POST /units/:id/hint (empty body): records and returns
+// the next hint. Drill / code-check units only; the servable hints are the authored ones except the last;
+// a hint opens only after >= 1 failed graded submit and never after a verified pass. Each hint taken
+// before the pass cuts that pass's XP by 25% (floor 50%); a hinted pass is verified but never unassisted
+// ladder evidence. Reveal still pays 0 XP.
+
+/**
+ * Why no further hint can be taken now (absent when `nextAvailable`):
+ *   not-hintable  the unit is not a drill / code-check unit, or it has no servable hint
+ *   locked        the unit's track or campaign act is locked
+ *   needs-fail    record at least one failed submit first
+ *   passed        the unit already has a verified pass
+ *   exhausted     every servable hint was taken
+ */
+export const HINT_LOCK_REASONS = ['not-hintable', 'locked', 'needs-fail', 'passed', 'exhausted'] as const;
+export const HintLockReason = z.enum(HINT_LOCK_REASONS);
+export type HintLockReason = z.infer<typeof HintLockReason>;
+
+export const HintsResponse = z
+  .object({
+    unitId: z.number().int().positive(),
+    /** servable hints on this unit (authored hints minus the last one) */
+    total: z.number().int().nonnegative(),
+    /** texts of the hints already taken, in order (hint 1 first) */
+    taken: z.array(z.string()),
+    /** true when POST /units/:id/hint would serve the next hint now */
+    nextAvailable: z.boolean(),
+    lockedReason: HintLockReason.optional(),
+    /** percent of the pass XP a pass submitted now would earn (100, 75 or 50) */
+    xpPct: z.number().int().min(0).max(100),
+  })
+  .strict();
+export type HintsResponse = z.infer<typeof HintsResponse>;
+
+export const HintTakenResponse = HintsResponse.extend({
+  /** the hint just served: its 1-based position and text (also the last entry of `taken`) */
+  hint: z.object({ index: z.number().int().positive(), text: z.string() }).strict(),
+}).strict();
+export type HintTakenResponse = z.infer<typeof HintTakenResponse>;
+
+// ---- f52 S: Fundamentals "More practice" (C3) -------------------------------------------------------------
+// GET /tracks/:id/fundamentals: each topic may carry `related`, existing drill units from other banks that
+// practise the same topic (content/fundamentals/related.json; keys that do not resolve are skipped). Absent
+// when the topic has no related units on this server.
+
+export const FundTopicDtoExt = FundTopicDto.extend({ related: z.array(api.UnitSummary).optional() }).strict();
+export type FundTopicDtoExt = z.infer<typeof FundTopicDtoExt>;
+
+export const FundamentalsResponseExt = FundamentalsResponse.extend({ topics: z.array(FundTopicDtoExt) }).strict();
+export type FundamentalsResponseExt = z.infer<typeof FundamentalsResponseExt>;

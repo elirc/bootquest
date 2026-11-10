@@ -12,6 +12,7 @@ import { findVariation, getAttempt, HonestyRuleError, revealedInVariationChain, 
 import { DAY_MS, nowMs, type Clock } from './clock.ts';
 import { EB_PASS_SQL } from './eb-score.ts';
 import { evaluatePromotion, isVariationOf, lastRatingChangeAt, RETEST_MIN_DELAY_MS } from './evidence.ts';
+import { anyHintTaken, HINT_FREE_SQL } from './hints.ts';
 
 /**
  * W6 competency-ladder flow helpers on top of the W1a/W1c engines:
@@ -77,11 +78,11 @@ export function explainedArtifactUnits(db: Db, explainBackUnitId: number): numbe
     .map((r) => r.id);
 }
 
-/** Latest verified, solo pass on a unit attempted at or before `t`, or null. */
+/** Latest verified, solo, hint-free (f52 U13) pass on a unit attempted at or before `t`, or null. */
 function latestSoloPassAtOrBefore(db: Db, unitId: number, t: number): number | null {
   return (
     db.get<{ t: number | null }>(
-      `SELECT MAX(a.created_at) AS t FROM attempt a WHERE a.unit_id = ? AND a.mode = 'solo' AND a.created_at <= ? AND ${VERIFIED_PASS_SQL}`,
+      `SELECT MAX(a.created_at) AS t FROM attempt a WHERE a.unit_id = ? AND a.mode = 'solo' AND a.created_at <= ? AND ${VERIFIED_PASS_SQL} AND ${HINT_FREE_SQL}`,
       unitId,
       t,
     )?.t ?? null
@@ -106,7 +107,8 @@ export interface PendingArtifact {
  * passed solo is not waited on (that would be a new dead end): a retired unit, a unit with no
  * LIVE check (a re-seed retired its only check), or a unit whose solution was revealed on it
  * OR anywhere up its variation_of chain (server review F6: deriveMode makes every later attempt
- * on such a unit guided, exactly revealedInVariationChain).
+ * on such a unit guided, exactly revealedInVariationChain), or a unit with a hint taken (f52 U13:
+ * every later pass is hinted, never unassisted leg (a)).
  */
 export function artifactsAwaitingSoloPass(db: Db, explainBackUnitId: number): PendingArtifact[] {
   if (unitKind(db, explainBackUnitId) !== 'explain-back') return [];
@@ -115,11 +117,12 @@ export function artifactsAwaitingSoloPass(db: Db, explainBackUnitId: number): Pe
       `SELECT u.id AS unitId, u.title AS title FROM unit_prerequisite p JOIN unit u ON u.id = p.prereq_unit_id
         WHERE p.unit_id = ? AND u.kind IN (${PROJECT_KINDS_SQL}) AND u.retired_at IS NULL
           AND EXISTS (SELECT 1 FROM "check" c WHERE c.unit_id = u.id AND c.retired_at IS NULL)
-          AND NOT EXISTS (SELECT 1 FROM attempt a WHERE a.unit_id = u.id AND a.mode = 'solo' AND ${VERIFIED_PASS_SQL})
+          AND NOT EXISTS (SELECT 1 FROM attempt a WHERE a.unit_id = u.id AND a.mode = 'solo' AND ${VERIFIED_PASS_SQL} AND ${HINT_FREE_SQL})
         ORDER BY u.id`,
       explainBackUnitId,
     )
-    .filter((p) => !revealedInVariationChain(db, p.unitId));
+    // f52 U13: a unit with a hint taken can never again pass hint-free (every later attempt is hinted): not waited on
+    .filter((p) => !revealedInVariationChain(db, p.unitId) && !anyHintTaken(db, p.unitId));
 }
 
 /**
