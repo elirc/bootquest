@@ -1,6 +1,19 @@
-// The code editor of the exercise player: a textarea with a line gutter and code-editor Tab /
-// Shift+Tab indenting (Esc, then Tab, leaves it: no keyboard trap).
-import { useLayoutEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+// The code editor of the exercise player.
+//
+// U11: `CodeEditor` is a switcher. In the app it is CodeMirror 6 (./CodeMirrorEditor.tsx: syntax
+// colours, bracket matching, auto-indent), fetched as a lazy chunk so the dashboard bundle does not
+// grow. The plain textarea below (line gutter, Tab / Shift+Tab indenting; Esc, then Tab, leaves it:
+// no keyboard trap) stays as: the editor under test (jsdom cannot lay CodeMirror out), the Suspense
+// fallback while the chunk loads, and the fallback if the chunk fails to load or CodeMirror throws.
+// Both take the same four props.
+import { Component, Suspense, lazy, useLayoutEffect, useRef, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+
+export interface CodeEditorProps {
+  value: string;
+  onChange: (v: string) => void;
+  language: string;
+  describedBy?: string;
+}
 
 type Edit = { value: string; start: number; end: number };
 
@@ -47,11 +60,11 @@ function outdentText(v: string, start: number, end: number, unit: string): Edit 
 const indentFor = (language: string) => (/^(c#|java)$/i.test(language.trim()) ? '    ' : '  ');
 
 /**
- * The code editor: a plain textarea with a line gutter. Tab / Shift+Tab indent and outdent like a
+ * The textarea editor: a plain textarea with a line gutter. Tab / Shift+Tab indent and outdent like a
  * code editor; to keep the keyboard path out of the editor (WCAG 2.1.2, no keyboard trap) Escape
  * arms the next Tab to move focus as usual (the CodeMirror convention), as the hint above says.
  */
-export function CodeEditor({ value, onChange, language, describedBy }: { value: string; onChange: (v: string) => void; language: string; describedBy?: string }) {
+export function TextareaEditor({ value, onChange, language, describedBy }: CodeEditorProps) {
   const lines = Math.max(value.split('\n').length, 12);
   const gutter = useRef<HTMLDivElement>(null);
   const text = useRef<HTMLTextAreaElement>(null);
@@ -116,5 +129,31 @@ export function CodeEditor({ value, onChange, language, describedBy }: { value: 
         rows={lines}
       />
     </div>
+  );
+}
+
+const CodeMirrorEditor = lazy(() => import('./CodeMirrorEditor'));
+
+/** If the CodeMirror chunk cannot be fetched (or CodeMirror throws), the textarea takes over. */
+class EditorBoundary extends Component<{ fallback: ReactNode; children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true };
+  }
+  render(): ReactNode {
+    return this.state.failed ? this.props.fallback : this.props.children;
+  }
+}
+
+/** The player's code editor: CodeMirror in the app, the textarea under test and as every fallback. */
+export function CodeEditor(props: CodeEditorProps) {
+  if (import.meta.env.MODE === 'test') return <TextareaEditor {...props} />;
+  const textarea = <TextareaEditor {...props} />;
+  return (
+    <EditorBoundary fallback={textarea}>
+      <Suspense fallback={textarea}>
+        <CodeMirrorEditor {...props} />
+      </Suspense>
+    </EditorBoundary>
   );
 }
