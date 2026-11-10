@@ -9,6 +9,12 @@ export interface FundLadderState {
   track: TrackId | null;
   /** the last ladder read; null before the first read lands, when it failed, or without a track */
   ladder: FundamentalsResponseExt | null;
+  /**
+   * the ladder as it was read BEFORE the latest (re-)read started: after a submit's refresh this is
+   * the pre-submit ladder, so a consumer can tell what the submit changed. null before any read
+   * landed. A failed re-read leaves `ladder === before`.
+   */
+  before: FundamentalsResponseExt | null;
   /** the first read has finished (either way) */
   settled: boolean;
   /** a read is in flight */
@@ -19,9 +25,16 @@ export interface FundLadderState {
 
 export function useFundLadder(track: TrackId | null): FundLadderState {
   const api = useApi();
-  const [state, setState] = useState<{ track: TrackId | null; ladder: FundamentalsResponseExt | null; settled: boolean; loading: boolean }>({
+  const [state, setState] = useState<{
+    track: TrackId | null;
+    ladder: FundamentalsResponseExt | null;
+    before: FundamentalsResponseExt | null;
+    settled: boolean;
+    loading: boolean;
+  }>({
     track,
     ladder: null,
+    before: null,
     settled: track === null,
     loading: track !== null,
   });
@@ -31,10 +44,10 @@ export function useFundLadder(track: TrackId | null): FundLadderState {
   const load = useCallback(() => {
     if (track === null) return;
     const mine = ++seq.current;
-    setState((s) => (s.track === track ? { ...s, loading: true } : { track, ladder: null, settled: false, loading: true }));
+    setState((s) => (s.track === track ? { ...s, before: s.ladder, loading: true } : { track, ladder: null, before: null, settled: false, loading: true }));
     api.getFundamentals(track).then(
       (ladder) => {
-        if (live.current && seq.current === mine) setState({ track, ladder, settled: true, loading: false });
+        if (live.current && seq.current === mine) setState((s) => ({ track, ladder, before: s.track === track ? s.before : null, settled: true, loading: false }));
       },
       () => {
         // a ladder that cannot be read is never an error for the learner: consumers fall back
@@ -52,10 +65,10 @@ export function useFundLadder(track: TrackId | null): FundLadderState {
   }, [load]);
 
   // a state left over from another track is never served
-  const current = state.track === track ? state : { track, ladder: null, settled: track === null, loading: track !== null };
+  const current = state.track === track ? state : { track, ladder: null, before: null, settled: track === null, loading: track !== null };
   return useMemo(
-    () => ({ track, ladder: current.ladder, settled: current.settled, loading: current.loading, refresh: load }),
-    [track, current.ladder, current.settled, current.loading, load],
+    () => ({ track, ladder: current.ladder, before: current.before, settled: current.settled, loading: current.loading, refresh: load }),
+    [track, current.ladder, current.before, current.settled, current.loading, load],
   );
 }
 
