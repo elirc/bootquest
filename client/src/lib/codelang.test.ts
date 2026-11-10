@@ -25,7 +25,7 @@ describe('codeLangOf / indentUnitFor', () => {
 describe('highlightCode (U17)', () => {
   it.each([
     ['javascript', "const a = 'x'; // note\nreturn a === 1;", 'tok-keyword', 'const'],
-    ['java', 'public class A { int n = 1; }', 'tok-keyword', 'class'],
+    ['java', 'public class A { int n = 1; } // c', 'tok-keyword', 'class'],
     ['csharp', 'static int Count(string text) => 0; // c', 'tok-keyword', 'static'],
   ] as const)('%s: tokens carry tok-* classes and add up to the exact source text', async (lang, code, cls, word) => {
     const tokens = await highlightCode(code, lang);
