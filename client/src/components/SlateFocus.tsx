@@ -3,7 +3,7 @@ import { useApi } from '../api/context';
 import { errorText } from '../api/errors';
 import type { SlateSettingsResponse, SlateTrackShape } from '../api/types';
 import { fmtShortDate } from '../lib/format';
-import { useAsync } from '../lib/useAsync';
+import type { AsyncState } from '../lib/useAsync';
 import { TRACK_LABEL, isTrackId } from '../lib/view';
 
 /**
@@ -12,10 +12,11 @@ import { TRACK_LABEL, isTrackId } from '../lib/view';
  * (day one: every track gives 1 drill); afterwards a one-line summary of tomorrow's slate with a
  * Change link that reopens the same form. A save takes effect TOMORROW: the server never reshapes
  * today's slate, so nothing on the rest of the dashboard changes when it is saved.
+ *
+ * f52: the dashboard reads GET /settings/slate once (its hero needs the enabled tracks) and passes
+ * that read in, so this card never adds a second request.
  */
-export function SlateFocus() {
-  const api = useApi();
-  const q = useAsync(() => api.getSlateSettings(), [api]);
+export function SlateFocus({ q }: { q: AsyncState<SlateSettingsResponse> & { reload: () => void } }) {
   const [editing, setEditing] = useState(false);
   const [saved, setSaved] = useState<SlateSettingsResponse | null>(null);
   if (q.status === 'loading') return null;

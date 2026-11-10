@@ -72,15 +72,21 @@ describe('Due now (GET /due: retests + alternate sets whose gate opened)', () =>
     expect(within(section).queryByTestId('due-next-alt')).toBeNull();
   });
 
-  it('nothing due: names both mechanisms and, when a group is inside its gap, when the next set opens', async () => {
+  it('nothing due: one line; both mechanisms are named in its tooltip, never as page text', async () => {
     renderApp('/');
     const empty = await screen.findByTestId('due-empty', {}, SLOW);
-    expect(empty).toHaveTextContent('Nothing due.');
-    expect(empty).toHaveTextContent('on an artifact with a seeded changed example schedules a retest at least 2 days later');
-    expect(empty).toHaveTextContent('units without a seeded variation rotate alternate question sets instead');
-    expect(empty).toHaveTextContent('listed here once 2 days have passed');
+    expect(empty).toHaveTextContent(/^Nothing due\.$/);
+    const rule = empty.getAttribute('title') ?? '';
+    expect(rule).toContain('on an artifact with a seeded changed example schedules a retest at least 2 days later');
+    expect(rule).toContain('units without a seeded variation rotate alternate question sets instead');
+    expect(rule).toContain('listed here once 2 days have passed');
+    expect(rule).toContain('not in the review queue');
     expect(empty).not.toHaveTextContent('next alternate set opens');
-    expect(screen.getByTestId('due-now').closest('section')).not.toHaveClass('due-now-hot');
+    const section = screen.getByTestId('due-now').closest('section')!;
+    expect(section).not.toHaveClass('due-now-hot');
+    // f52 U7: collapsed to one line, without the panel's side note
+    expect(section).toHaveClass('due-now-quiet');
+    expect(section).not.toHaveTextContent('retests and alternate sets are not in the review queue');
   });
 
   it('nothing open yet but a set inside its gap: the empty text says when it opens', async () => {

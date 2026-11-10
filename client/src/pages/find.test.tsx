@@ -38,16 +38,21 @@ function withSlate(items: SlateItem[], base = createMockApi()): BootQuestApi {
 const slateLink = (slot: string) => within(document.querySelector<HTMLElement>(`.slate [data-slot="${slot}"]`)!).getByRole('link');
 
 describe('dashboard: slate targets come with GET /dashboard (no fan-out)', () => {
-  it('a mount reads /dashboard, /competencies, the shared /tracks, /due, /stats/weak and /settings/slate (plus the shell badge), never /units or /campaign', async () => {
-    const { api, calls } = spyApi();
+  it('a mount reads /dashboard, /competencies, the shared /tracks, /due, /stats/weak, /settings/slate and ONE ladder (plus the shell badge), never /units or /campaign', async () => {
+    const { api, calls, args } = spyApi();
     renderApp('/', api);
     await screen.findByTestId('due-now');
     await waitFor(() => expect(slateLink('drill:csharp')).toHaveAttribute('href', '/play/202'));
+    await waitFor(() => expect(calls).toContain('getFundamentals'));
     // the shell's review badge (GET /review/queue?limit=1) is on every page, not the dashboard's
     const page = calls.filter((c) => c !== 'getReviewQueue');
     // merged ab wave: S4's 3 reads + S3's Due now (/due) and Weak spots (/stats/weak) panels + S1's focus card (/settings/slate)
-    expect(new Set(page)).toEqual(new Set(['getDashboard', 'getCompetencies', 'getTracks', 'getDue', 'getWeakSpots', 'getSlateSettings']));
-    expect(page.length).toBeLessThanOrEqual(6);
+    // f52 U6: + the hero's one Fundamentals ladder (the first language track on the slate); the
+    // settings read is shared by the hero and the focus card
+    expect(new Set(page)).toEqual(new Set(['getDashboard', 'getCompetencies', 'getTracks', 'getDue', 'getWeakSpots', 'getSlateSettings', 'getFundamentals']));
+    expect(page.length).toBeLessThanOrEqual(7);
+    expect(calls.filter((c) => c === 'getSlateSettings')).toHaveLength(1);
+    expect(args.getFundamentals).toEqual([['js']]);
     expect(calls.filter((c) => c === 'getReviewQueue')).toHaveLength(1);
     expect(calls).not.toContain('getTrackUnits');
     expect(calls).not.toContain('getCampaign');

@@ -5,6 +5,10 @@ import { fmtShortDate, fmtWhen, plural } from '../lib/format';
 import { useAsync } from '../lib/useAsync';
 import { Chip, LoadState, Panel } from './ui';
 
+/** The whole rule behind the panel (f52 U18: a tooltip on the one-line empty state). */
+export const DUE_RULE =
+  'Retests and alternate sets are not in the review queue. A passing explain-back (80% coverage or more) on an artifact with a seeded changed example schedules a retest at least 2 days later; units without a seeded variation rotate alternate question sets instead, and an alternate set is listed here once 2 days have passed since you answered a set of its group.';
+
 /** Due first (oldest opening first), then the upcoming ones by opening time. */
 const byUrgency = (a: RetestListItemDto, b: RetestListItemDto) => Number(b.due) - Number(a.due) || a.dueAt - b.dueAt;
 
@@ -24,6 +28,8 @@ export function DueNowPanel() {
   const later = retests.filter((r) => !r.due);
   const hot = openRetests.length + altSets.length > 0;
   const nextAlt = q.data?.nextAltSetAt ?? null;
+  // f52 U7: with nothing due the panel is one line (same nodes, so a Retry never swaps the panel)
+  const quiet = q.status === 'ready' && retests.length === 0 && altSets.length === 0;
   return (
     <Panel
       title={
@@ -34,16 +40,16 @@ export function DueNowPanel() {
         </>
       }
       labelledBy="p-due"
-      className={`due-now${hot ? ' due-now-hot' : ''}`}
-      aside={<span className="muted small">retests and alternate sets are not in the review queue</span>}
+      className={`due-now${hot ? ' due-now-hot' : ''}${quiet ? ' due-now-quiet' : ''}`}
+      aside={quiet ? undefined : <span className="muted small">retests and alternate sets are not in the review queue</span>}
     >
       <div data-testid="due-now">
         {q.status !== 'ready' ? (
           // an error (with Retry), or the reload that Retry started: never "nothing due" while unknown
           <LoadState error={q.error} onRetry={q.reload} minHeight={64} />
-        ) : retests.length === 0 && altSets.length === 0 ? (
-          <p className="muted small due-empty" data-testid="due-empty">
-            Nothing due. A passing explain-back (≥80% coverage) on an artifact with a seeded changed example schedules a retest at least 2 days later; units without a seeded variation rotate alternate question sets instead, and an alternate set is listed here once 2 days have passed since you answered a set of its group.
+        ) : quiet ? (
+          <p className="muted small due-empty" data-testid="due-empty" title={DUE_RULE}>
+            Nothing due.
             {nextAlt !== null && <> The next alternate set opens {fmtWhen(nextAlt)}.</>}
           </p>
         ) : (
