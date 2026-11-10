@@ -35,6 +35,49 @@ describe('lessonHeadings', () => {
   });
 });
 
+describe('content/fundamentals/sections.json (committed)', () => {
+  const raw = JSON.parse(readFileSync(join(FUND, 'sections.json'), 'utf8')) as Record<string, Record<string, { gate?: Record<string, string>; checks?: { heading: string; prompt: string; answer: string }[] }>>;
+
+  it('names only real topics, question numbers 1..quiz length and exact lesson headings', () => {
+    const bad: string[] = [];
+    expect(Object.keys(raw).sort()).toEqual([...TRACKS].sort());
+    for (const [track, byTopic] of Object.entries(raw)) {
+      const topics = new Map(readTrack(track).topics.map((t) => [t.id, t]));
+      for (const [id, entry] of Object.entries(byTopic)) {
+        const topic = topics.get(id);
+        if (!topic) {
+          bad.push(`${track}/${id}: unknown topic`);
+          continue;
+        }
+        expect(Object.keys(entry).every((k) => k === 'gate' || k === 'checks'), `${track}/${id} fields`).toBe(true);
+        const headings = new Set(lessonHeadings(topic.lesson));
+        for (const [n, h] of Object.entries(entry.gate ?? {})) {
+          if (!/^[1-9]\d*$/.test(n) || Number(n) > topic.quiz.length) bad.push(`${track}/${id}: question ${n} outside 1..${topic.quiz.length}`);
+          if (!headings.has(h)) bad.push(`${track}/${id} q${n}: "${h}" is not a lesson heading`);
+        }
+        for (const c of entry.checks ?? []) if (!headings.has(c.heading)) bad.push(`${track}/${id} check: "${c.heading}" is not a lesson heading`);
+      }
+    }
+    expect(bad).toEqual([]);
+  });
+
+  it('loads without a warning and every one of the 60 topics has a full gate map', () => {
+    const store = loadFundStore(defaultFundamentalsDirs(FUND), { warn: (m) => expect.fail(m) });
+    let topics = 0;
+    const partial: string[] = [];
+    for (const track of TRACKS) {
+      for (const topic of store.topics(track)) {
+        topics++;
+        const gate = store.lessonAids(track, topic.id).gate;
+        const want = topic.quiz.map((_, i) => String(i + 1));
+        if (JSON.stringify(Object.keys(gate).sort()) !== JSON.stringify([...want].sort())) partial.push(`${track}/${topic.id}: ${Object.keys(gate).length}/${topic.quiz.length}`);
+      }
+    }
+    expect(partial).toEqual([]);
+    expect(topics).toBe(60);
+  });
+});
+
 describe('readFundSections (warn and skip)', () => {
   let dir = '';
   afterEach(() => dir && rmSync(dir, { recursive: true, force: true }));
