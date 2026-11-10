@@ -80,3 +80,16 @@ export const fundLadderFixtures: Record<string, { id: string; order: number; tit
     },
   ],
 };
+
+/**
+ * f52 U3: the authored explanation of each gate question (PRIVATE: served only through
+ * GET /units/:id/notes after a verified pass of the topic's gate, with the keyed choice text).
+ */
+export const fundExplanationFixtures: Record<string, string> = {
+  'fund:js/01-values-types-and-coercion/q01': '`typeof null` is `\'object\'`: a bug from the first JavaScript engine that can never be fixed without breaking the web.',
+  'fund:js/01-values-types-and-coercion/q02': 'Every non-empty string is truthy, including `\'0\'`. Only the empty string is a falsy string.',
+  'fund:js/01-values-types-and-coercion/q03': '`typeof []` is `\'object\'`, so only `Array.isArray` tells an array from any other object.',
+  'fund:js/01-values-types-and-coercion/q04': 'The empty string converts to `0`, not `NaN`.',
+  'fund:js/01-values-types-and-coercion/q05': '`null` and `undefined` are loosely equal to each other and to nothing else.',
+  'fund:js/02-functions-and-closures/q01': 'A closure keeps the variables themselves alive, not a snapshot of their values.',
+};

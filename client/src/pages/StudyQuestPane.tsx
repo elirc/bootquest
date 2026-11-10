@@ -7,7 +7,7 @@ import { LearnMoreButton } from '../components/LearnMore';
 import { Icon } from '../components/Icon';
 import { Chip, Kbd } from '../components/ui';
 import { hasModifier, isEditableTarget, useKeydown } from '../lib/keys';
-import { InlineProse } from '../lib/prose';
+import { InlineProse, Prose } from '../lib/prose';
 import { enterActsOnFocus, shortcutBlocked } from '../lib/shortcuts';
 import { useTracksRefresh } from '../lib/tracks';
 import { readingTitle } from '../lib/view';
@@ -25,7 +25,21 @@ import { NextStep } from './Player/NextStep';
  * ("3 / 10"), 1-4 picks, Enter goes on, Back / Next move freely, then a review screen that lists
  * every question before the submit. Nothing says right or wrong until the submit is recorded.
  * Campaign study quests keep the all-at-once form.
+ *
+ * f52 U3 (ruling 4): after a PASSED gate the keyed answer and the explanation of every question
+ * are shown under it, missed questions first. They come from GET /units/:id/notes (re-read after
+ * each submit), which releases a Fundamentals gate's explanations on a verified pass only. After a
+ * FAILED gate nothing more is shown than which questions were missed.
  */
+/** The first line of a Fundamentals explanation note: the keyed choice by text (notes-service FUND_ANSWER_PREFIX). */
+const ANSWER_PREFIX = 'Answer: ';
+
+/** Split a released explanation into its keyed-answer line (Fundamentals notes only) and the rest. */
+export function splitExplanation(body: string): { answer: string | null; rest: string } {
+  if (!body.startsWith(ANSWER_PREFIX)) return { answer: null, rest: body };
+  const end = body.indexOf('\n');
+  return end === -1 ? { answer: body.slice(ANSWER_PREFIX.length), rest: '' } : { answer: body.slice(ANSWER_PREFIX.length, end), rest: body.slice(end + 1).trim() };
+}
 export function StudyQuestPane({ detail, lesson = null }: { detail: UnitDetail; lesson?: ReactNode }) {
   const sq = detail.studyQuest ?? null;
   if (!sq) {
@@ -88,6 +102,16 @@ function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuest
   useEffect(loadNotes, [loadNotes]);
   const hasNotes = (itemKey: string) =>
     notes !== null && (notes.readings.some((n) => n.target === itemKey) || notes.explanations.released.some((n) => n.target === itemKey));
+  // U3: the explanations a PASSED submit released, by question item key (never read after a fail)
+  const passedNow = submit?.verdict === 'pass';
+  const explained = new Map(passedNow && notes !== null ? notes.explanations.released.map((n) => [n.target, n] as const) : []);
+  // ...and the questions in display order: once a passed Fundamentals gate shows its keyed
+  // answers, the missed ones come first (a campaign quest's notes are per-question extras: no reorder)
+  const displayOrder = sq.questions.map((_, i) => i);
+  if (isFundTopicKey(detail.unit.key) && passedNow && explained.size > 0 && submit?.studyQuiz) {
+    const items = submit.studyQuiz.items;
+    displayOrder.sort((a, b) => Number(items[a]?.correct ?? true) - Number(items[b]?.correct ?? true) || a - b);
+  }
   const complete = answers.every((a) => a !== null);
   const answered = answers.filter((a) => a !== null).length;
 
@@ -189,7 +213,8 @@ function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuest
             )}
           </div>
           <p className="muted small" data-testid="fund-gate-intro">
-            Read the lesson, then take the quiz gate: {sq.questions.length} questions, pass mark {sq.passPct}%. Missed questions come back as review cards;
+            Read the lesson, then take the quiz gate: {sq.questions.length} questions, pass mark {sq.passPct}%. The gate is closed-book: the lesson is hidden
+            while you answer. Missed questions come back as review cards;
             your first pass enrols this topic&apos;s {sq.flashcards} flashcards into your reviews and unlocks the next topic.
           </p>
         </>
@@ -300,8 +325,11 @@ function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuest
               Review your answers. You can still change any of them; nothing is marked until you submit.
             </p>
           )}
-          {sq.questions.map((q, qi) => {
+          {displayOrder.map((qi) => {
+            const q = sq.questions[qi]!;
             const outcome = submit?.studyQuiz?.items[qi];
+            const note = explained.get(q.itemKey);
+            const ex = note ? splitExplanation(note.body) : null;
             return (
               <fieldset key={q.itemKey} className="choices" disabled={busy || submit !== null} data-testid={`question-${qi + 1}`}>
                 <legend>
@@ -320,7 +348,11 @@ function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuest
                   )}
                 </legend>
                 {q.choices.map((c, ci) => (
-                  <label key={ci} className={`choice${answers[qi] === ci ? ' choice-on' : ''}`}>
+                  // the keyed choice is marked only from a released explanation (a passed gate)
+                  <label
+                    key={ci}
+                    className={`choice${answers[qi] === ci ? ' choice-on' : ''}${ex?.answer != null && ex.answer === c ? ' choice-right' : ex?.answer != null && outcome && !outcome.correct && answers[qi] === ci ? ' choice-wrong' : ''}`}
+                  >
                     <input
                       type="radio"
                       name={`q${qi + 1}`}
@@ -333,6 +365,16 @@ function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuest
                     </span>
                   </label>
                 ))}
+                {ex && (
+                  <div className={`gate-explain${outcome && !outcome.correct ? ' gate-explain-missed' : ''}`} data-testid={`explain-${qi + 1}`}>
+                    {ex.answer !== null && (
+                      <p>
+                        <strong>Answer:</strong> <InlineProse text={ex.answer} />
+                      </p>
+                    )}
+                    {ex.rest !== '' && <Prose text={ex.rest} />}
+                  </div>
+                )}
               </fieldset>
             );
           })}
@@ -383,7 +425,7 @@ function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuest
             <Icon name="warn" /> {error}
           </div>
         )}
-        {submit?.studyQuiz && <StudyResult submit={submit} />}
+        {submit?.studyQuiz && <StudyResult submit={submit} fund={fund} explained={fund && explained.size > 0} />}
         {/* U5: a passed gate is not a dead end — the topic's drills, then the next topic */}
         {submit?.verdict === 'pass' && <NextStep unit={detail.unit} />}
       </div>
@@ -395,7 +437,7 @@ function StudyQuest({ detail, sq, lesson }: { detail: UnitDetail; sq: StudyQuest
   );
 }
 
-function StudyResult({ submit }: { submit: SubmitResponse }) {
+function StudyResult({ submit, fund, explained }: { submit: SubmitResponse; fund: boolean; explained: boolean }) {
   const r = submit.studyQuiz!;
   const pass = submit.verdict === 'pass';
   const xp = submit.xp;
@@ -415,9 +457,16 @@ function StudyResult({ submit }: { submit: SubmitResponse }) {
       </div>
       {missed > 0 && (
         <p className="muted small" data-testid="miss-cards-notice">
-          The answers to the {missed} missed question{missed === 1 ? '' : 's'} are not shown here: each one is now a review card (question on the front, the
-          keyed answer and its source on the back) that arrives in your review queue tomorrow
+          {pass && explained
+            ? `The ${missed} question${missed === 1 ? '' : 's'} you missed ${missed === 1 ? 'is' : 'are'} listed first above, with the keyed answer and why;`
+            : `The answers to the ${missed} missed question${missed === 1 ? '' : 's'} are not shown here:`}{' '}
+          each one is now a review card (question on the front, the keyed answer and its source on the back) that arrives in your review queue tomorrow
           {r.reviewCards.alreadyQueued > 0 ? ` (${r.reviewCards.alreadyQueued} already queued from an earlier attempt)` : ''}.
+        </p>
+      )}
+      {pass && explained && missed === 0 && (
+        <p className="muted small" data-testid="explained-notice">
+          The keyed answer and the explanation of every question are shown above.
         </p>
       )}
       {r.flashcardsEnrolled > 0 && (
@@ -425,7 +474,13 @@ function StudyResult({ submit }: { submit: SubmitResponse }) {
           {r.flashcardsEnrolled} flashcard{r.flashcardsEnrolled === 1 ? '' : 's'} from this quest joined your review queue (first due tomorrow).
         </p>
       )}
-      {!pass && <p className="muted small">Failed submits cost nothing and are recorded; review the reading list and try again.</p>}
+      {!pass && (
+        <p className="muted small" data-testid="fail-advice">
+          {fund
+            ? 'A failed try costs nothing and is saved. Re-read the lesson, then try again: the answers stay hidden until you pass.'
+            : 'Failed submits cost nothing and are recorded; review the reading list and try again.'}
+        </p>
+      )}
     </div>
   );
 }

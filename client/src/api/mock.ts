@@ -45,7 +45,7 @@ import {
   type StudyQuestFixture,
 } from './fixtures/ladder';
 import { writtenFixtures } from './fixtures/written';
-import { fundLadderFixtures, fundStudyFixtures } from './fixtures/fundamentals';
+import { fundExplanationFixtures, fundLadderFixtures, fundStudyFixtures } from './fixtures/fundamentals';
 
 // fund wave: the Fundamentals topic units are study-quiz units like the borrowbox quest (lesson = instructions)
 const allStudyFixtures: Record<string, StudyQuestFixture & { instructions?: string }> = { ...studyQuestFixtures, ...fundStudyFixtures };
@@ -1336,6 +1336,36 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
     getUnitNotes: (id) =>
       wrap((): UnitNotesResponse => {
         const { u, d, spec } = guard(id, { needCheck: false });
+        // f52 U3: mirrors notes-service fundExplanations — a Fundamentals gate releases every keyed
+        // answer + explanation after a verified PASS of this unit, and nothing before (or after a fail)
+        if (spec?.type === 'study-quiz' && fundStudyFixtures[String(id)]) {
+          const sq = fundStudyFixtures[String(id)]!;
+          const passed = studyPassed.has(id);
+          const released: NoteDto[] = passed
+            ? sq.public.questions.map((q, i) => ({
+                key: `fund-explain:${q.itemKey}`,
+                id: `q${String(i + 1).padStart(2, '0')}`,
+                phase: 'after' as const,
+                target: q.itemKey,
+                targetKind: 'quiz' as const,
+                title: `Q${i + 1}`,
+                body: `Answer: ${q.choices[sq.keys[i]!]}\n\n${fundExplanationFixtures[q.itemKey] ?? ''}`,
+                excerpts: [],
+                readMore: [],
+              }))
+            : [];
+          return {
+            unitId: id,
+            source: null,
+            readings: [],
+            explanations: passed
+              ? { state: 'released', message: 'The keyed answer and explanation of every question.', released, withheld: 0, nextAt: null }
+              : { state: 'locked', message: 'Answers and explanations open when you pass the quiz gate.', released: [], withheld: sq.public.questions.length, nextAt: null },
+            refs: [],
+            explanation: null,
+            solution: null,
+          };
+        }
         if (spec?.type === 'study-quiz') {
           const sq = allStudyFixtures[String(id)];
           const notes = sq ? (notesFixtures[sq.public.repo] ?? []) : [];

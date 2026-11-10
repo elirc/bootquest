@@ -17,7 +17,7 @@ import { join, resolve } from 'node:path';
 import request from 'supertest';
 import type { Express } from 'express';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { ReviewQueueResponse, SubmitResponse, UnitDetailResponse } from '@bootquest/shared/api';
+import { ReviewQueueResponse, SubmitResponse, UnitDetailResponse, UnitNotesResponse } from '@bootquest/shared/api';
 import { FundamentalsResponse } from '@bootquest/shared/api-ext';
 import { FundamentalsFile, fundTopicUnitKey, type FundTopic } from '@bootquest/shared/fundamentals';
 import { createApp } from '../../src/api/app.ts';
@@ -271,6 +271,45 @@ describe('Fundamentals over HTTP', () => {
     const miss = fund.find((it) => it.cardKey === `quiz-miss:${ladder.topics[0]!.quiz[0]!.key}`)!;
     const q0 = ladder.topics[0]!.quiz[0]!;
     expect(miss.card).toMatchObject({ front: q0.prompt, back: `${q0.choices[q0.answer]}\n\n${q0.explanation}` });
+  });
+
+  // f52 U3 (ruling 4): keyed answers + explanations after a PASSED gate; a failed gate releases nothing
+  it('GET /units/:id/notes: nothing before or after a failed gate, every keyed answer + explanation after a pass', async () => {
+    const u0 = topicUnit(0);
+    const quiz = ladder.topics[0]!.quiz;
+    const notes = async () => UnitNotesResponse.parse((await request(app).get(`/api/units/${u0}/notes`)).body);
+    const leaks = (raw: string) => quiz.some((q) => raw.includes(q.explanation));
+
+    const before = await notes();
+    expect(before.explanations).toMatchObject({ state: 'locked', released: [], withheld: 10, nextAt: null });
+    expect(leaks(JSON.stringify(before))).toBe(false);
+
+    // a fail (7/10): not even the seven answered right are released, so a retry is never open-key
+    const fail = SubmitResponse.parse((await request(app).post(`/api/units/${u0}/submit`).send({ answers: await served(u0, 3) })).body);
+    expect(fail.verdict).toBe('fail');
+    expect(JSON.stringify(fail)).not.toContain(quiz[5]!.explanation);
+    const afterFail = await notes();
+    expect(afterFail.explanations).toMatchObject({ state: 'locked', released: [], withheld: 10 });
+    expect(leaks(JSON.stringify(afterFail))).toBe(false);
+
+    // a pass with two misses: all ten, in question order, each with the keyed choice TEXT first
+    const pass = SubmitResponse.parse((await request(app).post(`/api/units/${u0}/submit`).send({ answers: await served(u0, 2) })).body);
+    expect(pass.verdict).toBe('pass');
+    const after = await notes();
+    expect(after.explanations.state).toBe('released');
+    expect(after.explanations.withheld).toBe(0);
+    expect(after.explanations.released.map((n) => n.target)).toEqual(quiz.map((q) => q.key));
+    for (const [i, n] of after.explanations.released.entries()) {
+      const q = quiz[i]!;
+      expect(n).toMatchObject({ phase: 'after', targetKind: 'quiz', title: `Q${i + 1}`, excerpts: [], readMore: [] });
+      expect(n.body).toBe(`Answer: ${q.choices[q.answer]}\n\n${q.explanation}`);
+    }
+    // the keyed text is one of the choices the learner was served (whatever position it landed in)
+    const d = UnitDetailResponse.parse((await request(app).get(`/api/units/${u0}`)).body);
+    for (const [i, q] of d.studyQuest!.questions.entries()) expect(q.choices).toContain(quiz[i]!.choices[quiz[i]!.answer]);
+    // the next topic's gate (unlocked, never passed) still serves nothing
+    const next = UnitNotesResponse.parse((await request(app).get(`/api/units/${topicUnit(1)}/notes`)).body);
+    expect(next.explanations).toMatchObject({ state: 'locked', released: [] });
   });
 
   it('review-card reconciliation keeps fund cards while the store has them, retires them when it does not', async () => {

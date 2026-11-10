@@ -139,7 +139,7 @@ describe('a Fundamentals topic in the player', () => {
     await user.click(screen.getByRole('button', { name: /Submit answers/ }));
     expect(await screen.findByText('Quiz gate passed')).toBeInTheDocument();
     expect(sent[1]).toMatchObject({ selfAssisted: false });
-  });
+  }, 90_000); // two full passes through the stepper
 
   it('passing the gate marks the topic passed and unlocks the next topic on the ladder', async () => {
     const api = createMockApi();
@@ -279,5 +279,77 @@ describe('the Fundamentals gate stepper', () => {
     expect(screen.queryByTestId('gate-progress')).not.toBeInTheDocument();
     expect(screen.getByTestId('question-1')).toBeInTheDocument();
     expect(screen.getByTestId('question-5')).toBeInTheDocument();
+  });
+});
+
+// U3 (ruling 4): keyed answers + explanations after a PASSED gate; only the misses after a failed one
+describe('the Fundamentals gate result', () => {
+  const explanations = () => [...document.querySelectorAll('[data-testid^="explain-"]')];
+
+  it('a pass shows the keyed answer and the explanation under every question, the missed ones first', async () => {
+    const { user } = renderApp(`/play/${T1}`);
+    await user.click(await screen.findByRole('button', { name: /Start quiz/ }));
+    // Q2 wrong (choice 1 instead of the keyed choice 2): 4/5 = 80% passes
+    await answerAll(user, FX1.keys.map((k, i) => (i === 1 ? 0 : k)));
+    await user.click(screen.getByRole('button', { name: /Submit answers/ }));
+    expect(await screen.findByText('Quiz gate passed')).toBeInTheDocument();
+    const missed = await screen.findByTestId('explain-2');
+    expect(missed).toHaveTextContent("Answer: '0'");
+    expect(missed).toHaveTextContent('Every non-empty string is truthy');
+    expect(missed).toHaveClass('gate-explain-missed');
+    expect(explanations()).toHaveLength(5);
+    expect(screen.getByTestId('explain-1')).toHaveTextContent("Answer: 'object'");
+    expect(screen.getByTestId('explain-1')).not.toHaveClass('gate-explain-missed');
+    // missed first, then the rest in question order
+    expect([...document.querySelectorAll('fieldset[data-testid^="question-"]')].map((f) => f.getAttribute('data-testid'))).toEqual([
+      'question-2',
+      'question-1',
+      'question-3',
+      'question-4',
+      'question-5',
+    ]);
+    // the keyed choice is marked, and the learner's wrong pick
+    const q2 = screen.getByTestId('question-2');
+    expect(within(q2).getByRole('radio', { name: 'Q2 choice 2' }).closest('label')).toHaveClass('choice-right');
+    expect(within(q2).getByRole('radio', { name: 'Q2 choice 1' }).closest('label')).toHaveClass('choice-wrong');
+    expect(screen.getByTestId('mark-2')).toHaveTextContent('incorrect');
+    expect(screen.getByTestId('miss-cards-notice')).toHaveTextContent('The 1 question you missed is listed first above, with the keyed answer and why');
+    expect(screen.getByTestId('miss-cards-notice')).toHaveTextContent('each one is now a review card');
+  });
+
+  it('a fail shows which questions were missed and nothing else: no key, no explanation', async () => {
+    const { user, api } = renderApp(`/play/${T1}`);
+    await user.click(await screen.findByRole('button', { name: /Start quiz/ }));
+    await answerAll(user, FX1.keys.map((k, i) => (i < 2 ? (k + 1) % 3 : k))); // 3/5
+    await user.click(screen.getByRole('button', { name: /Submit answers/ }));
+    expect(await screen.findByText('Below the pass mark')).toBeInTheDocument();
+    expect(screen.getByTestId('mark-1')).toHaveTextContent('incorrect');
+    expect(screen.getByTestId('mark-3')).toHaveTextContent('correct');
+    // let the notes re-read settle: still nothing
+    const notes = await api.getUnitNotes(T1);
+    expect(notes.explanations).toMatchObject({ state: 'locked', released: [], withheld: 5 });
+    expect(explanations()).toHaveLength(0);
+    expect(document.querySelector('.choice-right')).toBeNull();
+    expect(document.body.textContent).not.toContain('Every non-empty string is truthy');
+    expect(screen.getByTestId('miss-cards-notice')).toHaveTextContent('The answers to the 2 missed questions are not shown here');
+    expect(screen.getByTestId('fail-advice')).toHaveTextContent('Re-read the lesson');
+    // question order is untouched
+    expect([...document.querySelectorAll('fieldset[data-testid^="question-"]')].map((f) => f.getAttribute('data-testid'))).toEqual(
+      [1, 2, 3, 4, 5].map((n) => `question-${n}`),
+    );
+  });
+
+  it('a campaign study quest shows its released explanations under their questions after a pass (same path), in question order', async () => {
+    const { user } = renderApp('/play/206');
+    await user.click(await screen.findByRole('button', { name: /Start quiz/ }));
+    const keys = [1, 1, 1, 0, 0];
+    for (const [qi, ci] of keys.entries()) await user.click(screen.getByRole('radio', { name: `Q${qi + 1} choice ${ci + 1}` }));
+    expect(explanations()).toHaveLength(0);
+    await user.click(screen.getByRole('button', { name: /Submit answers/ }));
+    expect(await screen.findByText('Quiz gate passed')).toBeInTheDocument();
+    expect(await screen.findByTestId('explain-1')).toHaveTextContent('The lock guards the thing two requests compete for');
+    expect([...document.querySelectorAll('fieldset[data-testid^="question-"]')].map((f) => f.getAttribute('data-testid'))).toEqual(
+      [1, 2, 3, 4, 5].map((n) => `question-${n}`),
+    );
   });
 });
