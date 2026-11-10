@@ -76,6 +76,34 @@ describe('content/fundamentals/sections.json (committed)', () => {
     expect(partial).toEqual([]);
     expect(topics).toBe(60);
   });
+
+  it('pilot checks: js 01-05 only, one per lesson heading in lesson order, no quiz key or flashcard back restated', () => {
+    const js = readTrack('js');
+    const problems: string[] = [];
+    for (const [track, byTopic] of Object.entries(raw)) {
+      for (const [id, entry] of Object.entries(byTopic)) {
+        if ((entry.checks?.length ?? 0) > 0 && !(track === 'js' && PILOT.includes(id.slice(0, 2)))) problems.push(`${track}/${id}: checks outside the pilot`);
+      }
+    }
+    const norm = (s: string) => s.toLowerCase().replace(/[`*]/g, '').replace(/\s+/g, ' ').trim();
+    for (const topic of js.topics.filter((t) => PILOT.includes(t.id.slice(0, 2)))) {
+      const checks = raw.js?.[topic.id]?.checks ?? [];
+      expect(checks.map((c) => c.heading), topic.id).toEqual(lessonHeadings(topic.lesson));
+      const keys = topic.quiz.map((q) => norm(q.choices[q.answer]!)).filter((k) => k.length >= 12);
+      const backs = topic.flashcards.map((c) => norm(c.back));
+      const prompts = topic.quiz.map((q) => norm(q.prompt));
+      for (const c of checks) {
+        const p = norm(c.prompt);
+        const a = norm(c.answer);
+        if (keys.some((k) => a.includes(k) || p.includes(k))) problems.push(`${topic.id} "${c.heading}": restates a quiz key`);
+        if (backs.some((b) => a.includes(b) || b.includes(a))) problems.push(`${topic.id} "${c.heading}": restates a flashcard back`);
+        if (prompts.includes(p)) problems.push(`${topic.id} "${c.heading}": is a gate question`);
+        const sentences = c.answer.split(/(?<=[.!?])\s+/).filter((s) => s.trim() !== '').length;
+        if (sentences < 1 || sentences > 3) problems.push(`${topic.id} "${c.heading}": answer is ${sentences} sentences`);
+      }
+    }
+    expect(problems).toEqual([]);
+  });
 });
 
 describe('readFundSections (warn and skip)', () => {
