@@ -58,7 +58,10 @@ describe('content/fundamentals/related.json (committed)', () => {
       }
     }
     expect(bad).toEqual([]);
-    expect(topics).toBe(60);
+    // every committed topic, across the three tracks' topics.json
+    const committed = (['js', 'csharp', 'java'] as const).reduce((n, track) => n + FundamentalsFile.parse(JSON.parse(readFileSync(join(FUND, track, 'topics.json'), 'utf8'))).topics.length, 0);
+    expect(committed).toBeGreaterThanOrEqual(60);
+    expect(topics).toBe(committed);
     // the map names only real topics
     const raw = JSON.parse(readFileSync(join(FUND, 'related.json'), 'utf8')) as Record<string, Record<string, string[]>>;
     for (const [track, byTopic] of Object.entries(raw)) {
