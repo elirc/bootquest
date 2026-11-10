@@ -11,6 +11,7 @@ import './styles/trackunits.css';
 import './styles/fundamentals.css';
 import './styles/slatefocus.css';
 import './styles/find.css';
+import './styles/dashboard.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

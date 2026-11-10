@@ -2,13 +2,17 @@
 // track (GET /api/tracks/:id/fundamentals). Each topic is one study unit (the lesson is its
 // instructions, the quiz gate its check; a pass enrols the topic's flashcards and unlocks the next
 // topic) plus its drills. Renders only the endpoint's public fields; a locked unit is never a link.
+//
+// f52 U10: a compact card by default (progress, the current topic with its start button, the next
+// two topics, "Show all N"), so the campaign's first act stays on the first screen. The full list
+// is one click away and the choice is remembered (localStorage; a blocked store just forgets).
 
 import { useId, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useApi } from '../api/context';
 import type { FundTopicDto, TrackId, UnitSummary } from '../api/types';
 import { Icon } from '../components/Icon';
-import { Chip, LoadState } from '../components/ui';
+import { Chip, LoadState, ProgressBar } from '../components/ui';
 import { FUND_LEVEL_LABEL } from '../lib/fundamentals';
 import { useAsync } from '../lib/useAsync';
 
@@ -19,12 +23,35 @@ export function FundamentalsSection({ trackId }: { trackId: TrackId }): JSX.Elem
 
 const pad2 = (n: number): string => String(n).padStart(2, '0');
 
+/** "Show all" is remembered across visits and tracks. */
+export const FUND_EXPANDED_KEY = 'bootquest:fund-expanded';
+
+function readExpanded(): boolean {
+  try {
+    return window.localStorage.getItem(FUND_EXPANDED_KEY) === '1';
+  } catch {
+    return false; // storage blocked: the compact card, nothing persisted
+  }
+}
+
+function writeExpanded(v: boolean): void {
+  try {
+    window.localStorage.setItem(FUND_EXPANDED_KEY, v ? '1' : '0');
+  } catch {
+    /* not persisted; the in-memory choice still applies */
+  }
+}
+
+/** The full rule, kept for the tooltip (f52 U18: the card itself says it in one line). */
+const fundRule = (passPct: number): string =>
+  `A standalone ladder for the language and its main framework, no repo needed. Each topic is a short lesson and a quiz gate (pass mark ${passPct}%); passing enrols the topic's flashcards into your reviews and unlocks the next topic. Drills practise it in code.`;
+
 function FundamentalsBody({ trackId }: { trackId: TrackId }): JSX.Element | null {
   const api = useApi();
   const res = useAsync(() => api.getFundamentals(trackId), [api, trackId]);
   const headingId = useId();
   const listId = useId();
-  const [open, setOpen] = useState(true);
+  const [all, setAll] = useState(readExpanded);
   if (res.status === 'loading') return null;
   if (res.status === 'error') {
     return (
@@ -38,14 +65,18 @@ function FundamentalsBody({ trackId }: { trackId: TrackId }): JSX.Element | null
   if (topics.length === 0) return null;
   const done = topics.filter((t) => t.unit.state === 'done').length;
   const next = topics.find((t) => t.unit.state === 'available');
+  // the compact card: the current topic (the first one not passed) and the two after it
+  const at = topics.findIndex((t) => t.unit.state !== 'done');
+  const preview = at === -1 ? [] : topics.slice(at, at + 3);
+  const toggle = () => {
+    const v = !all;
+    writeExpanded(v);
+    setAll(v);
+  };
   return (
-    <section className="fund" aria-labelledby={headingId} data-testid="fundamentals">
+    <section className={`fund ${all ? 'fund-all' : 'fund-compact'}`} aria-labelledby={headingId} data-testid="fundamentals">
       <div className="fund-head">
-        <h2 id={headingId}>
-          <button type="button" aria-expanded={open} aria-controls={listId} onClick={() => setOpen((o) => !o)}>
-            Fundamentals
-          </button>
-        </h2>
+        <h2 id={headingId}>Fundamentals</h2>
         <span className="muted small" data-testid="fund-progress">
           {done}/{topics.length} topics passed
         </span>
@@ -55,43 +86,64 @@ function FundamentalsBody({ trackId }: { trackId: TrackId }): JSX.Element | null
           </Link>
         )}
       </div>
-      <p className="muted small fund-intro">
-        A standalone ladder for the language and its main framework, no repo needed. Each topic is a short lesson and a quiz gate (pass mark{' '}
-        {topics[0]!.passPct}%); passing enrols the topic&apos;s flashcards into your reviews and unlocks the next topic. Drills practise it in code.
+      <ProgressBar value={done} max={topics.length} label="Fundamentals topics passed" tone="success" />
+      <p className="muted small fund-intro" title={fundRule(topics[0]!.passPct)}>
+        A short lesson and a quiz gate per topic. Passing unlocks the next one.
       </p>
-      <ol className="fund-topics" id={listId} hidden={!open}>
-        {topics.map((t) => (
-          <li key={t.id}>
-            <TopicRow topic={t} />
-          </li>
-        ))}
+      {!all && preview.length > 0 && (
+        <ol className="fund-topics fund-preview" aria-label="Current and next topics" data-testid="fund-preview">
+          {preview.map((t, i) => (
+            <li key={t.id}>{i === 0 && t.unit.state !== 'locked' ? <TopicRow topic={t} /> : <TopicLine topic={t} />}</li>
+          ))}
+        </ol>
+      )}
+      <ol className="fund-topics" id={listId} hidden={!all} data-testid="fund-all">
+        {all && topics.map((t) => <li key={t.id}>{t.unit.state === 'locked' ? <TopicLine topic={t} /> : <TopicRow topic={t} />}</li>)}
       </ol>
+      <button type="button" className="link-btn fund-toggle small" aria-expanded={all} aria-controls={listId} onClick={toggle} data-testid="fund-toggle">
+        {all ? 'Show less' : `Show all ${topics.length}`}
+      </button>
     </section>
   );
 }
 
-function TopicRow({ topic: t }: { topic: FundTopicDto }) {
-  const locked = t.unit.state === 'locked';
-  const title = (
+function TopicTitle({ topic: t }: { topic: FundTopicDto }) {
+  return (
     <>
       <span className="fund-order">{pad2(t.order)}</span>
       <span className="fund-title">{t.title}</span>
     </>
   );
+}
+
+/** One line: a locked topic (never a link, the unlock rule in its tooltip) or an upcoming one. */
+function TopicLine({ topic: t }: { topic: FundTopicDto }) {
+  const locked = t.unit.state === 'locked';
+  return (
+    <div className="fund-topic fund-line" data-state={t.unit.state} data-topic={t.id}>
+      {locked ? (
+        <span className="fund-link" aria-disabled="true" title="Unlocks when you pass the previous topic's quiz">
+          <Icon name="lock" size={12} />
+          <TopicTitle topic={t} />
+          <span className="sr-only">, Locked</span>
+        </span>
+      ) : (
+        <Link className="fund-link" to={`/play/${t.unit.id}`}>
+          <TopicTitle topic={t} />
+        </Link>
+      )}
+      {t.unit.state === 'done' && <Chip tone="success">passed</Chip>}
+    </div>
+  );
+}
+
+function TopicRow({ topic: t }: { topic: FundTopicDto }) {
   return (
     <div className="fund-topic" data-state={t.unit.state} data-topic={t.id}>
       <div className="fund-topic-head">
-        {locked ? (
-          <span className="fund-link" aria-disabled="true">
-            <Icon name="lock" size={12} />
-            {title}
-            <span className="sr-only">, Locked</span>
-          </span>
-        ) : (
-          <Link className="fund-link" to={`/play/${t.unit.id}`}>
-            {title}
-          </Link>
-        )}
+        <Link className="fund-link" to={`/play/${t.unit.id}`}>
+          <TopicTitle topic={t} />
+        </Link>
         <span className="fund-chips">
           <Chip>{FUND_LEVEL_LABEL[t.level]}</Chip>
           {t.unit.state === 'done' && <Chip tone="success">passed</Chip>}
@@ -100,7 +152,6 @@ function TopicRow({ topic: t }: { topic: FundTopicDto }) {
       <p className="muted small fund-summary">{t.summary}</p>
       <p className="small fund-meta">
         Lesson + quiz gate · {t.quizQuestions} questions · {t.flashcards} flashcards
-        {locked && <span className="muted"> · unlocks when you pass the previous topic&apos;s quiz</span>}
       </p>
       {t.drills.length > 0 && (
         <ul className="fund-drills" aria-label={`${t.title} drills`}>

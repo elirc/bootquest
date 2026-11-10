@@ -102,6 +102,49 @@ export function groupTotals(units: readonly UnitSummary[]): ReadonlyMap<string, 
 }
 
 /**
+ * f52 U14: the module number of a numbered drill module key (`sysdrills/01-estimation/01-qps` -> 1),
+ * else null (ladder / gh: repo keys, Fundamentals keys, short keys, unnumbered modules).
+ */
+export function moduleNumberOf(key: string): number | null {
+  if (key.startsWith('ladder/') || key.startsWith('gh:') || fundTopicIdOf(key) !== null) return null;
+  const parts = key.split('/');
+  if (parts.length < 3) return null;
+  const m = /^(\d+)/.exec(parts[1] ?? '');
+  return m ? Number(m[1]) : null;
+}
+
+export type GroupTier = 'core' | 'repo';
+
+/** Section headings for a track without campaign acts. */
+export function tierLabels(trackId: string): Record<GroupTier, string> {
+  return { core: 'Core drills', repo: trackId === 'sysdesign' ? 'Design a real system' : 'Real-repo practice' };
+}
+
+export interface GroupTierSection {
+  tier: GroupTier;
+  groups: UnitGroup[];
+}
+
+/**
+ * f52 U14 (ordering only): numbered drill modules first, in module-number order, then every other
+ * group (repo-based practice) in label order. Empty tiers are dropped.
+ */
+export function tierGroups(groups: readonly UnitGroup[]): GroupTierSection[] {
+  const numbered: { n: number; g: UnitGroup }[] = [];
+  const rest: UnitGroup[] = [];
+  for (const g of groups) {
+    const nums = g.units.map((u) => moduleNumberOf(u.key)).filter((n): n is number => n !== null);
+    if (nums.length > 0) numbered.push({ n: Math.min(...nums), g });
+    else rest.push(g);
+  }
+  numbered.sort((a, b) => a.n - b.n || a.g.label.localeCompare(b.g.label, 'en'));
+  const out: GroupTierSection[] = [];
+  if (numbered.length) out.push({ tier: 'core', groups: numbered.map((x) => x.g) });
+  if (rest.length) out.push({ tier: 'repo', groups: rest });
+  return out;
+}
+
+/**
  * Filter then group. The query matches (case-insensitively) the title, the group label or the key.
  * Groups are sorted by label; units keep the order the server served them in.
  */
