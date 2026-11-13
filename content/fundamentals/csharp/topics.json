@@ -272,15 +272,15 @@
     },
     {
      "key": "fund:csharp/02-nullable-reference-types/q08",
-     "prompt": "Which warning does `public string Name { get; set; }` with no initialiser produce in a class without a constructor?",
+     "prompt": "With nullable reference types on, `public string Name { get; set; }` has no initialiser and the class has no constructor, so the compiler warns. Which change removes the warning AND makes every caller set Name?",
      "choices": [
-      "CS8602",
-      "CS8618",
-      "CS0168",
-      "CS8625"
+      "Initialise it with `= null!;`",
+      "Declare it `public required string Name { get; set; }`",
+      "Declare it `string?` and check for null on each use",
+      "Put `#nullable disable` above the class"
      ],
      "answer": 1,
-     "explanation": "Initialise it, make it nullable, add required, or set it in the constructor. CS8618 says a non-nullable property must contain a non-null value when exiting the constructor."
+     "explanation": "`required` makes the compiler reject any object creation that does not set Name, so the property is never left null. `= null!` only silences the warning: the value is still null at runtime, and the other two choices allow or hide null instead of preventing it."
     },
     {
      "key": "fund:csharp/02-nullable-reference-types/q09",
@@ -1337,7 +1337,7 @@
      "prompt": "Why is `TryGetValue` preferred over `ContainsKey` followed by the indexer?",
      "choices": [
       "It does one hash lookup instead of two",
-      "ContainsKey is obsolete in .NET 8",
+      "ContainsKey allocates on each call",
       "It takes a lock, so it is thread-safe",
       "It caches the value for later lookups"
      ],
@@ -1500,7 +1500,7 @@
      "prompt": "Why prefer `Any()` over `Count() > 0`?",
      "choices": [
       "Any() stops at the first element; Count() may read all",
-      "Count() is obsolete for IEnumerable<T> sequences in .NET 8",
+      "Count() runs the whole query twice, once for each comparison",
       "Any() locks the source, so it is thread-safe",
       "They differ: Count() > 0 ignores null elements"
      ],
@@ -1823,15 +1823,15 @@
     },
     {
      "key": "fund:csharp/11-exceptions-and-idisposable/q06",
-     "prompt": "What does the compiler say about `catch (Exception) {}` placed before `catch (IOException) {}`?",
+     "prompt": "A method must handle FileNotFoundException with its own handler, any other IOException with a second one, and everything else with a third. Which order of catch clauses compiles and does that?",
      "choices": [
-      "Nothing: the first matching clause wins",
-      "A warning that the second clause is unreachable",
-      "Error CS0160: an earlier clause already catches it",
-      "It silently reorders the clauses, most specific first"
+      "catch (Exception), then catch (IOException), then catch (FileNotFoundException)",
+      "catch (FileNotFoundException), then catch (IOException), then catch (Exception)",
+      "catch (IOException), then catch (FileNotFoundException), then catch (Exception)",
+      "Any order: the runtime picks the most specific matching clause first"
      ],
-     "answer": 2,
-     "explanation": "The derived catch would be unreachable, so the compiler rejects it."
+     "answer": 1,
+     "explanation": "Clauses are tried top to bottom and the first match wins, so the most derived type goes first. A clause for a base type placed above a derived one makes the derived clause unreachable, and the compiler rejects it; the runtime never reorders clauses for you."
     },
     {
      "key": "fund:csharp/11-exceptions-and-idisposable/q07",
@@ -2986,7 +2986,7 @@
    "title": "Model binding, validation & ProblemDetails",
    "level": "advanced",
    "summary": "DataAnnotations and automatic 400s with [ApiController] and .NET 10 minimal API validation, ValidationProblemDetails and RFC 9457 problem details, DTOs against over-posting, and where business validation belongs.",
-   "lesson": "## Validate at the edge\n\nEvery request body is untrusted. Validate shape and simple rules where the request enters, before any business logic runs, and answer **400** with field-level errors.\n\n```csharp\npublic class SignupDto\n{\n    [Required, EmailAddress] public string? Email { get; set; }\n    [Required, StringLength(50, MinimumLength = 1)] public string? Name { get; set; }\n    [Range(13, 120)] public int Age { get; set; }\n}\n```\n\n## Automatic validation\n\n- **Controllers** with `[ApiController]`: an invalid model never reaches the action; the framework returns 400 with a **ValidationProblemDetails** body.\n- **Minimal APIs** in .NET 10: call `builder.Services.AddValidation()` and parameters with DataAnnotations are validated the same way. (Earlier versions needed endpoint filters or a library such as FluentValidation.)\n\nThe response body looks like this:\n\n```json\n{\n  \"type\": \"https://tools.ietf.org/html/rfc9110#section-15.5.1\",\n  \"title\": \"One or more validation errors occurred.\",\n  \"status\": 400,\n  \"errors\": { \"Email\": [\"The Email field is required.\"], \"Age\": [\"The field Age must be between 13 and 120.\"] },\n  \"traceId\": \"00-...\"\n}\n```\n\nClients can map `errors` straight onto form fields.\n\n## Problem details (RFC 9457)\n\n`{ type, title, status, detail, instance }` plus extensions is the standard error shape for HTTP APIs. `builder.Services.AddProblemDetails()` makes the framework use it for errors (exceptions, status-code pages), and `Results.Problem(...)` / `Results.ValidationProblem(errors)` produce it from your own code. One consistent error shape for the whole API is worth more than clever per-endpoint messages.\n\n## DTOs against over-posting\n\nNever bind request bodies straight to entities:\n\n```csharp\napp.MapPut(\"/users/{id:int}\", async (int id, UpdateUserDto dto, AppDb db) => {\n    var user = await db.Users.FindAsync(id);\n    if (user is null) return Results.NotFound();\n    user.Name = dto.Name;        // copy ONLY what the client may change\n    user.Bio = dto.Bio;\n    await db.SaveChangesAsync();\n    return Results.NoContent();\n});\n```\n\nBinding to the entity would let a client send `\"isAdmin\": true` or `\"balance\": 1000000` (**over-posting** / mass assignment). Separate input DTOs, output DTOs (no password hashes) and entities.\n\n## Shape validation versus business rules\n\nDataAnnotations check a request in isolation: required, lengths, ranges, formats. Rules that need data (the email is already taken, the product is out of stock, the order is already shipped) belong in the service, and usually map to **409 Conflict** or **422 Unprocessable Content** rather than 400. Keep both kinds returning problem details.\n\n## Normalise as you validate\n\nTrim strings, normalise case for emails and codes, treat empty strings as missing where the field is optional. Doing it once at the boundary keeps the rest of the code simple and the database clean.\n",
+   "lesson": "## Validate at the edge\n\nEvery request body is untrusted. Validate shape and simple rules where the request enters, before any business logic runs, and answer **400** with field-level errors.\n\n```csharp\npublic class SignupDto\n{\n    [Required, EmailAddress] public string? Email { get; set; }\n    [Required, StringLength(50, MinimumLength = 1)] public string? Name { get; set; }\n    [Range(13, 120)] public int Age { get; set; }\n}\n```\n\n`[Range(min, max)]` is inclusive at both ends: `[Range(1, 5)]` accepts 1 and 5 and rejects 0 and 6.\n\n## Automatic validation\n\n- **Controllers** with `[ApiController]`: an invalid model never reaches the action; the framework returns 400 with a **ValidationProblemDetails** body.\n- **Minimal APIs** in .NET 10: call `builder.Services.AddValidation()` and parameters with DataAnnotations are validated the same way. (Earlier versions needed endpoint filters or a library such as FluentValidation.)\n\nThe response body looks like this:\n\n```json\n{\n  \"type\": \"https://tools.ietf.org/html/rfc9110#section-15.5.1\",\n  \"title\": \"One or more validation errors occurred.\",\n  \"status\": 400,\n  \"errors\": { \"Email\": [\"The Email field is required.\"], \"Age\": [\"The field Age must be between 13 and 120.\"] },\n  \"traceId\": \"00-...\"\n}\n```\n\nClients can map `errors` straight onto form fields.\n\n## Problem details (RFC 9457)\n\n`{ type, title, status, detail, instance }` plus extensions is the standard error shape for HTTP APIs. `builder.Services.AddProblemDetails()` makes the framework use it for errors (exceptions, status-code pages), and `Results.Problem(...)` / `Results.ValidationProblem(errors)` produce it from your own code. One consistent error shape for the whole API is worth more than clever per-endpoint messages.\n\n## DTOs against over-posting\n\nNever bind request bodies straight to entities:\n\n```csharp\napp.MapPut(\"/users/{id:int}\", async (int id, UpdateUserDto dto, AppDb db) => {\n    var user = await db.Users.FindAsync(id);\n    if (user is null) return Results.NotFound();\n    user.Name = dto.Name;        // copy ONLY what the client may change\n    user.Bio = dto.Bio;\n    await db.SaveChangesAsync();\n    return Results.NoContent();\n});\n```\n\nBinding to the entity would let a client send `\"isAdmin\": true` or `\"balance\": 1000000` (**over-posting** / mass assignment). Separate input DTOs, output DTOs (no password hashes) and entities.\n\n## Shape validation versus business rules\n\nDataAnnotations check a request in isolation: required, lengths, ranges, formats. Rules that need data (the email is already taken, the product is out of stock, the order is already shipped) belong in the service, and usually map to **409 Conflict** or **422 Unprocessable Content** rather than 400. Keep both kinds returning problem details.\n\n## Normalise as you validate\n\nTrim strings, normalise case for emails and codes, treat empty strings as missing where the field is optional. Doing it once at the boundary keeps the rest of the code simple and the database clean.\n",
    "quiz": [
     {
      "key": "fund:csharp/18-validation-and-problem-details/q01",

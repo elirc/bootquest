@@ -18,7 +18,7 @@ A. Every distractor is a specific, plausible misconception stated as a full clai
    form and specificity as the key. Prefer real confusions: another language's behaviour, an older-version
    rule, an off-by-one, the neighbouring API.
 B. Every distractor must be verifiably FALSE for the prompt as written, per the language spec / standard
-   library, for current versions (JS: ES2023 + Node 22; C#: 12/.NET 8; Java: 17). If you cannot state in one
+   library, for current versions (JS: ES2023 + Node 22; C#: 14/.NET 10; Java: 17). If you cannot state in one
    line why it is wrong, do not use it.
 C. No hedges or absolutes ("always", "never", "only") unless the key has one too. No "all/none of the above",
    no jokes, no two distractors that say the same thing.
