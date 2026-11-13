@@ -16,7 +16,7 @@ afterEach(() => setRouting(null));
 const real = readRouting(DEFAULT_CONTENT_DIR);
 
 describe('content/archive.json (committed)', () => {
-  it('loads clean: 879 unit keys in 6 groups, no prefix, no related.json key, every group counted by counting', () => {
+  it('loads clean: 880 unit keys in 7 groups, no prefix, no related.json key, every group counted by counting', () => {
     expect(real.problems).toEqual([]);
     const file = JSON.parse(readFileSync(join(DEFAULT_CONTENT_DIR, 'archive.json'), 'utf8')) as { groups: { id: string; count: number; keys: string[] }[] };
     expect(Object.fromEntries(file.groups.map((g) => [g.id, g.keys.length]))).toEqual({
@@ -26,9 +26,10 @@ describe('content/archive.json (committed)', () => {
       'twin-pack-gate': 15,
       'classic-eb-demoted': 40,
       'g4-demoted': 1,
+      'sysdrills-duplicate': 1,
     });
     for (const g of file.groups) expect(g.count).toBe(g.keys.length);
-    expect(real.archivedKeys.size).toBe(879);
+    expect(real.archivedKeys.size).toBe(880);
     expect(real.archivedPrefixes).toEqual([]);
     const related = JSON.stringify(JSON.parse(readFileSync(join(DEFAULT_CONTENT_DIR, 'fundamentals', 'related.json'), 'utf8')));
     for (const k of real.archivedKeys) expect(related.includes(`"${k}"`), k).toBe(false);
