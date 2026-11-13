@@ -188,7 +188,11 @@ describe.skipIf(!HAVE_CHECKOUT)('W7 real ladder content end to end (temp DB, no 
     const sc = KataScoreResponse.parse((await api('POST', `/units/${unit.id}/kata/self-score`, { perDefect: per })).json);
     expect(sc).toMatchObject({ caught: 1, total: item.seededDefectKey.length, xp: { amount: 15 } });
     const stats = KataStatsResponse.parse((await api('GET', '/stats/katas')).json);
-    expect(stats).toMatchObject({ katasScored: 1, assistedCount: 0, defectsCaught: 1, defectsTotal: item.seededDefectKey.length });
+    // rv B (R3-04): G1 counts only the defects evidenced in the patched lines
+    const patched = key.defects.filter((x) => x.evidence.in === 'patched');
+    expect(patched.length).toBeGreaterThan(0);
+    const patchedCaught = patched.filter((x) => per[x.id] === 'caught').length;
+    expect(stats).toMatchObject({ katasScored: 1, assistedCount: 0, defectsCaught: patchedCaught, defectsTotal: patched.length });
   });
 
   it('sync registers U01..U12; the ladder re-links: each signalpost explain-back -> its artifact prerequisite, the signalpost + G4 retests are created, fixture retests stay pending', async () => {
