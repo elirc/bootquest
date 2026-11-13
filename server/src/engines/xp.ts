@@ -71,6 +71,30 @@ export interface XpAward {
   amount: number;
   reason: XpZeroReason | null;
   day: string;
+  /** rv B: why a pass paid less than its base without a zero reason (api-ext XpNote) */
+  note?: 'assisted-half' | 'first-try-missed';
+}
+
+/** rv B (R4-08): an ASSISTED study-quiz gate pass ("Show lesson", "I had help", a released key) pays this share. */
+export const ASSISTED_GATE_XP_FACTOR = 0.5;
+
+/**
+ * rv B (R4-09): single-answer checks (a quick check, a predict-output) pay only when the unit's FIRST graded
+ * submit passes. A pass after a failed first try is trial and error: it completes the unit (a verified pass)
+ * and pays 0 XP. xp_event.reason has no value for it (its CHECK and XpZeroReason are bound), so the row is
+ * amount 0 / reason null and the award carries note 'first-try-missed'.
+ */
+export const FIRST_TRY_ONLY_KINDS: ReadonlySet<XpKind> = new Set<XpKind>(['quiz', 'predict']);
+
+/** True when the unit's first graded (submit-run) attempt is not `attemptId` and did not pass. */
+function firstTryMissed(db: Db, unitId: number, attemptId: number): boolean {
+  const first = db.get<{ id: number; outcome: string }>(
+    `SELECT a.id AS id, a.outcome AS outcome FROM attempt a
+      WHERE a.unit_id = ? AND EXISTS (SELECT 1 FROM run r WHERE r.attempt_id = a.id AND r.kind = 'submit')
+      ORDER BY a.id LIMIT 1`,
+    unitId,
+  );
+  return first !== undefined && first.id !== attemptId && first.outcome !== 'pass';
 }
 
 function insertXp(
@@ -100,7 +124,7 @@ function insertXp(
  *  - code / quiz / predict / study-quest: the attempt is a verified pass (outcome
  *    pass + passing submit run) on a check whose type earns exactly that kind;
  *  - explain-back: the stored answer attempt has PASSING explain-back evidence
- *    (EB_PASS_SQL: >= 80% coverage, weighted for a [wN] set, no [w3] missed);
+ *    (EB_PASS_SQL: >= 80% coverage, weighted for a [wN] set, at most one [w3] missed);
  *    patch-kata: the answer attempt has kata evidence;
  *  - reading: the attempt is a reading self-attest on a reading unit.
  * Unit, track and difficulty come from the DB, never the caller. Then, in
@@ -139,7 +163,7 @@ export function awardXp(db: Db, input: XpAwardInput, now: Clock): XpAward {
       case 'explain-back':
       case 'patch-kata': {
         const evKind = x.kind === 'explain-back' ? 'explain-back' : 'kata';
-        // A5: an explain-back pays only on a PASSING self-score (EB_PASS_SQL: the floor, and no [w3] missed)
+        // A5: an explain-back pays only on a PASSING self-score (EB_PASS_SQL: the floor, and at most one [w3] missed)
         const ok =
           x.kind === 'explain-back'
             ? db.get(`SELECT 1 AS x FROM evidence e WHERE e.attempt_id = ? AND e.kind = 'explain-back' AND ${EB_PASS_SQL}`, attempt.id)
@@ -147,7 +171,7 @@ export function awardXp(db: Db, input: XpAwardInput, now: Clock): XpAward {
         if (attempt.outcome !== 'submitted' || !ok) {
           throw new HonestyRuleError(
             'NOT_VERIFIED',
-            `attempt ${attempt.id} has no completed ${evKind}${x.kind === 'explain-back' ? ` >= ${PROMOTION_MIN_COVERAGE * 100}% with every [w3] covered` : ''}`,
+            `attempt ${attempt.id} has no completed ${evKind}${x.kind === 'explain-back' ? ` >= ${PROMOTION_MIN_COVERAGE * 100}% with at most one [w3] missed` : ''}`,
           );
         }
         break;
@@ -165,15 +189,27 @@ export function awardXp(db: Db, input: XpAwardInput, now: Clock): XpAward {
     // (10 -> 8, 30 -> 23); a floor would cut a hinted 10 XP drill to 70%.
     const hints = hintsTakenAtOrBefore(db, unit.id, attempt.created_at);
     if (hints > 0) amount = Math.round(amount * hintXpMultiplier(hints));
+    let note: XpAward['note'];
+    // rv B (R4-08): an assisted gate pass still unlocks and completes, at half the XP
+    if (x.kind === 'study-quest' && attempt.mode === 'assisted') {
+      amount = Math.round(amount * ASSISTED_GATE_XP_FACTOR);
+      note = 'assisted-half';
+    }
     let reason: XpZeroReason | null = null;
     if (attempt.assistance_source === 'reveal' || isRevealed(db, unit.id)) {
       amount = 0;
       reason = 'revealed';
+      note = undefined;
     } else if (db.get('SELECT 1 AS x FROM xp_event WHERE unit_id = ? AND kind = ? AND amount > 0 LIMIT 1', unit.id, x.kind)) {
       amount = 0;
       reason = 'already-awarded';
+      note = undefined;
+    } else if (FIRST_TRY_ONLY_KINDS.has(x.kind) && firstTryMissed(db, unit.id, attempt.id)) {
+      amount = 0;
+      note = 'first-try-missed';
     }
-    return insertXp(db, { kind: x.kind, amount, reason, unitId: unit.id, attemptId: attempt.id, trackId: unit.track_id }, t);
+    const award = insertXp(db, { kind: x.kind, amount, reason, unitId: unit.id, attemptId: attempt.id, trackId: unit.track_id }, t);
+    return note ? { ...award, note } : award;
   });
 }
 
@@ -182,9 +218,24 @@ export function awardXp(db: Db, input: XpAwardInput, now: Clock): XpAward {
  * only by fsrs.review() inside its transaction (the review_log row written
  * there links this xp_event). Not exposed through awardXp/XpAwardInput.
  */
-export function awardReviewXp(db: Db, now: Clock): XpAward {
+export function awardReviewXp(db: Db, now: Clock, reviewItemId?: number): XpAward {
   const t = nowMs(now);
-  const used = xpOnDay(db, dayKey(t), 'review');
+  const day = dayKey(t);
+  // rv B (R4-14): one paid grade per card per local day — only its FIRST grade that day pays (Again re-dues
+  // a learning card within minutes, so grading it again and again must not farm XP). The review_log row of
+  // THIS grade is written after the award, so any row of this card on this day is an earlier grade.
+  if (reviewItemId !== undefined) {
+    const earlier = db.all<{ at: number }>(
+      'SELECT reviewed_at AS at FROM review_log WHERE review_item_id = ? AND reviewed_at > ? AND reviewed_at <= ?',
+      reviewItemId,
+      t - 2 * 24 * 60 * 60 * 1000,
+      t,
+    );
+    if (earlier.some((r) => dayKey(r.at) === day)) {
+      return insertXp(db, { kind: 'review', amount: 0, reason: 'already-awarded', unitId: null, attemptId: null, trackId: null }, t);
+    }
+  }
+  const used = xpOnDay(db, day, 'review');
   const amount = Math.max(0, Math.min(XP_AMOUNTS.review, REVIEW_DAILY_CAP - used));
   return insertXp(db, { kind: 'review', amount, reason: amount === 0 ? 'daily-cap' : null, unitId: null, attemptId: null, trackId: null }, t);
 }

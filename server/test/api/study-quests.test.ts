@@ -17,6 +17,7 @@ import { CampaignResponse, ReviewQueueResponse, SubmitResponse, UnitDetailRespon
 // ab S4: the dashboard's slate items carry targetUnitId (api-ext), so the strict parse uses the extended schema
 import { DashboardResponseExt as DashboardResponse } from '@bootquest/shared/api-ext';
 import { createApp } from '../../src/api/app.ts';
+import { withChoices } from '../../src/api/study-service.ts';
 import { defaultRunners } from '../../src/api/runners.ts';
 import { DAY_MS, fixedClock } from '../../src/engines/clock.ts';
 import { gradeStudyQuiz, StudyQuizShapeError } from '../../src/engines/study-quest.ts';
@@ -426,8 +427,10 @@ describe('study-quest API flow (real packs)', { timeout: 60_000 }, () => {
     expect(fail.verdict).toBe('fail');
     expect(fail.xp).toBeNull();
     expect(fail.studyQuiz).toMatchObject({ correct: 11, total: 14, passed: false, passPct: 80, reviewCards: { created: 3, alreadyQueued: 0 } });
-    expect(fail.studyQuiz!.items.filter((i) => !i.correct)).toHaveLength(3);
-    expect(fail.result.failures.map((f) => f.name)).toEqual(['Q1', 'Q2', 'Q3']);
+    // rv B (R4-01): a failed gate marks no question and names no question number
+    expect(fail.studyQuiz!.items).toEqual([]);
+    expect(fail.result.failures.map((f) => f.name)).toEqual(['quiz gate']);
+    expect(JSON.stringify(fail.result)).not.toMatch(/\bQ\d/);
     // keys never leave in the submit response
     const quizzes = packQuizzes('grok-js');
     const keyedTexts = quizzes.slice(0, 3).map((q) => q.check.choices![q.check.answerKey as number]!);
@@ -446,7 +449,7 @@ describe('study-quest API flow (real packs)', { timeout: 60_000 }, () => {
     const card = q.items.find((i) => i.cardKey === `quiz-miss:${quizzes[0]!.key}`)!;
     expect(card.kind).toBe('quiz-miss');
     expect(card.unitId).toBe(id);
-    expect(card.card!.front).toBe(quizzes[0]!.prompt);
+    expect(card.card!.front).toBe(withChoices(quizzes[0]!.prompt, quizzes[0]!.check.choices!)); // rv B (R4-06)
     expect(card.card!.back.startsWith(keyedTexts[0]!)).toBe(true);
     expect(card.card!.source).toContain('grok-js@');
     // the attempts are recorded with their real score
@@ -670,12 +673,13 @@ describe('ui-audit #24 (HONESTY): choices are served in a stable secret permutat
     const right = await served(ctx, id, repo, zeroKeys(repo), zeroByKey(repo));
     const answers = right.map((r, i) => (i === 0 ? (r + 1) % qs[0]!.choices.length : r));
     const sub = SubmitResponse.parse((await submit(ctx, id, { answers })).body);
-    expect(sub.studyQuiz!.items[0]!.correct).toBe(false);
+    // rv B: a failed gate carries no per-question marks; the miss is the queued card
+    expect(sub.studyQuiz!.reviewCards.created).toBe(1);
     ctx.clock.advance(DAY_MS);
     const queue = ReviewQueueResponse.parse((await request(ctx.app).get('/api/reviews/queue')).body);
     const item = byKeyItems.get(qs[0]!.itemKey)!;
     const card = queue.items.find((i) => i.cardKey === `quiz-miss:${item.key}`)!;
-    expect(card.card!.front).toBe(item.prompt);
+    expect(card.card!.front).toBe(withChoices(item.prompt, item.check.choices!));
     expect(card.card!.back.startsWith(storedTexts(item)[0]!)).toBe(true);
   });
 });

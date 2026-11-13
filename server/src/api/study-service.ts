@@ -122,13 +122,47 @@ export interface StudyGradeResult {
   grade: StudyQuizGrade;
   /** the pack's flashcard item keys (enrolled on a pass) */
   flashcardKeys: string[];
+  /** rv B (R4-01/02): a FAILED gate's sections to re-read (lesson headings / reading titles); [] on a pass */
+  reread: string[];
+}
+
+/**
+ * rv B (R4-01/02): what a failed gate tells the learner to re-read, computed server-side so no per-question mark
+ * leaves the server. A Fundamentals topic: the lesson headings (content/fundamentals/sections.json gate map) of
+ * the missed questions, in lesson order of first appearance in the gate map. A campaign study quest: the titles
+ * of the reading steps that cite the same file as a missed question, in reading-list order. Deduplicated; [] when
+ * nothing maps (the client then says "re-read the lesson / the reading list").
+ */
+export function rereadFor(store: SeedItemStore, spec: Extract<CheckSpec, { type: 'study-quiz' }>, missedKeys: readonly string[]): string[] {
+  if (missedKeys.length === 0) return [];
+  const missed = new Set(missedKeys);
+  const fund = fundTopicFor(store, spec);
+  if (fund) {
+    const gate = store.fund!.lessonAids(fund.track, fund.topic.id).gate;
+    const out: string[] = [];
+    spec.itemKeys.forEach((k, i) => {
+      const heading = gate[String(i + 1)];
+      if (missed.has(k) && heading !== undefined && !out.includes(heading)) out.push(heading);
+    });
+    return out;
+  }
+  const pack = packFor(store, spec);
+  if (!pack) return [];
+  const paths = new Set(missedKeys.flatMap((k) => {
+    const q = store.quiz(k);
+    return q ? [q.provenance.path] : [];
+  }));
+  const out: string[] = [];
+  for (const r of pack.readingSteps) if (paths.has(r.provenance.path) && !out.includes(r.title)) out.push(r.title);
+  return out;
 }
 
 /**
  * Grade a study-quiz submission server-side. Request-shape problems are 400s (nothing is
  * recorded); a gate whose items are not loaded is 409 CONTENT_PENDING (nothing recorded).
- * The canonical result never names a key: a pass carries no failures (RunnerResult rule),
- * a fail lists the missed question numbers only.
+ * The canonical result never names a key: a pass carries no failures (RunnerResult rule).
+ * rv B (R4-01): a fail carries the score and the sections to re-read, and NO question numbers (one
+ * generic failure row); the per-question marks stay in `grade` for the server's own use (miss cards).
  */
 export function gradeStudySubmission(
   store: SeedItemStore,
@@ -156,29 +190,55 @@ export function gradeStudySubmission(
   // floor: a 79.9% fail is never displayed as 80%
   const pct = Math.floor(grade.score * 100);
   const mark = Math.round(spec.passPct * 100);
-  const missedNos = grade.items.map((g, i) => (g.correct ? null : i + 1)).filter((n): n is number => n !== null);
   const fund = fundTopicFor(store, spec);
   // f52: a Fundamentals miss card is held until the gate is passed (engines/fund-review-hold.ts)
   const cardWhen = fund ? 'once you pass this gate' : 'due tomorrow';
+  const reread = grade.passed ? [] : rereadFor(store, spec, grade.missed);
+  const missed = grade.total - grade.correct;
   const output =
     `${grade.correct}/${grade.total} correct (${pct}%); pass mark ${mark}%` +
-    (missedNos.length ? `; missed Q${missedNos.join(', Q')} -> review cards ${cardWhen}` : '');
+    (missed > 0 ? `; ${missed} missed -> review cards ${cardWhen}` : '') +
+    (reread.length ? `; re-read: ${reread.join(' · ')}` : '');
   const result: CanonicalRunResult = grade.passed
     ? { pass: true, output, failures: [], durationMs: 0 }
     : {
         pass: false,
         output,
-        failures: missedNos.map((n) => ({ name: `Q${n}`, message: `incorrect (the key arrives as a review card, ${cardWhen})` })),
+        failures: [{ name: 'quiz gate', message: `below the pass mark (${pct}% of ${mark}%): no question is marked until you pass` }],
         durationMs: 0,
       };
   const flashcardKeys = fund ? fund.topic.flashcards.map((f) => f.key) : (packFor(store, spec)?.flashcards ?? []).map((f) => f.key);
-  return { result, grade, flashcardKeys };
+  return { result, grade, flashcardKeys, reread };
 }
 
 function citeOf(item: { citations: readonly { raw: string; resolved?: string }[]; provenance: { repo: string; sha: string; path: string; lines: { start: number; end: number } } }): string {
   const c = item.citations.find((x) => x.resolved) ?? item.citations[0];
   const where = c ? c.raw : `${item.provenance.path}:${item.provenance.lines.start}-${item.provenance.lines.end}`;
   return `${item.provenance.repo}@${item.provenance.sha.slice(0, 7)} ${where}`;
+}
+
+/**
+ * rv B practice (api/practice-service.ts): each gate question's keyed choice TEXT and explanation, in gate
+ * order. Practice is open-book and never evidence; the graded path never calls this.
+ */
+export function gateKeyTexts(store: SeedItemStore, spec: Extract<CheckSpec, { type: 'study-quiz' }>): { itemKey: string; answer: string | null; explanation: string | null }[] {
+  const items = gateItems(store, spec) ?? [];
+  return items.map((q) => {
+    const choices = storedChoices(q);
+    const k = q.check.answerKey;
+    return { itemKey: q.key, answer: typeof k === 'number' ? (choices[k] ?? null) : k === undefined ? null : String(k), explanation: q.explanation ?? null };
+  });
+}
+
+/**
+ * rv B (R4-06): a quiz-miss card front is the question AND its choices ("Which of these values is truthy?" is not
+ * answerable without them). Authored order, lettered (a card never depends on a served permutation); the back
+ * still names the keyed choice by its text.
+ */
+export function withChoices(prompt: string, choices: readonly string[]): string {
+  if (choices.length === 0) return prompt;
+  // a bullet list ("- A. ..."): the client renders card fronts as prose blocks
+  return `${prompt}\n\n${choices.map((c, i) => `- ${String.fromCharCode(65 + i)}. ${c}`).join('\n')}`;
 }
 
 /** Card text for a seeded review card (quiz miss / flashcard), or undefined for other cards. */
@@ -189,7 +249,7 @@ export function reviewCardText(store: SeedItemStore, cardKey: string): { front: 
     const ref = store.fund?.topicOfItem(key);
     if (!q || !ref) return undefined;
     const keyed = q.choices[q.answer] ?? String(q.answer);
-    return { front: q.prompt, back: `${keyed}\n\n${q.explanation}`, source: fundSource(ref) };
+    return { front: withChoices(q.prompt, q.choices), back: `${keyed}\n\n${q.explanation}`, source: fundSource(ref) };
   }
   if (cardKey.startsWith(FLASHCARD_CARD_PREFIX) && isFundItemKey(cardKey.slice(FLASHCARD_CARD_PREFIX.length))) {
     const key = cardKey.slice(FLASHCARD_CARD_PREFIX.length);
@@ -204,7 +264,8 @@ export function reviewCardText(store: SeedItemStore, cardKey: string): { front: 
     // the keyed choice by TEXT: a card never depends on (or reveals) any served position
     const choices = storedChoices(q);
     const keyed = typeof q.check.answerKey === 'number' ? (choices[q.check.answerKey] ?? String(q.check.answerKey)) : String(q.check.answerKey);
-    return { front: q.prompt, back: q.explanation ? `${keyed}\n\n${q.explanation}` : keyed, source: citeOf(q) };
+    const front = q.check.grading === 'choice' ? withChoices(q.prompt, choices) : q.prompt;
+    return { front, back: q.explanation ? `${keyed}\n\n${q.explanation}` : keyed, source: citeOf(q) };
   }
   if (cardKey.startsWith(FLASHCARD_CARD_PREFIX)) {
     const f = store.flashcard(cardKey.slice(FLASHCARD_CARD_PREFIX.length));

@@ -301,7 +301,7 @@ export type HintLockReason = z.infer<typeof HintLockReason>;
 export const HintsResponse = z
   .object({
     unitId: z.number().int().positive(),
-    /** servable hints on this unit (authored hints minus the last one) */
+    /** servable hints on this unit (the authored ones its bank's policy serves: server engines/hints.ts) */
     total: z.number().int().nonnegative(),
     /** texts of the hints already taken, in order (hint 1 first) */
     taken: z.array(z.string()),
@@ -356,3 +356,106 @@ export const LessonAidsResponse = z
   })
   .strict();
 export type LessonAidsResponse = z.infer<typeof LessonAidsResponse>;
+
+// ---- rv B: honesty, grading and feedback (REVIEW Q3, Wave 1b rows 1, 2, 5, 6) ------------------------------
+// Graded (evidence) gates: a failed study-quiz submit returns the score and the sections to re-read, never a
+// per-question mark; a unit takes at most GATE_TRIES_PER_WINDOW graded tries per GATE_TRY_WINDOW_MS (the next
+// one is 409 NOT_DUE); a graded submit of a gate or quick check is refused for PRACTICE_LOCK_MS after that
+// unit's latest practice try. Practice (POST /units/:id/practice) grades and explains every item and records
+// nothing but its timestamp (migration 020).
+
+/** Graded tries of one quiz gate within GATE_TRY_WINDOW_MS (the next one is refused until the oldest ages out). */
+export const GATE_TRIES_PER_WINDOW = 2;
+export const GATE_TRY_WINDOW_MS = 24 * 60 * 60 * 1000;
+/** A graded submit of a practised unit opens this long after its latest practice try. */
+export const PRACTICE_LOCK_MS = 2 * 24 * 60 * 60 * 1000;
+
+/**
+ * GET /units/:id/gate-status: the graded-try budget, the practice lock and the latest graded try of a quiz gate /
+ * quick check (read-only). The submit response itself stays the strict `api.ts` shape: a client reads this after
+ * a study-quiz submit for the try number, what to re-read and when the next graded try opens.
+ */
+export const GateStatusResponse = z
+  .object({
+    unitId: z.number().int().positive(),
+    /** POST /units/:id/practice serves this unit (a study-quiz gate or a choice / text quick check) */
+    practiceable: z.boolean(),
+    /** graded tries recorded on this unit so far (all time) */
+    tries: z.number().int().nonnegative(),
+    /** graded tries inside the current window, and the window's budget (study-quiz gates; null otherwise) */
+    triesInWindow: z.number().int().nonnegative(),
+    budget: z.number().int().positive().nullable(),
+    /** the next graded try is refused until then (budget spent, or the practice lock); null = open now */
+    opensAt: z.number().int().nullable(),
+    reason: z.enum(['budget', 'practice']).nullable(),
+    lastPracticeAt: z.number().int().nullable(),
+    passed: z.boolean(),
+    /**
+     * The latest graded try: its number on THIS unit (1-based, never the global attempt id) and, when it failed a
+     * study-quiz gate, the lesson headings (Fundamentals) or reading-list titles that teach what it missed.
+     */
+    lastTry: z.object({ number: z.number().int().positive(), passed: z.boolean(), reread: z.array(z.string()) }).strict().nullable(),
+  })
+  .strict();
+export type GateStatusResponse = z.infer<typeof GateStatusResponse>;
+
+/** POST /units/:id/practice: a study-quiz gate takes `answers` (served choice indexes); a quick check `answer`. */
+export const PracticeBody = z
+  .object({
+    answers: z.array(z.number().int().nonnegative()).min(1).max(200).optional(),
+    answer: z.union([z.number().int().nonnegative(), z.string().max(4000)]).optional(),
+  })
+  .strict()
+  .refine((b) => (b.answers === undefined) !== (b.answer === undefined), { message: 'send exactly one of `answers` (a quiz gate) or `answer` (a quick check)' });
+export type PracticeBody = z.infer<typeof PracticeBody>;
+
+export const PracticeItemDto = z
+  .object({
+    /** the question's item key (quiz gates); null for a single quick check */
+    itemKey: z.string().nullable(),
+    correct: z.boolean(),
+    /** the keyed choice / answer text (practice is open-book: never evidence) */
+    answer: z.string().nullable(),
+    explanation: z.string().nullable(),
+  })
+  .strict();
+export type PracticeItemDto = z.infer<typeof PracticeItemDto>;
+
+export const PracticeResponse = z
+  .object({
+    unitId: z.number().int().positive(),
+    correct: z.number().int().nonnegative(),
+    total: z.number().int().positive(),
+    score: z.number(),
+    passPct: z.number(),
+    /** would have met the pass mark (nothing is recorded either way) */
+    wouldPass: z.boolean(),
+    items: z.array(PracticeItemDto),
+    /** a graded submit of this unit opens then (PRACTICE_LOCK_MS after this try) */
+    gradedOpensAt: z.number().int(),
+  })
+  .strict();
+export type PracticeResponse = z.infer<typeof PracticeResponse>;
+
+/**
+ * GET /units/:id/source: the pinned repo tree an explain-back / kata unit was cut from (seed provenance). G2
+ * delegation briefs are OPEN-BOOK (a real brief is written with the repo open): `openBook` is true for them
+ * and reading the tree there is not assistance. Other explain-backs stay closed-book.
+ */
+export const UnitSourceResponse = z
+  .object({
+    unitId: z.number().int().positive(),
+    repo: z.string(),
+    sha: z.string(),
+    /** https://github.com/<owner>/<repo>/tree/<sha> */
+    url: z.string(),
+    openBook: z.boolean(),
+  })
+  .strict();
+export type UnitSourceResponse = z.infer<typeof UnitSourceResponse>;
+
+/** GET /evidence: a row also says whether a hint was taken at or before its attempt (engines/hints.ts). */
+export const EvidenceRowDtoExt = api.EvidenceRowDto.extend({ hinted: z.boolean() }).strict();
+export type EvidenceRowDtoExt = z.infer<typeof EvidenceRowDtoExt>;
+export const EvidenceListResponseExt = api.EvidenceListResponse.extend({ items: z.array(EvidenceRowDtoExt) }).strict();
+export type EvidenceListResponseExt = z.infer<typeof EvidenceListResponseExt>;

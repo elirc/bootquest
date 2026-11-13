@@ -18,7 +18,7 @@ import fixture from './fixtures/ladder-fixture.json' with { type: 'json' };
 
 /**
  * A5 explain-back weights: a set whose every key point carries `[wN]` is scored by weight and passes
- * only with weighted coverage >= 80% AND no [w3] missed; a legacy (unweighted) set behaves exactly as
+ * only with weighted coverage >= 80% AND at most one [w3] missed (rv B, D4); a legacy (unweighted) set behaves exactly as
  * before. One predicate (ebPasses / EB_PASS_SQL) decides `passed`, XP, the leg display and promotion.
  */
 
@@ -36,7 +36,12 @@ const WEIGHTED: SeedExplainBackItem = {
   })),
 };
 const SEED_ITEMS = (weighted: boolean) => fixture.seedItems.map((i) => (i.key === EB.key && weighted ? WEIGHTED : i));
-const ANSWERS = ['the permission test guards read-only roles', 'the state machine test guards transitions', 'tenant isolation is tested per repository'];
+// rv B (R4-07): an answer of record carries >= 15 words per question
+const ANSWERS = [
+  'the permission test guards read-only roles: a viewer token gets 403 on every write route and the data stays unchanged',
+  'the state machine test guards transitions: only the legal moves are accepted, an illegal move is refused with a 409',
+  'tenant isolation is tested per repository: every query filters by tenant id, so one tenant never reads another tenant row',
+];
 const markMissed = (...missed: string[]) => Object.fromEntries(IDS.map((id) => [id, missed.includes(id) ? 'missed' : 'covered'])) as Record<string, 'covered' | 'missed'>;
 const GOOD_PORT = 4000;
 const fakeHttp: Runner = async (_spec, sub) =>
@@ -66,7 +71,7 @@ describe('ebScore / ebPasses (pure)', () => {
     expect(mixed).toMatchObject({ weightedSet: false, score: 0.5, w3Missed: [] });
   });
 
-  it('weighted set: Σ weight(covered) / Σ weight(all); a missed [w3] fails at any score', () => {
+  it('weighted set: Σ weight(covered) / Σ weight(all); one missed [w3] is allowed, a second fails at any score', () => {
     const set = kps(['[w3] a', '[w2] b', '[w1] c', '[w1] d', '[w1] e']); // total 8
     const lowWeights = ebScore(set, { q1k1: 'covered', q1k2: 'covered', q1k3: 'missed', q1k4: 'covered', q1k5: 'covered' });
     expect(lowWeights).toMatchObject({ plain: 0.8, weighted: 7 / 8, score: 7 / 8, w3Missed: [] });
@@ -74,7 +79,10 @@ describe('ebScore / ebPasses (pure)', () => {
     const w3 = ebScore(kps(['[w3] a', ...Array.from({ length: 11 }, (_, i) => `[w3] k${i}`)]), { ...Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`q1k${i + 1}`, 'covered'])), q1k1: 'missed' });
     expect(w3.score).toBeCloseTo(11 / 12);
     expect(w3.w3Missed).toEqual(['q1k1']);
-    expect(ebPasses(w3.score, w3.w3Missed.length)).toBe(false);
+    expect(ebPasses(w3.score, w3.w3Missed.length)).toBe(true); // rv B (D4): one [w3] miss is allowed
+    const two = ebScore(kps(['[w3] a', ...Array.from({ length: 11 }, (_, i) => `[w3] k${i}`)]), { ...Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`q1k${i + 1}`, 'covered'])), q1k1: 'missed', q1k2: 'missed' });
+    expect(two.score).toBeCloseTo(10 / 12);
+    expect(ebPasses(two.score, two.w3Missed.length)).toBe(false);
     // the unit mark may be stricter, never laxer than the 80% floor
     expect(ebPasses(0.85, 0, 0.9)).toBe(false);
     expect(ebPasses(0.8, 0, 0.5)).toBe(true);
@@ -126,25 +134,33 @@ describe('explain-back weights through the HTTP API', () => {
   describe('weighted set', () => {
     beforeEach(() => boot(true));
 
-    it('91% weighted but a [w3] missed -> fail: no pass XP, no retest, leg (b) failed, no promotion; one detail row per evidence row', async () => {
-      const { attemptId, score } = await answerAndScore(markMissed('q1k1'));
-      expect(score).toMatchObject({ covered: 15, total: 16, passed: false, xp: null, retests: [], promotions: [], missed: ['q1k1'] });
-      expect(score.coverage).toBeCloseTo(31 / 34); // >= 80%: only the w3 rule fails it
+    it('rv B (D4): 91% weighted with ONE [w3] missed -> pass, 20 XP, the SQL predicate agrees', async () => {
+      const { score } = await answerAndScore(markMissed('q1k1'));
+      expect(score).toMatchObject({ covered: 15, total: 16, passed: true, xp: { amount: 20, reason: null }, missed: ['q1k1'] });
+      expect(detail(score.evidenceIds[0]!)).toMatchObject({ w3_missed: 1 });
+      expect(sqlPasses(score.evidenceIds[0]!)).toBe(true);
+      expect((await leg()).state).toBe('done');
+    });
+
+    it('82% weighted but TWO [w3] missed -> fail: no pass XP, no retest, leg (b) failed, no promotion; one detail row per evidence row', async () => {
+      const { attemptId, score } = await answerAndScore(markMissed('q1k1', 'q2k1'));
+      expect(score).toMatchObject({ covered: 14, total: 16, passed: false, xp: null, retests: [], promotions: [], missed: ['q1k1', 'q2k1'] });
+      expect(score.coverage).toBeCloseTo(28 / 34); // >= 80%: only the w3 rule fails it
       expect(score.evidenceIds.length).toBeGreaterThan(0);
       for (const ev of score.evidenceIds) {
-        expect(tmp.db.get<{ score: number }>('SELECT score FROM evidence WHERE id = ?', ev)!.score).toBeCloseTo(31 / 34);
+        expect(tmp.db.get<{ score: number }>('SELECT score FROM evidence WHERE id = ?', ev)!.score).toBeCloseTo(28 / 34);
         const d = detail(ev)!;
-        expect(d).toMatchObject({ w3_missed: 1, missed_ids: '["q1k1"]' });
-        expect(d.plain).toBeCloseTo(15 / 16);
-        expect(d.weighted).toBeCloseTo(31 / 34);
+        expect(d).toMatchObject({ w3_missed: 2, missed_ids: '["q1k1","q2k1"]' });
+        expect(d.plain).toBeCloseTo(14 / 16);
+        expect(d.weighted).toBeCloseTo(28 / 34);
         expect(sqlPasses(ev)).toBe(false);
       }
       expect(tmp.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM eb_score_detail')!.n).toBe(score.evidenceIds.length);
       // the XP engine refuses it on its own (not only because the service skipped it)
-      expect(() => awardXp(tmp.db, { kind: 'explain-back', attemptId }, clock)).toThrow(/every \[w3\]/);
+      expect(() => awardXp(tmp.db, { kind: 'explain-back', attemptId }, clock)).toThrow(/at most one \[w3\] missed/);
       expect(tmp.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM xp_event WHERE kind = 'explain-back'")!.n).toBe(0);
       expect(evaluatePromotion(tmp.db, 'data-http', clock).legs.explainBack).toBeNull();
-      expect(await leg()).toEqual({ state: 'failed', evidenceId: score.evidenceIds[0], coverage: expect.closeTo(31 / 34, 9) });
+      expect(await leg()).toEqual({ state: 'failed', evidenceId: score.evidenceIds[0], coverage: expect.closeTo(28 / 34, 9) });
       // no retest was scheduled: the retest unit refuses a solo submit, and nothing promotes
       clock.advance(2 * DAY_MS);
       const rt = await request(app).post(`/api/units/${id('fixture:ladder/project-api-retest')}/submit`).send({ code: fixture.solutions.retest });
@@ -184,12 +200,12 @@ describe('explain-back weights through the HTTP API', () => {
       await answerAndScore(markMissed());
       const eb = id('fixture:ladder/explain-api');
       const p = await request(app).post(`/api/units/${eb}/explain-back/practice`).send({ answers: ANSWERS }).expect(200);
-      const res = await request(app).post(`/api/units/${eb}/explain-back/practice-score`).send({ attemptId: p.body.attemptId, perKeyPoint: markMissed('q2k1') });
+      const res = await request(app).post(`/api/units/${eb}/explain-back/practice-score`).send({ attemptId: p.body.attemptId, perKeyPoint: markMissed('q2k1', 'q3k1') });
       expect(res.status, res.text).toBe(200);
       const ps = ExplainBackScoreResponse.parse(res.body);
-      expect(ps).toMatchObject({ passed: false, xp: null, retests: [], promotions: [], missed: ['q2k1'] });
-      expect(ps.coverage).toBeCloseTo(31 / 34);
-      expect(detail(ps.evidenceIds[0]!)).toMatchObject({ w3_missed: 1, missed_ids: '["q2k1"]' });
+      expect(ps).toMatchObject({ passed: false, xp: null, retests: [], promotions: [], missed: ['q2k1', 'q3k1'] });
+      expect(ps.coverage).toBeCloseTo(28 / 34);
+      expect(detail(ps.evidenceIds[0]!)).toMatchObject({ w3_missed: 2, missed_ids: '["q2k1","q3k1"]' });
     });
   });
 

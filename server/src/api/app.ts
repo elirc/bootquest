@@ -8,7 +8,6 @@ import {
   CampaignResponse,
   CompetenciesResponse,
   EmptyBody,
-  EvidenceListResponse,
   EvidenceQuery,
   ExplainBackAnswersBody,
   ExplainBackKeyResponse,
@@ -61,7 +60,8 @@ import { defaultRunners, type RunnerRegistry } from './runners.ts';
 import { emptySeedItemStore, type SeedItemStore } from '../store/seed-items.ts';
 import { ladderUnits } from '../store/ladder.ts';
 import { registerSettingsRoutes } from './settings-routes.ts';
-import { FundamentalsResponseExt, HintsResponse, HintTakenResponse, LessonAidsResponse } from '@bootquest/shared/api-ext';
+import { registerPracticeRoutes } from './practice-service.ts';
+import { EvidenceListResponseExt, FundamentalsResponseExt, HintsResponse, HintTakenResponse, LessonAidsResponse } from '@bootquest/shared/api-ext';
 import { getFundamentals, getLessonAids } from './fundamentals-service.ts';
 import { getHints, takeHint } from './hints-service.ts';
 import {
@@ -267,7 +267,7 @@ export function createApp(opts: AppOptions): Express {
     sendJson(res, 200, revealUnit(deps, id));
   }));
 
-  // f52 U13: progressive hints (drill / code-check units; after a failed submit; never the last authored hint)
+  // f52 U13: progressive hints (drill / code-check units; after a failed submit; per-bank servable policy, rv B)
   router.get('/units/:id/hints', asyncRoute((req, res) => {
     const { id } = validate(UnitIdParams, req.params, 'params');
     validate(EmptyQuery, req.query, 'query');
@@ -382,7 +382,8 @@ export function createApp(opts: AppOptions): Express {
 
   router.get('/evidence', asyncRoute((req, res) => {
     const q = validate(EvidenceQuery, req.query, 'query');
-    sendJson(res, 200, EvidenceListResponse.parse(listEvidence(ladder, q)));
+    // rv B (R4-21): each row also says whether a hint was taken at or before its attempt
+    sendJson(res, 200, EvidenceListResponseExt.parse(listEvidence(ladder, q)));
   }));
 
   router.get('/attempts/:id', asyncRoute((req, res) => {
@@ -485,6 +486,7 @@ export function createApp(opts: AppOptions): Express {
   }));
 
   registerSettingsRoutes(router, deps); // ab S1: GET/PUT /settings/slate
+  registerPracticeRoutes(router, deps, ladder); // rv B: GET /units/:id/gate-status, POST /units/:id/practice, GET /units/:id/source
 
   app.use('/api', router);
 

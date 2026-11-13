@@ -8,7 +8,6 @@ import {
   ApiErrorBody,
   AttemptDetailResponse,
   CompetenciesResponse,
-  EvidenceListResponse,
   ExplainBackKeyResponse,
   ExplainBackScoreResponse,
   KataKeyResponse,
@@ -20,7 +19,7 @@ import {
   UnitDetailResponse,
 } from '@bootquest/shared/api';
 // ab S4: the dashboard's slate items carry targetUnitId (api-ext), so the strict parse uses the extended schema
-import { DashboardResponseExt as DashboardResponse } from '@bootquest/shared/api-ext';
+import { DashboardResponseExt as DashboardResponse, EvidenceListResponseExt } from '@bootquest/shared/api-ext';
 import type { SeedExplainBackItem, SeedPatchKataItem } from '@bootquest/shared';
 import { createApp } from '../../src/api/app.ts';
 import type { Runner } from '../../src/api/runners.ts';
@@ -100,7 +99,12 @@ async function passArtifact(ctx: Ctx, key = 'fixture:ladder/project-api'): Promi
   expect(res.body.verdict).toBe('pass');
 }
 
-const ANSWERS = ['the permission test guards read-only roles', 'the state machine test guards transitions', 'tenant isolation is tested per repository'];
+// rv B (R4-07): an answer of record carries >= 15 words per question
+const ANSWERS = [
+  'the permission test guards read-only roles: a viewer token gets 403 on every write route and the data stays unchanged',
+  'the state machine test guards transitions: only the legal moves are accepted, an illegal move is refused with a 409',
+  'tenant isolation is tested per repository: every query filters by tenant id, so one tenant never reads another tenant row',
+];
 const marks = (coveredCount: number) => Object.fromEntries(KEY_POINT_IDS.map((id, i) => [id, i < coveredCount ? 'covered' : 'missed']));
 
 describe('explain-back: immutable answer first, then the key, then the self-score', () => {
@@ -828,8 +832,15 @@ describe('patch-review kata: findings first, then the seeded-defect key, then th
     await request(ctx.app).post(`/api/units/${k1}/kata/findings`).send({ findings: [FINDING] }).expect(200);
     await request(ctx.app).post(`/api/units/${k1}/kata/self-score`).send({ perDefect: { d1: 'caught' } }).expect(200);
     stats = KataStatsResponse.parse((await request(ctx.app).get('/api/stats/katas')).body);
-    expect(stats).toMatchObject({ katasScored: 2, assistedCount: 0, defectsCaught: 2, defectsTotal: 3, gate: { met: false } });
-    expect(stats.catchRate).toBeCloseTo(2 / 3);
+    // rv B (R3-04): G1 counts the defects evidenced in the PATCHED lines only (kata-2's d2 is a repo consequence)
+    expect(stats).toMatchObject({ katasScored: 2, assistedCount: 0, defectsCaught: 2, defectsTotal: 2, gate: { met: false } });
+    expect(stats.catchRate).toBe(1);
+    expect(ctx.tmp.db.all('SELECT patched_total, patched_caught, repo_total, repo_caught FROM kata_score_detail ORDER BY id')).toEqual([
+      { patched_total: 1, patched_caught: 1, repo_total: 1, repo_caught: 0 },
+      { patched_total: 1, patched_caught: 1, repo_total: 1, repo_caught: 0 },
+      { patched_total: 1, patched_caught: 1, repo_total: 0, repo_caught: 0 },
+      { patched_total: 1, patched_caught: 1, repo_total: 0, repo_caught: 0 },
+    ]);
     // (a re-seed of these katas is exercised through the PRODUCTION loader below: "re-seed through
     // loadSeedDerivedContent". It used to be simulated here by swapping the seed-item store under
     // hand-inserted units, which hid that the real loader refused the changed defect count.)
@@ -917,7 +928,8 @@ describe('re-seed through the production startup loader (serve.ts loadSeedDerive
     expect(v2.body.mode).toBe('assisted');
     const s = KataScoreResponse.parse((await request(app2).post(`/api/units/${k2}/kata/self-score`).send({ perDefect: { d1: 'caught', d2: 'caught', d3: 'caught' } })).body);
     expect(s).toMatchObject({ caught: 3, total: 3, xp: { amount: 0, reason: 'already-awarded' } }); // this unit paid on v1
-    expect(KataStatsResponse.parse((await request(app2).get('/api/stats/katas')).body)).toMatchObject({ katasScored: 1, assistedCount: 0, defectsCaught: 1, defectsTotal: 2 });
+    // rv B (R3-04): v1 scored d1 (patched, caught) and d2 (repo consequence): G1 counts the patched one only
+    expect(KataStatsResponse.parse((await request(app2).get('/api/stats/katas')).body)).toMatchObject({ katasScored: 1, assistedCount: 0, defectsCaught: 1, defectsTotal: 1 });
   });
 
   it('F3 (explain-back): a re-seed that changes the QUESTION COUNT boots; the answered check is retired with its frame; the unit shows the superseded answer', async () => {
@@ -1295,13 +1307,13 @@ describe('evidence browser + attempt detail', () => {
   it('lists evidence newest first, filtered by competency / kind, and links each row to its attempt', async () => {
     await request(ctx.app).post(`/api/units/${ctx.id('fixture:ladder/project-api')}/submit`).send({ port: GOOD_PORT }).expect(200);
     await request(ctx.app).post(`/api/units/${ctx.id('fixture:ladder/drill')}/submit`).send({ code: fixture.solutions.retest }).expect(200);
-    const all = EvidenceListResponse.parse((await request(ctx.app).get('/api/evidence')).body);
+    const all = EvidenceListResponseExt.parse((await request(ctx.app).get('/api/evidence')).body);
     expect(all.total).toBe(2);
     expect(all.items.map((i) => i.kind)).toEqual(['submit', 'artifact']);
-    const http = EvidenceListResponse.parse((await request(ctx.app).get('/api/evidence?competency=data-http')).body);
+    const http = EvidenceListResponseExt.parse((await request(ctx.app).get('/api/evidence?competency=data-http')).body);
     expect(http.items).toHaveLength(1);
     expect(http.items[0]).toMatchObject({ kind: 'artifact', assessor: 'pipeline', assistance: 'none', verified: true, unitTitle: '[fixture] Health endpoint project' });
-    expect(EvidenceListResponse.parse((await request(ctx.app).get('/api/evidence?kind=submit&limit=1')).body).items).toHaveLength(1);
+    expect(EvidenceListResponseExt.parse((await request(ctx.app).get('/api/evidence?kind=submit&limit=1')).body).items).toHaveLength(1);
     expectError(await request(ctx.app).get('/api/evidence?competency=nope'), 400, 'VALIDATION');
 
     const att = AttemptDetailResponse.parse((await request(ctx.app).get(`/api/attempts/${http.items[0]!.attemptId}`)).body);

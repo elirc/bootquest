@@ -20,6 +20,8 @@ import {
   type MutationMarkerResponse,
   type RatingChangeDto,
 } from '@bootquest/shared/api';
+import { answerWords, EB_MIN_ANSWER_WORDS } from '@bootquest/shared/eb-weight';
+import type { EvidenceListResponseExt, UnitSourceResponse } from '@bootquest/shared/api-ext';
 import type { Db } from '../db/database.ts';
 import { HonestyRuleError, recordAttempt, type AttemptRow } from '../engines/attempts.ts';
 import { ebObservation, ebPasses, ebScore, recordEbScoreDetail } from '../engines/eb-score.ts';
@@ -33,7 +35,8 @@ import type { SeedExplainBackItem, SeedPatchKataItem } from '@bootquest/shared';
 import { HttpError } from './http.ts';
 import { questUnitUnlocked } from '../engines/campaign.ts';
 import { nowMs, type Clock } from '../engines/clock.ts';
-import { ebSetGroup, explainBackUnitKey } from '../store/ladder.ts';
+import { ebSetGroup, explainBackUnitKey, isG2 } from '../store/ladder.ts';
+import { ESTATE_OWNER } from './study-service.ts';
 
 /**
  * W6 competency-ladder endpoints (spec §4 explain-back + patch-review kata rows,
@@ -393,6 +396,17 @@ export function answerExplainBack(deps: LadderDeps, unitId: number, body: Explai
       { path: 'body.answers', message: `expected ${item.questions.length} answers, got ${body.answers.length}` },
     ]);
   }
+  // rv B (R4-07): a minimum real answer. The answer of record is locked before the key is shown, so a floor
+  // here is meaningful ("x, x, x" passed 18/18 and filed evidence); it never grades the prose itself
+  const short = body.answers.flatMap((a, i) => (answerWords(a) < EB_MIN_ANSWER_WORDS ? [{ q: i + 1, n: answerWords(a) }] : []));
+  if (short.length > 0) {
+    throw new HttpError(
+      400,
+      'VALIDATION',
+      `write at least ${EB_MIN_ANSWER_WORDS} words per answer, in your own words: ${short.map((x) => `Q${x.q} has ${x.n}`).join(', ')}`,
+      short.map((x) => ({ path: `body.answers.${x.q - 1}`, message: `${x.n} words; at least ${EB_MIN_ANSWER_WORDS} needed` })),
+    );
+  }
   return db.tx(() => {
     // one answer per question set VERSION (a superseded earlier-version answer leaves room for one fresh answer)
     const prior = currentAnswer(db, 'explainBack', item);
@@ -717,6 +731,8 @@ export function selfScoreKata(deps: LadderDeps, unitId: number, body: { perDefec
   const missed = ids.filter((id) => body.perDefect[id] === 'missed');
   const caught = ids.length - missed.length;
   const catchRate = caught / ids.length;
+  // rv B (R3-04): "the defect" is evidenced in the patched lines; the rest are consequences / context
+  const split = kataSplit(kataKey(item), body.perDefect);
   return honest(() =>
     db.tx(() => {
       if (scoredOn(db, attempt.id, 'kata')) throw new HttpError(409, 'ALREADY_SCORED', 'your findings on this unit are already self-scored (evidence is append-only)');
@@ -736,6 +752,7 @@ export function selfScoreKata(deps: LadderDeps, unitId: number, body: { perDefec
             clock,
           ).id,
       );
+      for (const evId of evidenceIds) recordKataScoreDetail(db, evId, split, nowMs(clock));
       const award = awardXp(db, { kind: 'patch-kata', attemptId: attempt.id }, clock);
       composeSlate(db, clock);
       return {
@@ -751,8 +768,38 @@ export function selfScoreKata(deps: LadderDeps, unitId: number, body: { perDefec
   );
 }
 
+interface KataSplit {
+  patchedTotal: number;
+  patchedCaught: number;
+  repoTotal: number;
+  repoCaught: number;
+}
+
+/** rv B (R3-04): the self-score split by where each defect's evidence sits (patched lines vs the repo). */
+export function kataSplit(defects: readonly { id: string; evidence: { in: 'repo' | 'patched' } }[], marks: Readonly<Record<string, 'caught' | 'missed'>>): KataSplit {
+  const patched = defects.filter((d) => d.evidence.in === 'patched');
+  const repo = defects.filter((d) => d.evidence.in !== 'patched');
+  const caught = (ds: typeof defects) => ds.filter((d) => marks[d.id] === 'caught').length;
+  return { patchedTotal: patched.length, patchedCaught: caught(patched), repoTotal: repo.length, repoCaught: caught(repo) };
+}
+
+function recordKataScoreDetail(db: Db, evidenceId: number, s: KataSplit, t: number): void {
+  db.run(
+    'INSERT INTO kata_score_detail (evidence_id, patched_total, patched_caught, repo_total, repo_caught, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+    evidenceId,
+    s.patchedTotal,
+    s.patchedCaught,
+    s.repoTotal,
+    s.repoCaught,
+    t,
+  );
+}
+
 /**
  * GET /stats/katas - the G1 aggregate: seeded defects caught across every scored SOLO kata.
+ * rv B (R3-04): G1 counts only the defects evidenced in the PATCHED lines (kata_score_detail, migration 021);
+ * consequence / context defects stay in each kata's own catch rate and observation. A kata scored before 021
+ * has no detail row and keeps counting every defect.
  * W7 (audit #2): self-flagged assisted and reveal-guided answers never count toward the
  * core-skill gate; they are reported separately as assistedCount. W7 (audit #8): the
  * defect total is the count stored WITH the answer (as answered), not the current key; each
@@ -761,10 +808,11 @@ export function selfScoreKata(deps: LadderDeps, unitId: number, body: { perDefec
  */
 export function kataStats(deps: LadderDeps): KataStatsResponse {
   const { db } = deps;
-  const rows = db.all<{ attemptId: number; unitId: number; score: number; mode: string; assisted: number; answer: string | null }>(
+  const rows = db.all<{ attemptId: number; unitId: number; score: number; mode: string; assisted: number; answer: string | null; pTotal: number | null; pCaught: number | null }>(
     `SELECT e.attempt_id AS attemptId, a.unit_id AS unitId, MIN(e.score) AS score, a.mode AS mode,
-            MAX(CASE WHEN e.assistance <> 'none' THEN 1 ELSE 0 END) AS assisted, a.answer AS answer
-       FROM evidence e JOIN attempt a ON a.id = e.attempt_id
+            MAX(CASE WHEN e.assistance <> 'none' THEN 1 ELSE 0 END) AS assisted, a.answer AS answer,
+            MIN(d.patched_total) AS pTotal, MIN(d.patched_caught) AS pCaught
+       FROM evidence e JOIN attempt a ON a.id = e.attempt_id LEFT JOIN kata_score_detail d ON d.evidence_id = e.id
       WHERE e.kind = 'kata' GROUP BY e.attempt_id ORDER BY e.attempt_id`,
   );
   let caught = 0;
@@ -788,6 +836,12 @@ export function kataStats(deps: LadderDeps): KataStatsResponse {
     if (kataKey !== undefined && earliest.get(kataKey) !== r.attemptId) continue;
     if (r.mode !== 'solo' || r.assisted) {
       assistedCount += 1;
+      continue;
+    }
+    if (r.pTotal !== null && r.pCaught !== null) {
+      katas += 1;
+      total += r.pTotal;
+      caught += r.pCaught;
       continue;
     }
     const storedCount = (JSON.parse(r.answer ?? '{}') as StoredAnswer).kata?.defectCount;
@@ -816,7 +870,7 @@ export function kataStats(deps: LadderDeps): KataStatsResponse {
       targetRate: G1_TARGET_RATE,
       minDefects: G1_MIN_DEFECTS,
       met: rate !== null && total >= G1_MIN_DEFECTS && rate >= G1_TARGET_RATE,
-      rule: `G1: catch >= ${G1_TARGET_RATE * 10}/10 seeded defects (scenario + evidence + consequence) across at least ${G1_MIN_DEFECTS} seeded defects`,
+      rule: `G1: catch >= ${G1_TARGET_RATE * 10}/10 seeded defects (scenario + evidence + consequence) across at least ${G1_MIN_DEFECTS} seeded defects; only defects evidenced in the patched lines count (consequences do not)`,
     },
   };
 }
@@ -870,7 +924,7 @@ export function getCompetencies(deps: LadderDeps): CompetenciesResponse {
 export const DEFAULT_EVIDENCE_LIMIT = 200;
 
 /** GET /evidence?competency=&kind=&limit= — newest first. */
-export function listEvidence(deps: LadderDeps, q: { competency?: CompetencyId; kind?: EvidenceKind; limit?: number }): EvidenceListResponse {
+export function listEvidence(deps: LadderDeps, q: { competency?: CompetencyId; kind?: EvidenceKind; limit?: number }): EvidenceListResponseExt {
   const where: string[] = [];
   const params: (string | number)[] = [];
   if (q.competency) {
@@ -883,16 +937,20 @@ export function listEvidence(deps: LadderDeps, q: { competency?: CompetencyId; k
   }
   const w = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const total = deps.db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM evidence e ${w}`, ...params)?.n ?? 0;
-  const items = deps.db.all<EvidenceListResponse['items'][number]>(
+  // R4-21: a hinted pass is stored solo / assistance 'none' (Assistance has no 'hint'): say so from the
+  // hint ledger (a hint on the attempt's unit at or before the attempt, engines/hints.ts HINT_FREE_SQL)
+  const items = deps.db.all<EvidenceListResponse['items'][number] & { hinted: number }>(
     `SELECT e.id AS id, e.competency_id AS competency, e.kind AS kind, e.intention AS intention, e.observation AS observation,
             e.assistance AS assistance, e.assessor AS assessor, e.rating AS rating, e.verified AS verified, e.score AS score,
-            e.attempt_id AS attemptId, e.unit_id AS unitId, u.title AS unitTitle, e.created_at AS createdAt
+            e.attempt_id AS attemptId, e.unit_id AS unitId, u.title AS unitTitle, e.created_at AS createdAt,
+            CASE WHEN EXISTS (SELECT 1 FROM attempt ha JOIN hint_taken h ON h.unit_id = ha.unit_id AND h.created_at <= ha.created_at
+                               WHERE ha.id = e.attempt_id) THEN 1 ELSE 0 END AS hinted
        FROM evidence e LEFT JOIN unit u ON u.id = e.unit_id ${w}
       ORDER BY e.id DESC LIMIT ?`,
     ...params,
     q.limit ?? DEFAULT_EVIDENCE_LIMIT,
   );
-  return { total, items: items.map((i) => ({ ...i, verified: Boolean(i.verified) })) };
+  return { total, items: items.map((i) => ({ ...i, verified: Boolean(i.verified), hinted: Boolean(i.hinted) })) };
 }
 
 /** GET /attempts/:id — one ledger attempt (the learner's own answer + its submit runs). */
@@ -911,4 +969,30 @@ export function getAttemptDetail(deps: LadderDeps, attemptId: number): AttemptDe
   );
   const evidenceIds = db.all<{ id: number }>('SELECT id FROM evidence WHERE attempt_id = ? ORDER BY id', attemptId).map((r) => r.id);
   return { ...a, answer: a.answer === null ? null : (JSON.parse(a.answer) as unknown), runs, evidenceIds };
+}
+
+// ---------------------------------------------------------------- rv B: pinned source of a ladder unit
+
+/**
+ * GET /units/:id/source (R3-05, R4-round2): the repo + pinned sha an explain-back or kata was cut from (its
+ * seed provenance), with the tree link at that sha. G2 delegation briefs are open-book (`openBook`): a real
+ * brief is written with the repo open, the answer is stored before the key, and reading the tree is not
+ * assistance. Other units: 404 NOT_FOUND (nothing to point at). Locked track / act: 403.
+ */
+export function getUnitSource(deps: LadderDeps, unitId: number): UnitSourceResponse {
+  const { db } = deps;
+  const unit = requireUnit(db, unitId);
+  assertOpen(db, unit);
+  const spec = primaryCheck(db, unit.id)?.spec;
+  const eb = spec?.type === 'explain-back' ? deps.seedItems.explainBack(spec.questionSetKey) : undefined;
+  const item = eb ?? (spec?.type === 'patch-kata' ? deps.seedItems.kata(spec.kataKey) : undefined);
+  if (!item) throw new HttpError(404, 'NOT_FOUND', `unit ${unit.id} has no pinned source (explain-back and kata units with loaded content only)`);
+  const { repo, sha } = item.provenance;
+  return {
+    unitId: unit.id,
+    repo,
+    sha,
+    url: `https://github.com/${ESTATE_OWNER}/${encodeURIComponent(repo)}/tree/${sha}`,
+    openBook: eb !== undefined && isG2(eb),
+  };
 }

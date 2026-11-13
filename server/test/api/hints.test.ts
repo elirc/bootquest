@@ -12,7 +12,7 @@
 import request from 'supertest';
 import type { Express } from 'express';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { HintsResponse, HintTakenResponse } from '@bootquest/shared/api-ext';
+import { EvidenceListResponseExt, HintsResponse, HintTakenResponse } from '@bootquest/shared/api-ext';
 import { PROJECT_UNIT_KINDS } from '@bootquest/shared';
 import { SubmitResponse, UnitDetailResponse } from '@bootquest/shared/api';
 import { createApp } from '../../src/api/app.ts';
@@ -20,7 +20,7 @@ import { mapContentStore } from '../../src/api/content-store.ts';
 import type { Db } from '../../src/db/database.ts';
 import { fixedClock } from '../../src/engines/clock.ts';
 import { evaluatePromotion, recordEvidence } from '../../src/engines/evidence.ts';
-import { HINT_XP_FLOOR, hintXpMultiplier, recordHint, servableHints, UNASSISTED_PASS_SQL } from '../../src/engines/hints.ts';
+import { FORMULA_HINT_MIN_SCORE, formulaScore, HINT_XP_FLOOR, hintPolicyFor, hintXpMultiplier, recordHint, servableHints, UNASSISTED_PASS_SQL } from '../../src/engines/hints.ts';
 import { artifactsAwaitingSoloPass } from '../../src/engines/ladder.ts';
 import { fakeDrillJs } from './harness.ts';
 import { localNoon, makeTempDb, makeUnit, submit, type TempDb } from '../helpers.ts';
@@ -29,12 +29,43 @@ const RIGHT = 'export const add = (a, b) => a + b;';
 const WRONG = 'export const add = (a, b) => a - b;';
 
 describe('hint rules (engine)', () => {
-  it('serves every authored hint but the last', () => {
+  it('serves every authored hint but the last (the default bank policy)', () => {
     expect(servableHints(undefined)).toEqual([]);
     expect(servableHints([])).toEqual([]);
     expect(servableHints(['only'])).toEqual([]);
     expect(servableHints(['a', 'b'])).toEqual(['a']);
     expect(servableHints(['a', 'b', 'c'])).toEqual(['a', 'b']);
+    // rv B: the default (csdrills, javadrills, fund-*, any unlisted bank) keeps "all but the last"
+    expect(servableHints(['a', 'b', 'c'], 'csdrills/01-x/01-y')).toEqual(['a', 'b']);
+    expect(servableHints(['a', 'b', 'c'], 'fund-js/01-x/01-y')).toEqual(['a', 'b']);
+    expect(servableHints(['a', 'b'], 'javadrills/01-x/01-y')).toEqual(['a']);
+  });
+
+  it('rv B (R2-03): bootforge serves every authored hint, a single one included', () => {
+    expect(servableHints(['Index 0 and index length - 1.'], 'bootforge/arrays/x')).toEqual(['Index 0 and index length - 1.']);
+    expect(servableHints(['a', 'b', 'c'], 'bootforge/arrays/x')).toEqual(['a', 'b', 'c']);
+    expect(hintPolicyFor('bootforge/a/b')).toBe('all');
+    expect(hintPolicyFor('sysdrills/a/b')).toBe('no-formula');
+    expect(hintPolicyFor('h:drill')).toBe('all-but-last');
+  });
+
+  it('rv B (R4-03/R3-09): sysdrills never serve the formula hint, whichever position it is authored in', () => {
+    const h1 = 'Average QPS = total requests in a day spread evenly over every second of that day.';
+    const formula = 'avgQps = dau × requestsPerUser ÷ 86,400. Seconds per day = 24 × 60 × 60 = 86,400.';
+    const prose = "Multiply the users by their daily requests to get the day's total, then spread that total evenly over the 86,400 seconds of a day.";
+    expect(formulaScore(formula)).toBeGreaterThanOrEqual(FORMULA_HINT_MIN_SCORE);
+    expect(formulaScore(prose)).toBeLessThan(FORMULA_HINT_MIN_SCORE);
+    const key = 'sysdrills/01-estimation/01-qps-from-dau';
+    // today's order (formula at hint 2): serve hints 1 and 3
+    expect(servableHints([h1, formula, prose], key)).toEqual([h1, prose]);
+    // after the planned content swap (formula at hint 3): serve hints 1 and 2, still never the formula
+    expect(servableHints([h1, prose, formula], key)).toEqual([h1, prose]);
+    // an undetected formula (all prose-scored) still withholds hint 2, never the first nudge
+    expect(servableHints(['one', 'two', 'three'], key)).toEqual(['one', 'three']);
+    // a second formula-level hint is withheld too
+    expect(servableHints([formula, `x = ${formula}`, prose], key)).toEqual([prose]);
+    expect(servableHints([prose], key)).toEqual([prose]);
+    expect(servableHints([formula], key)).toEqual([]);
   });
 
   it('XP multiplier: 100% / 75% / 50%, floored at 50%', () => {
@@ -67,6 +98,8 @@ describe('GET /units/:id/hints + POST /units/:id/hint', () => {
     // f52 fix: project kinds (promotion leg (a)) and a variation that is not kind-labelled retest (leg (c))
     for (const kind of PROJECT_UNIT_KINDS) ids[kind] = makeUnit(db, clock, { key: `h:${kind}`, kind });
     ids.variation = makeUnit(db, clock, { key: 'h:variation', variationOf: 'h:drill' });
+    // rv B (R2-03): a bootforge drill with one authored hint (served under the bank's 'all' policy)
+    ids.bf = makeUnit(db, clock, { key: 'bootforge/arrays/one-hint', competencies: ['language-fluency'] });
     const three = { starter: WRONG, solution: RIGHT, hints: ['first nudge', 'second nudge', 'FULL SOLUTION HINT'] };
     app = createApp({
       db,
@@ -84,6 +117,7 @@ describe('GET /units/:id/hints + POST /units/:id/hint', () => {
         'h:d3': three,
         'h:d3b': three,
         'h:variation': three,
+        'bootforge/arrays/one-hint': { starter: WRONG, solution: RIGHT, hints: ['Index 0 and index length - 1.'] },
         ...Object.fromEntries(PROJECT_UNIT_KINDS.map((k) => [`h:${k}`, three])),
       }),
     });
@@ -163,6 +197,19 @@ describe('GET /units/:id/hints + POST /units/:id/hint', () => {
     expect(await hinted(ids.d1!, 1)).toMatchObject({ amount: 8, reason: null });
     expect(await hinted(ids.d3!, 1)).toMatchObject({ amount: 23, reason: null });
     expect(await hinted(ids.d3b!, 2)).toMatchObject({ amount: 15, reason: null });
+  });
+
+  it('rv B (R2-03, R4-21): a bootforge drill serves its single hint; GET /evidence marks the hinted pass as hinted', async () => {
+    expect(await hints(ids.bf!)).toMatchObject({ total: 1, lockedReason: 'needs-fail' });
+    await send(ids.bf!, WRONG);
+    clock.advance(1000); // the hint comes after the failed submit (at-or-before counts as hinted)
+    expect(HintTakenResponse.parse((await take(ids.bf!)).body).hint).toEqual({ index: 1, text: 'Index 0 and index length - 1.' });
+    const pass = await send(ids.bf!, RIGHT);
+    expect(pass.xp).toMatchObject({ amount: 15, reason: null });
+    const ev = EvidenceListResponseExt.parse((await request(app).get('/api/evidence')).body).items;
+    expect(ev.filter((e) => e.attemptId === pass.attempt.id).map((e) => [e.assistance, e.hinted])).toEqual([['none', true]]);
+    // the failed submit came before the hint: not hinted
+    expect(ev.filter((e) => e.attemptId !== pass.attempt.id).map((e) => e.hinted)).toEqual([false]);
   });
 
   it('no hint after a verified pass', async () => {

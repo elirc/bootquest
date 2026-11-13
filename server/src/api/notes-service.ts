@@ -22,8 +22,9 @@ import { repoLink } from './study-service.ts';
  *   - an explanation ('after' note of ONE quiz) needs a recorded, graded study-quiz submit that
  *     covered that quiz (never /run: it is refused for study quizzes and writes nothing), AND one of:
  *       (a) a verified pass of a study-quiz gate containing it,
- *       (b) the quiz was never missed (a miss always queues its 'quiz-miss:<key>' review card in
- *           the same transaction, so answered + no card = answered right),
+ *       (b) [removed in rv B, R4-01: "answered right on a failed gate" released its explanation, which
+ *           marked every right answer of a fail (answered + no miss card = right) and defeated the
+ *           no-marks fail screen; such a question now waits for (a) like the rest],
  *       (c) its missed-question review card is due or has been reviewed: the moment the card
  *           itself shows the keyed answer. Until then a missed question's key stays hidden (no
  *           free retry with the key in hand: a fail lists missed question NUMBERS only);
@@ -105,7 +106,7 @@ function quizAnswered(db: Db, quizKey: string): { answered: boolean; passed: boo
   return { answered: (row?.answered ?? 0) > 0, passed: (row?.passed ?? 0) > 0 };
 }
 
-type Release = { released: true } | { released: false; reason: 'unanswered' | 'missed'; at: number | null };
+type Release = { released: true } | { released: false; reason: 'unanswered' | 'missed' | 'needs-pass'; at: number | null };
 
 export function explanationRelease(db: Db, quizKey: string, now: number): Release {
   const a = quizAnswered(db, quizKey);
@@ -115,7 +116,9 @@ export function explanationRelease(db: Db, quizKey: string, now: number): Releas
   // (its missed-question card is HELD until that pass: engines/fund-review-hold.ts)
   if (isFundItemKey(quizKey)) return { released: false, reason: 'missed', at: null };
   const card = db.get<{ id: number; due: number }>('SELECT id, due_at AS due FROM review_item WHERE card_key = ?', `${QUIZ_MISS_CARD_PREFIX}${quizKey}`);
-  if (!card) return { released: true };
+  // rv B (R4-01): answered right on a gate that is not passed yet: withheld until the pass, so the notes never
+  // tell a failed gate's right answers from its wrong ones
+  if (!card) return { released: false, reason: 'needs-pass', at: null };
   if (card.due <= now || db.get('SELECT 1 AS x FROM review_log WHERE review_item_id = ? LIMIT 1', card.id)) return { released: true };
   return { released: false, reason: 'missed', at: card.due };
 }
@@ -206,7 +209,7 @@ export function getUnitNotes(deps: ServiceDeps, unitId: number): UnitNotesRespon
           ? 'Explanations for every question.'
           : unanswered > 0
             ? 'Explanations unlock after you answer: submit the quiz first.'
-            : `Explanations for the questions you missed unlock when their review cards are due${state === 'partial' ? '; the ones you answered right are below' : ''}.`;
+            : `Explanations unlock when you pass the quiz gate; a missed question's also unlocks when its review card is due${state === 'partial' ? ' (those are below)' : ''}.`;
     return {
       unitId: unit.id,
       source: pack ? { repo: pack.repo, sha: pack.sha } : null,

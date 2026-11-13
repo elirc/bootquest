@@ -47,7 +47,7 @@ function servableFor(deps: ServiceDeps, unit: UnitRecord): string[] {
   if (NO_HINT_KINDS.has(unit.kind) || unit.variationOfUnitId !== null) return [];
   const check = primaryCheck(deps.db, unit.id);
   if (!check || xpKindForCheck(check.type) !== 'code') return [];
-  return servableHints(deps.content.get(unit.key)?.hints);
+  return servableHints(deps.content.get(unit.key)?.hints, unit.key);
 }
 
 function unitPlayable(deps: ServiceDeps, unit: UnitRecord): boolean {
@@ -95,7 +95,7 @@ export function getHints(deps: ServiceDeps, unitId: number): HintsResponse {
  * the client reads GET `lockedReason` for the why, the message says it in words.
  */
 const REFUSALS: Readonly<Record<Exclude<HintLockReason, 'locked'>, { status: number; code: ApiErrorCode; message: (id: number) => string }>> = {
-  'not-hintable': { status: 409, code: 'WRONG_UNIT_KIND', message: (id) => `unit ${id} serves no hints (drill / code-check units with more than one authored hint only)` },
+  'not-hintable': { status: 409, code: 'WRONG_UNIT_KIND', message: (id) => `unit ${id} serves no hints (drill / code-check units whose bank policy leaves a servable hint only)` },
   'needs-fail': { status: 409, code: 'NOT_ANSWERED', message: (id) => `unit ${id}: submit an attempt first; a hint opens after one failed submit` },
   passed: { status: 409, code: 'ALREADY_ANSWERED', message: (id) => `unit ${id} already has a verified pass; hints are for getting unstuck` },
   // 409, not 404: the unit and its hints exist, the request conflicts with the ledger (every servable hint is

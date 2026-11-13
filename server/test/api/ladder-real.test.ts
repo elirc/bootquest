@@ -160,7 +160,7 @@ describe.skipIf(!HAVE_CHECKOUT)('W7 real ladder content end to end (temp DB, no 
     expect(detail.explainBack?.questions.map((q) => q.prompt)).toEqual(item.questions.map((q) => q.prompt));
     for (const kp of item.questions.flatMap((q) => q.keyPoints)) expect(d.text).not.toContain(kp.text);
     expect((await api('GET', `/units/${unit.id}/explain-back/key`)).status).toBe(403);
-    const ans = await api('POST', `/units/${unit.id}/explain-back/answers`, { answers: item.questions.map((_, i) => `my own answer ${i + 1}`) });
+    const ans = await api('POST', `/units/${unit.id}/explain-back/answers`, { answers: item.questions.map((_, i) => `my own answer ${i + 1}: the design keeps one writer per key, retries are idempotent and every read path is bounded`) });
     expect(ans.status, ans.text).toBe(200);
     const key = ExplainBackKeyResponse.parse((await api('GET', `/units/${unit.id}/explain-back/key`)).json);
     expect(key.questions.flatMap((q) => q.keyPoints).length).toBe(item.questions.flatMap((q) => q.keyPoints).length);
@@ -257,7 +257,7 @@ describe.skipIf(!HAVE_CHECKOUT)('W7 real ladder content end to end (temp DB, no 
     expect(art.attempt.mode).toBe('solo');
     // leg (b): the U01 explain-back (code hidden), all key points covered
     clock.advance(60_000);
-    expect((await api('POST', `/units/${eb.id}/explain-back/answers`, { answers: ['a', 'b', 'c'].map((x) => `answer ${x}`) })).status).toBe(200);
+    expect((await api('POST', `/units/${eb.id}/explain-back/answers`, { answers: ['a', 'b', 'c'].map((x) => `answer ${x}: the design keeps one writer per key, retries are idempotent and every read path is bounded`) })).status).toBe(200);
     const sc = ExplainBackScoreResponse.parse((await api('POST', `/units/${eb.id}/explain-back/self-score`, { perKeyPoint: allCovered(ebItem) })).json);
     expect(sc.passed).toBe(true);
     expect(sc.retests).toHaveLength(1);

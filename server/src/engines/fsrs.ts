@@ -227,7 +227,7 @@ export function review(db: Db, itemId: number, grade: ReviewGrade, now: Clock, o
       t,
       itemId,
     );
-    const xp = awardReviewXp(db, now);
+    const xp = awardReviewXp(db, now, itemId); // rv B (R4-14): one paid grade per card per day
     let demotion: RatingChange | null = null;
     if (item.competency_id !== null) {
       writeReviewEvidence(

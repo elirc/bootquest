@@ -36,6 +36,8 @@ import type { SeedExplainBackItem } from '@bootquest/shared';
 import { localNoon, makeTempDb, type TempDb } from '../helpers.ts';
 
 const CLIENT_API = fileURLToPath(new URL('../../../client/src/api/', import.meta.url));
+/** rv B (R4-07): explain-back answers of record carry >= 15 words each */
+const LONG_ANSWERS = ['a', 'b', 'c'].map((x) => `answer ${x}: the rule holds because every caller goes through one guard that checks the role before it writes anything`);
 
 interface SubmitLike {
   verdict: string;
@@ -341,7 +343,7 @@ describe.each(['mock', 'server'] as const)('F17 contract (%s): the same honesty 
     expect(model).toMatchObject({ answer: text, modelAnswer: written.modelAnswer, rubric: written.rubric });
   });
 
-  it('"Learn more" study quest: readings now; explanations a count until answered; a fail releases only the right answers; a pass releases all', async () => {
+  it('"Learn more" study quest: readings now; explanations a count until answered; a fail releases none (rv B: no marks); a pass releases all', async () => {
     const api = apis[side]();
     const id = ids[side].study;
     const view = (n: NotesLike) => ({
@@ -371,10 +373,10 @@ describe.each(['mock', 'server'] as const)('F17 contract (%s): the same honesty 
     expect((await api.submitUnit(id, { answers: wrong, selfAssisted: false })).verdict).toBe('fail');
     expect(view(await api.getUnitNotes(id))).toEqual({
       readings: ['r01-start-here', 'r02-locking-a-loan'],
-      state: 'partial',
-      message: 'Explanations for the questions you missed unlock when their review cards are due; the ones you answered right are below.',
-      released: ['x-q1', 'x-q2', 'x-q3'],
-      withheld: 2,
+      state: 'locked',
+      message: "Explanations unlock when you pass the quiz gate; a missed question's also unlocks when its review card is due.",
+      released: [],
+      withheld: 5,
       waiting: true,
     });
     expect((await api.submitUnit(id, { answers: right, selfAssisted: false })).verdict).toBe('pass');
@@ -384,7 +386,8 @@ describe.each(['mock', 'server'] as const)('F17 contract (%s): the same honesty 
   it('explain-back practice: refused before the SCORED answer of record; assisted, 0 XP, practice evidence; one unscored at a time; the record untouched', async () => {
     const api = apis[side]();
     const id = ids[side].eb;
-    const body = { answers: ['a', 'b', 'c'] };
+    // rv B (R4-07): an answer of record needs >= 15 words per question
+    const body = { answers: LONG_ANSWERS };
     const marks = Object.fromEntries(['q1k1', 'q1k2', 'q2k1', 'q2k2', 'q3k1'].map((k) => [k, 'covered']));
     expect(await errorOf(api.practiceExplainBack(id, body))).toEqual({ status: 403, code: 'NOT_ANSWERED' });
     const rec = await api.answerExplainBack(id, { ...body, selfAssisted: false });
@@ -421,12 +424,12 @@ describe.each(['mock', 'server'] as const)('F17 contract (%s): the same honesty 
       ],
       gate: { open: true, opensAt: null },
     });
-    await api.answerExplainBack(a, { answers: ['a', 'b', 'c'], selfAssisted: false });
+    await api.answerExplainBack(a, { answers: LONG_ANSWERS, selfAssisted: false });
     const at = (await api.getExplainBackKey(a)).answeredAt;
     const alt = view((await api.getUnit(b)).explainBack?.altSets);
     expect(alt?.gate).toEqual({ open: false, opensAt: at + 2 * 86_400_000 });
     expect(alt?.siblings[0]).toEqual({ set: 'unit A', label: 'A', answered: true, scored: false });
-    expect(await errorOf(api.answerExplainBack(b, { answers: ['a', 'b', 'c'], selfAssisted: false }))).toEqual({ status: 409, code: 'NOT_DUE' });
+    expect(await errorOf(api.answerExplainBack(b, { answers: LONG_ANSWERS, selfAssisted: false }))).toEqual({ status: 409, code: 'NOT_DUE' });
   });
 
   it('"Learn more" code unit: explanation locked, released by a pass (no solution), solution only after a reveal', async () => {
