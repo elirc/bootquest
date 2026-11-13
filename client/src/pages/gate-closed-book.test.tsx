@@ -4,6 +4,7 @@
 import { screen, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { fundStudyFixtures } from '../api/fixtures/fundamentals';
+import { createMockApi } from '../api/mock';
 import { renderApp } from '../test/render';
 
 const T1 = 207;
@@ -22,7 +23,8 @@ const perQuestion = () => document.querySelectorAll('[data-testid^="learn-more-q
 
 describe('a Fundamentals gate is closed-book while it is open', () => {
   it('the header "Learn more" and `i` are off from Start to submit, and on a retake after a pass; per-question links only after the submit', async () => {
-    const { user } = renderApp(`/play/${T1}`);
+    const api = createMockApi();
+    let { user, unmount } = renderApp(`/play/${T1}`, api);
     const start = await screen.findByRole('button', { name: /Start quiz/ });
     expect(header()).toBeEnabled();
 
@@ -40,8 +42,12 @@ describe('a Fundamentals gate is closed-book while it is open', () => {
     await waitFor(() => expect(perQuestion().length).toBeGreaterThan(0));
     expect(header()).toBeEnabled();
 
-    // a retake after the pass: the released explanations exist, and are out of reach again
-    await user.click(screen.getByRole('button', { name: 'Try again' }));
+    // rv B (R4-16): no "Try again" beside the keyed answers of a pass
+    expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
+    // a retake after the pass (a later visit): the released explanations exist, and are out of reach again
+    unmount();
+    ({ user } = renderApp(`/play/${T1}`, api));
+    await user.click(await screen.findByRole('button', { name: /Retake quiz/ }));
     expect(header()).toBeDisabled();
     await answerAll(user, FX1.keys);
     expect(perQuestion()).toHaveLength(0);

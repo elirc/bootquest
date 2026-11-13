@@ -28,11 +28,14 @@ import {
   type KataScoreResponse,
   type TolerantSuperseded,
   type UnitDetail,
+  type UnitSourceResponse,
 } from '../api/types';
 import { Icon } from '../components/Icon';
 import { Chip } from '../components/ui';
 import { contentHash, useDirtyGuard, useJsonDraft } from '../lib/draft';
 import { ebMeetsGate, ebTally, kpWeight, stripKpWeight, type EbTally } from '../lib/eb-weights';
+import { answerWords, EB_MAX_W3_MISSED, EB_MIN_ANSWER_WORDS } from '@bootquest/shared/eb-weight';
+import { buildClaudePrompt, CopyPromptButton } from '../lib/claude-prompt';
 import { fmtWhen } from '../lib/format';
 import { InlineProse } from '../lib/prose';
 import { useTracksRefresh } from '../lib/tracks';
@@ -307,16 +310,16 @@ const idList = (ids: readonly string[]) => ids.join(', ');
 
 /**
  * The explain-back live preview: plain covered/total for a legacy set (exactly the old preview);
- * weighted coverage plus the "every [w3] needed" rule for a weighted set.
+ * weighted coverage plus the "at most one [w3] missed" rule for a weighted set (rv B, D4).
  */
 function EbScorePreview({ t, gatePct, gateName }: { t: EbTally; gatePct: number; gateName: string }) {
   if (!t.weighted) return <ScorePreview hit={t.covered} marked={t.marked} total={t.total} verb="covered" gatePct={gatePct} gateName={gateName} />;
   const ok = ebMeetsGate(t, gatePct);
   const unmarked = t.total - t.marked;
   const w3 = t.w3Missed.length
-    ? `[w3] missed: ${idList(t.w3Missed)} (every [w3] is needed to pass)`
+    ? `[w3] missed: ${idList(t.w3Missed)} (${t.w3Missed.length > EB_MAX_W3_MISSED ? `more than ${EB_MAX_W3_MISSED} missed fails, whatever the coverage` : `${EB_MAX_W3_MISSED} miss allowed`})`
     : t.w3Unmarked.length
-      ? `every [w3] needed (${t.w3Unmarked.length} [w3] still unmarked)`
+      ? `at most ${EB_MAX_W3_MISSED} [w3] may be missed (${t.w3Unmarked.length} [w3] still unmarked)`
       : 'every [w3] covered';
   return (
     <span className={`score-preview ${ok ? 'is-pass' : 'is-fail'}`} data-testid="score-preview" aria-live="polite">
@@ -488,8 +491,20 @@ export function ExplainBackPane({ detail }: { detail: UnitDetail }) {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [blind, setBlind] = useState(false);
+  // rv B (R3-07): blind mode is ON by default for a [senior] DESIGN IT set; showing the sections is assisted
+  const [blind, setBlind] = useState(true);
   const { answers, assisted } = draft.value;
+  // rv B (R3-05): a G2 delegation brief is OPEN-BOOK, with the repo tree pinned at the set's sha
+  const g2 = detail.unit.key.startsWith('ladder/g2/');
+  const [source, setSource] = useState<UnitSourceResponse | null>(null);
+  useEffect(() => {
+    if (!g2) return;
+    let live = true;
+    api.getUnitSource(id).then((s) => live && setSource(s), () => undefined);
+    return () => {
+      live = false;
+    };
+  }, [api, id, g2]);
 
   // the server holds the answer once its key is readable: the draft is spent
   useEffect(() => {
@@ -589,9 +604,21 @@ export function ExplainBackPane({ detail }: { detail: UnitDetail }) {
       <h2 className="panel-title" id="eb-title">
         Explain it back
       </h2>
-      <p className="code-hidden-note" data-testid="code-hidden">
-        <Icon name="lock" size={14} /> Code hidden. Answer from memory, in your own words. Your answers are stored before the key points are shown.
-      </p>
+      {g2 ? (
+        <p className="code-hidden-note" data-testid="open-book">
+          <Icon name="info" size={14} /> Open book: write the brief with the repo open, as you would for a real delegation. Reading the repo is not &ldquo;help&rdquo;; your answers
+          are still stored before the rubric is shown.{' '}
+          {source && (
+            <a href={source.url} target="_blank" rel="noopener noreferrer" data-testid="source-link">
+              {source.repo} @ <code>{source.sha.slice(0, 7)}</code>
+            </a>
+          )}
+        </p>
+      ) : (
+        <p className="code-hidden-note" data-testid="code-hidden">
+          <Icon name="lock" size={14} /> Code hidden. Answer from memory, in your own words. Your answers are stored before the key points are shown.
+        </p>
+      )}
       {strip}
       {ks.phase === 'checking' && <p className="muted small">Checking for an earlier answer…</p>}
       {ks.phase === 'unavailable' && <KeyUnavailable noun="answers" stored={stored || pub.answered === true} error={ks.error} onRetry={ks.retry} />}
@@ -601,10 +628,26 @@ export function ExplainBackPane({ detail }: { detail: UnitDetail }) {
           {artifacts.length > 0 && <ArtifactLock artifacts={artifacts} />}
           {setGate && <SetGateLock label={setGate.label} opensAt={setGate.opensAt} />}
           {pub.questions.some((q) => blindSplit(q.prompt) !== null) && (
-            <label className="blind-toggle small">
-              <input type="checkbox" checked={blind} onChange={(e) => setBlind(e.target.checked)} aria-label="Blind mode" />{' '}
-              Blind mode: hide the section list after &ldquo;{BLIND_MARKER}&rdquo; until your answer is stored (interview conditions).
-            </label>
+            <p className="blind-toggle small" data-testid="blind-mode">
+              {blind ? (
+                <>
+                  Blind mode (interview conditions): the section list after &ldquo;{BLIND_MARKER}&rdquo; is hidden until your answer is stored.{' '}
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    disabled={frozen}
+                    onClick={() => {
+                      setBlind(false);
+                      draft.set((d) => ({ ...d, assisted: true }));
+                    }}
+                  >
+                    Show sections (assisted)
+                  </button>
+                </>
+              ) : (
+                <span className="muted">Sections shown: this answer is marked &ldquo;I had help&rdquo;.</span>
+              )}
+            </p>
           )}
           <ol className="eb-questions">
             {pub.questions.map((q, i) => {
@@ -629,6 +672,12 @@ export function ExplainBackPane({ detail }: { detail: UnitDetail }) {
                       readOnly={locked}
                     />
                   </label>
+                  {/* rv B (R4-07): the server refuses an answer of record under EB_MIN_ANSWER_WORDS words */}
+                  {(answers[i] ?? '').trim() !== '' && answerWords(answers[i] ?? '') < EB_MIN_ANSWER_WORDS && (
+                    <span className="muted small eb-words" data-testid={`eb-words-${i + 1}`}>
+                      {answerWords(answers[i] ?? '')} words: an answer needs at least {EB_MIN_ANSWER_WORDS}, in your own words.
+                    </span>
+                  )}
                 </li>
               );
             })}
@@ -661,6 +710,19 @@ export function ExplainBackPane({ detail }: { detail: UnitDetail }) {
       )}
       <ErrorLine error={error} />
     </section>
+  );
+}
+
+/** rv B (D6): the explain-back as a prompt: each question, the stored answer and its key points (the rubric). */
+function ebPrompt(keyResp: ExplainBackKeyResponse): string {
+  return buildClaudePrompt(
+    keyResp.questions.map((q, qi) => ({
+      source: `Explain-back question ${qi + 1}`,
+      question: q.prompt,
+      mine: keyResp.answers[qi] ?? '',
+      keyed: q.keyPoints.map((k) => `\n  - ${k.id}${kpWeight(k.text) ? ` [w${kpWeight(k.text)}]` : ''}: ${stripKpWeight(k.text)}`).join(''),
+    })),
+    'I answered this explain-back in my study app. Compare my answers with the key points: say which points I covered, which I missed, and what a stronger answer would add.',
   );
 }
 
@@ -718,7 +780,9 @@ function ExplainBackKeyView({
         Key points — self-score your stored answers
       </h2>
       <p className="muted small">
-        Your answer was stored {fmtWhen(keyResp.answeredAt)} (immutable). Mark each key point your answer covered.
+        Your answer was stored {fmtWhen(keyResp.answeredAt)} (immutable). Mark each key point your answer covered.{' '}
+        {/* rv B (D6): a prompt for the learner's own Claude session; the app sends nothing */}
+        <CopyPromptButton text={() => ebPrompt(keyResp)} testId="copy-prompt-eb" />
       </p>
       <ol className="eb-questions">
         {keyResp.questions.map((q, qi) => (
@@ -783,7 +847,7 @@ function ExplainBackKeyView({
           title="File this self-score?"
           summary={
             tally.weighted
-              ? `Weighted ${tally.hitWeight}/${tally.allWeight} = ${fmtPct(tally.coverage)} (${covered}/${allIds.length} key points): ${passes ? 'meets' : 'below'} the ${gatePct}% promotion gate${tally.w3Missed.length ? `; [w3] missed: ${idList(tally.w3Missed)} (every [w3] is needed)` : ', every [w3] covered'}.`
+              ? `Weighted ${tally.hitWeight}/${tally.allWeight} = ${fmtPct(tally.coverage)} (${covered}/${allIds.length} key points): ${passes ? 'meets' : 'below'} the ${gatePct}% promotion gate${tally.w3Missed.length ? `; [w3] missed: ${idList(tally.w3Missed)} (at most ${EB_MAX_W3_MISSED} may be missed)` : ', every [w3] covered'}.`
               : `${covered}/${allIds.length} covered = ${fmtPct(covered / allIds.length)}: ${passes ? 'meets' : 'below'} the ${gatePct}% promotion gate.`
           }
           consequence={
@@ -1073,10 +1137,11 @@ function ExplainBackResult({ r, keyResp, hasAltSets }: { r: ExplainBackScoreResp
   // A5: `r.coverage` is the score of record (weighted for a weighted set); a weighted set also fails on any missed [w3]
   const weighted = isWeightedKey(keyResp);
   const w3 = w3MissedOf(keyResp, r.missed);
+  const tooManyW3 = w3.length > EB_MAX_W3_MISSED;
   const verdictText = r.passed
-    ? `meets the ${r.minCoveragePct}% promotion threshold${weighted ? ', every [w3] covered' : ''}`
-    : w3.length
-      ? `not a pass: every [w3] key point is needed, whatever the coverage (the ${r.minCoveragePct}% threshold applies to the weighted coverage)`
+    ? `meets the ${r.minCoveragePct}% promotion threshold${weighted ? (w3.length ? `, ${w3.length} [w3] missed (at most ${EB_MAX_W3_MISSED} allowed)` : ', every [w3] covered') : ''}`
+    : tooManyW3
+      ? `not a pass: at most ${EB_MAX_W3_MISSED} [w3] key point may be missed, whatever the coverage (the ${r.minCoveragePct}% threshold applies to the weighted coverage)`
       : `below the ${r.minCoveragePct}% promotion threshold`;
   return (
     <>
@@ -1089,7 +1154,7 @@ function ExplainBackResult({ r, keyResp, hasAltSets }: { r: ExplainBackScoreResp
         <span className="verdict-xp">{r.xp ? (r.xp.amount > 0 ? `+${r.xp.amount} XP` : `0 XP${r.xp.reason ? ` (${r.xp.reason})` : ''}`) : '0 XP'}</span>
       </div>
       {w3.length > 0 && (
-        <div className="verdict verdict-fail" data-testid="w3-missed">
+        <div className={`verdict verdict-${tooManyW3 ? 'fail' : 'todo'}`} data-testid="w3-missed">
           <Icon name="warn" /> Missed [w3] key point{w3.length > 1 ? 's' : ''}:{' '}
           {w3.map((k, i) => (
             <Fragment key={k.id}>
@@ -1112,7 +1177,7 @@ function ExplainBackResult({ r, keyResp, hasAltSets }: { r: ExplainBackScoreResp
       ) : (
         <div className="verdict verdict-todo" data-testid="retest-notice">
           <Icon name="warn" /> No retest scheduled
-          {r.passed ? ' (no changed-example variation is seeded for this artifact yet).' : w3.length ? ' — a [w3] key point was missed.' : ' — coverage is below the promotion threshold.'}
+          {r.passed ? ' (no changed-example variation is seeded for this artifact yet).' : tooManyW3 ? ` — more than ${EB_MAX_W3_MISSED} [w3] key point was missed.` : ' — coverage is below the promotion threshold.'}
         </div>
       )}
       {r.promotions.map((p) => (
@@ -1300,14 +1365,51 @@ export function removedCommentLines(lines: readonly string[], cls: readonly Diff
   });
 }
 
-type DiffRow = { kind: 'line'; i: number } | { kind: 'fold'; from: number; to: number };
+type DiffRow = { kind: 'line'; i: number } | { kind: 'fold'; from: number; to: number } | { kind: 'harness'; from: number; to: number; path: string };
 
-/** Runs of two or more removed comment-only lines (inside a hunk) fold into one row. */
+/** The kata harness mirror (R2-14): a copy of the seeded change under `bootquest-kata/` that shows the defect twice. */
+export const KATA_HARNESS_PREFIX = 'bootquest-kata/';
+
+/** Per line: the path of the diff file section it belongs to (from its `diff --git` / `---` / `+++` header). */
+export function diffSectionPaths(lines: readonly string[], cls: readonly DiffLineClass[]): (string | null)[] {
+  let path: string | null = null;
+  return lines.map((line, i) => {
+    if (cls[i] === 'diff-file') {
+      const p = diffHeaderPath(line);
+      if (p !== null) path = p;
+      else if (line.startsWith('diff ')) path = null;
+    }
+    return path;
+  });
+}
+
+/**
+ * rv B (R3-03): finding markers left in the source point straight at the defect ("finding T4", "(F10)",
+ * "Step-6 answer", "exercise 3"): they render as "[ref]". Display only; the stored diff is untouched.
+ */
+export const FINDING_MARKER_RE = /finding [A-Z]?\d+|\(F\d+\)|Step-\d+ answer|exercise \d+/gi;
+export const maskFindingMarkers = (text: string): string => text.replace(FINDING_MARKER_RE, '[ref]');
+
+/**
+ * Runs of two or more removed comment-only lines (inside a hunk) fold into one row; rv B (R2-14): every file
+ * section under `bootquest-kata/` (the harness mirror) folds into one row as a whole.
+ */
 function diffRows(lines: readonly string[], cls: readonly DiffLineClass[]): DiffRow[] {
   const rows: DiffRow[] = [];
   const comment = removedCommentLines(lines, cls);
+  const paths = diffSectionPaths(lines, cls);
+  const harness = (i: number) => paths[i]?.startsWith(KATA_HARNESS_PREFIX) === true;
   const foldable = (i: number) => comment[i] === true;
   for (let i = 0; i < lines.length; ) {
+    if (harness(i)) {
+      let h = i;
+      while (h < lines.length && harness(h)) h++;
+      // the section's own `diff --git` header line came before its path was known: pull it into the fold
+      const from = rows.length > 0 && rows[rows.length - 1]!.kind === 'line' && lines[(rows[rows.length - 1] as { i: number }).i]!.startsWith('diff ') ? (rows.pop() as { i: number }).i : i;
+      rows.push({ kind: 'harness', from, to: h, path: paths[i]! });
+      i = h;
+      continue;
+    }
     let j = i;
     while (j < lines.length && foldable(j)) j++;
     if (j - i >= 2) {
@@ -1331,7 +1433,7 @@ export function DiffView({ diff, wrap = false }: { diff: string; wrap?: boolean 
   const cls = classifyDiff(lines);
   const span = (i: number) => (
     <span key={i} className={`diff-line ${cls[i]}`}>
-      {lines[i]}
+      {maskFindingMarkers(lines[i]!)}
       {'\n'}
     </span>
   );
@@ -1340,10 +1442,73 @@ export function DiffView({ diff, wrap = false }: { diff: string; wrap?: boolean 
       {diffRows(lines, cls).map((row) =>
         row.kind === 'line' ? (
           span(row.i)
+        ) : row.kind === 'harness' ? (
+          <details key={`harness-${row.from}`} className="diff-fold" data-testid="diff-harness">
+            <summary>
+              Test harness mirror <code>{row.path}</code> ({row.to - row.from} lines): the same change copied for the checks, not part of the review
+            </summary>
+            {Array.from({ length: row.to - row.from }, (_, k) => span(row.from + k))}
+          </details>
         ) : (
           <details key={`fold-${row.from}`} className="diff-fold" data-testid="diff-fold">
             <summary>{row.to - row.from} comment lines removed</summary>
             {Array.from({ length: row.to - row.from }, (_, k) => span(row.from + k))}
+          </details>
+        ),
+      )}
+    </pre>
+  );
+}
+
+/**
+ * rv B (R3-03): a kata context file is the PRE-patch source, so the explanatory comment the patch removed is
+ * still in it, verbatim (14/14 katas that remove one). Runs of two or more comment-only lines fold here too, and
+ * finding markers render as "[ref]". Display only.
+ */
+export type ContextRow = { kind: 'line'; text: string } | { kind: 'fold'; lines: string[] };
+export function contextRows(content: string, path: string): ContextRow[] {
+  const sx = commentSyntaxOf(path);
+  const lines = content.split('\n');
+  let inBlock = false;
+  const comment = lines.map((l) => {
+    const r = scanCommentLine(l, sx, inBlock);
+    inBlock = r.inBlock;
+    return r.comment;
+  });
+  const rows: ContextRow[] = [];
+  for (let i = 0; i < lines.length; ) {
+    let j = i;
+    while (j < lines.length && comment[j]) j++;
+    if (j - i >= 2) {
+      rows.push({ kind: 'fold', lines: lines.slice(i, j) });
+      i = j;
+    } else {
+      rows.push({ kind: 'line', text: lines[i]! });
+      i++;
+    }
+  }
+  return rows;
+}
+
+function ContextFile({ path, content }: { path: string; content: string }) {
+  const rows = contextRows(content, path);
+  return (
+    <pre className="code-block" data-testid="context-file">
+      {rows.map((r, i) =>
+        r.kind === 'line' ? (
+          <span key={i}>
+            {maskFindingMarkers(r.text)}
+            {'\n'}
+          </span>
+        ) : (
+          <details key={i} className="diff-fold" data-testid="context-fold">
+            <summary>{r.lines.length} comment lines</summary>
+            {r.lines.map((l, k) => (
+              <span key={k}>
+                {maskFindingMarkers(l)}
+                {'\n'}
+              </span>
+            ))}
           </details>
         ),
       )}
@@ -1445,7 +1610,7 @@ export function KataPane({ detail }: { detail: UnitDetail }) {
           <summary>
             Context: <code>{f.path}</code>
           </summary>
-          <pre className="code-block">{f.content}</pre>
+          <ContextFile path={f.path} content={f.content} />
         </details>
       ))}
       {ks.key ? (
@@ -1559,9 +1724,18 @@ function KataKeyView({ unitId, keyResp, onStale }: { unitId: number; keyResp: Ka
           </li>
         ))}
       </ul>
-      <h3 className="small">Seeded defects</h3>
+      {/* rv B (R3-04): the defect (evidenced in the patched lines) first, then its consequences / context */}
+      {(['patched', 'repo'] as const).map((where) => {
+        const group = keyResp.defects.filter((d) => (where === 'patched' ? d.evidence.in === 'patched' : d.evidence.in !== 'patched'));
+        if (group.length === 0) return null;
+        return (
+          <Fragment key={where}>
+      <h3 className="small" data-testid={`kata-group-${where}`}>
+        {where === 'patched' ? 'The defect (in the patched lines)' : 'Consequences and context (elsewhere in the repo)'}
+      </h3>
+      {where === 'repo' && <p className="muted small">These still count toward this kata&apos;s catch rate; the G1 gate counts only the defects in the patched lines.</p>}
       <ul className="checklist">
-        {keyResp.defects.map((d) => (
+        {group.map((d) => (
           <li key={d.id} className={`checklist-item${marks[d.id] ? ` is-${marks[d.id]}` : ''}`}>
             <span className="checklist-text">
               <InlineProse text={d.scenario} />
@@ -1592,6 +1766,9 @@ function KataKeyView({ unitId, keyResp, onStale }: { unitId: number; keyResp: Ka
           </li>
         ))}
       </ul>
+          </Fragment>
+        );
+      })}
       {!done && (
         <div className="toolbar">
           <ScorePreview hit={caught} marked={marked} total={total} verb="caught" gatePct={targetPct} gateName="G1 target" />

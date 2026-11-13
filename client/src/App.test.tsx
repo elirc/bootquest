@@ -217,7 +217,8 @@ describe('exercise player: quiz + predict-output are submit-only', () => {
     await user.keyboard('2');
     await user.click(screen.getByRole('button', { name: /Try again/ }));
     expect(await screen.findByText('Correct')).toBeInTheDocument();
-    expect(screen.getByText(/\+2 XP/)).toBeInTheDocument();
+    // rv B (R4-09): a quick check passed after a failed first try is done, at 0 XP
+    expect(screen.getByText(/^0 XP \(first try missed; the check is done\)/)).toBeInTheDocument();
   });
 
   it('quiz: the UI never calls run (the mock would 409 RUN_NOT_AVAILABLE)', async () => {

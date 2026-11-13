@@ -1,19 +1,18 @@
 // f52 wave B (app ruling 2): the Fundamentals gate's fail path in the player — the per-try shuffle
 // (display only: the submit posts served indices), the "Re-read" line, and the cooldown from the
 // second consecutive fail. Mock topic 207: 5 questions, keys [1, 1, 0, 1, 0].
-import { act, fireEvent, screen, within } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createMockApi } from '../api/mock';
 import { fundStudyFixtures } from '../api/fixtures/fundamentals';
 import type { BootQuestApi, Submission } from '../api/types';
-import { GATE_COOLDOWN_MS, gateShuffle } from '../lib/gate';
+import { gateShuffle } from '../lib/gate';
 import { renderApp } from '../test/render';
 
 const T1 = 207;
 const FX = fundStudyFixtures[String(T1)]!;
 const QUESTIONS = FX.public.questions;
 const plain = (s: string) => s.replace(/`/g, '');
-const FAILS_KEY = `bq:gate-fails:v1:${T1}`;
 
 type User = ReturnType<typeof renderApp>['user'];
 
@@ -113,7 +112,7 @@ describe('the gate shuffle (display only)', () => {
     expect(sent).toEqual([{ answers: [0, 1, 2, 3, 4].map(intent), selfAssisted: false }]);
     expect(screen.getByTestId('study-result')).toHaveTextContent('3/5 correct');
     // the missed ones are served Q2 and Q4, whatever their place on screen
-    expect(screen.getByTestId('reread')).toHaveTextContent('Re-read: The seven primitives');
+    expect(await screen.findByTestId('reread')).toHaveTextContent('Re-read: The seven primitives');
     expect(document.querySelector('.study-mark, .choice-right, .choice-wrong')).toBeNull();
   }, 60_000);
 
@@ -141,7 +140,14 @@ describe('the gate shuffle (display only)', () => {
 describe('"Re-read" after a failed gate', () => {
   it('without a gate map the generic line stands in', async () => {
     const { api } = recorded();
-    const { user } = renderApp(`/play/${T1}`, { ...api, getLessonAids: async () => ({ gate: {}, checks: [] }) });
+    // rv B: the server names the sections (gate-status); without a gate map it names none
+    const { user } = renderApp(`/play/${T1}`, {
+      ...api,
+      getGateStatus: async (id) => {
+        const s = await api.getGateStatus(id);
+        return s && s.lastTry ? { ...s, lastTry: { ...s.lastTry, reread: [] } } : s;
+      },
+    });
     await user.click(await screen.findByRole('button', { name: /Start quiz/ }));
     await takeGate(user, wrong, 'keys');
     await user.click(screen.getByRole('button', { name: /Submit answers/ }));
@@ -160,100 +166,86 @@ describe('"Re-read" after a failed gate', () => {
   }, 60_000);
 });
 
-describe('the cooldown from the second consecutive fail', () => {
-  it('the second fail in a row locks "Try again" for 3 minutes with a countdown; one earlier fail is on record', async () => {
-    localStorage.setItem(FAILS_KEY, JSON.stringify({ fails: 1, until: 0 }));
-    const { api } = recorded();
-    const { user } = renderApp(`/play/${T1}`, api);
-    // one fail on record is no cooldown
-    const start = await screen.findByRole('button', { name: /Start quiz/ });
-    expect(start).toBeEnabled();
-    await user.click(start);
+describe('rv B: graded tries, practice, and the fail screen', () => {
+  it('a failed graded try shows the score, the try number and what to re-read: no question list, no picks, no marks', async () => {
+    const { user } = renderApp(`/play/${T1}`);
+    await user.click(await screen.findByRole('button', { name: /Start quiz/ }));
     await takeGate(user, wrong, 'keys');
-    const before = Date.now();
     await user.click(screen.getByRole('button', { name: /Submit answers/ }));
     expect(await screen.findByText('Below the pass mark')).toBeInTheDocument();
-    const retry = screen.getByTestId('gate-retry');
-    expect(retry).toBeDisabled();
-    expect(retry.textContent).toMatch(/^Try again in (3:00|2:5\d)$/);
-    expect(screen.getByTestId('gate-cooldown')).toHaveTextContent(/The next try opens in (3:00|2:5\d)\./);
-    const stored = JSON.parse(localStorage.getItem(FAILS_KEY)!) as { fails: number; until: number };
-    expect(stored.fails).toBe(2);
-    expect(stored.until).toBeGreaterThanOrEqual(before + GATE_COOLDOWN_MS);
-    expect(stored.until).toBeLessThanOrEqual(Date.now() + GATE_COOLDOWN_MS);
-    // a click on the locked button starts nothing
-    fireEvent.click(retry);
-    expect(screen.queryByTestId('gate-step')).toBeNull();
+    expect(await screen.findByTestId('study-try')).toHaveTextContent('try 1');
+    expect(screen.getByTestId('study-try')).not.toHaveTextContent('#');
+    expect(screen.queryAllByTestId(/^question-/)).toHaveLength(0);
+    expect(screen.queryByRole('radio')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled();
   }, 60_000);
 
-  it('a pass clears the record', async () => {
-    localStorage.setItem(FAILS_KEY, JSON.stringify({ fails: 1, until: 0 }));
+  it('the server budget: after two graded tries in a day "Try again" waits, with the time the next one opens', async () => {
     const { api } = recorded();
+    await api.submitUnit(T1, { answers: [0, 0, 1, 0, 1], selfAssisted: false }); // a first fail, outside the UI
     const { user } = renderApp(`/play/${T1}`, api);
     await user.click(await screen.findByRole('button', { name: /Start quiz/ }));
-    await takeGate(user, keyed, 'keys');
+    await takeGate(user, wrong, 'keys');
+    await user.click(screen.getByRole('button', { name: /Submit answers/ }));
+    expect(await screen.findByText('Below the pass mark')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('gate-retry')).toBeDisabled());
+    expect(screen.getByTestId('gate-cooldown')).toHaveTextContent('Two graded tries per 24 hours: your next graded try opens');
+    expect(await screen.findByTestId('study-try')).toHaveTextContent('try 2');
+    // a third graded submit is refused by the server too, recording nothing
+    await expect(api.submitUnit(T1, { answers: FX.keys, selfAssisted: false })).rejects.toMatchObject({ code: 'NOT_DUE' });
+  }, 60_000);
+
+  it('practice: every verdict, keyed answer and explanation at once; nothing recorded; the graded try then waits 2 days', async () => {
+    const { api, sent } = recorded();
+    const { user } = renderApp(`/play/${T1}`, api);
+    await user.click(await screen.findByTestId('gate-practice'));
+    expect(screen.getByTestId('practice-banner')).toHaveTextContent('nothing is recorded');
+    // practice is open-book: the lesson stays on screen
+    expect(screen.queryByTestId('lesson-hidden')).toBeNull();
+    await takeGate(user, (qi) => (qi === 0 ? wrong(qi) : keyed(qi)), 'keys');
+    await user.click(screen.getByRole('button', { name: /Check my practice answers/ }));
+    const result = await screen.findByTestId('practice-result');
+    expect(result).toHaveTextContent('Practice: 4/5 correct');
+    expect(result).toHaveTextContent('nothing recorded · 0 XP');
+    expect(within(screen.getByTestId('practice-item-1')).getByText('incorrect')).toBeInTheDocument();
+    expect(screen.getByTestId('practice-item-1')).toHaveTextContent("Answer: 'object'");
+    expect(screen.getByTestId('practice-item-1')).toHaveTextContent('a bug from the first JavaScript engine');
+    expect(sent).toEqual([]); // no graded submit
+    expect((await api.getGateStatus(T1))?.tries).toBe(0);
+    await waitFor(() => expect(screen.getByTestId('gate-retry')).toBeDisabled());
+    expect(screen.getByTestId('gate-cooldown')).toHaveTextContent('You practised this gate');
+    // practice again is always open
+    expect(screen.getByTestId('gate-practice')).toBeEnabled();
+  }, 60_000);
+
+  it('a pass leaves no "Try again"; a missed question carries a "Copy prompt for Claude" button (clipboard only)', async () => {
+    // user-event's setup() installs a clipboard stub: read back what the button wrote
+    const { user } = renderApp(`/play/${T1}`);
+    await user.click(await screen.findByRole('button', { name: /Start quiz/ }));
+    await takeGate(user, (qi) => (qi === 1 ? wrong(qi) : keyed(qi)), 'keys'); // 4/5: a pass with one miss
     await user.click(screen.getByRole('button', { name: /Submit answers/ }));
     expect(await screen.findByText('Quiz gate passed')).toBeInTheDocument();
-    expect(localStorage.getItem(FAILS_KEY)).toBeNull();
-    expect(screen.queryByTestId('gate-cooldown')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+    const copy = await screen.findByRole('button', { name: 'Copy prompt for Claude' });
+    await user.click(copy);
+    expect(await screen.findByText(/Copied. Paste it into your own Claude session/)).toBeInTheDocument();
+    const writes = [await navigator.clipboard.readText()];
+    const q = QUESTIONS[1]!;
+    expect(writes[0]).toContain(`Question: ${q.prompt}`);
+    expect(writes[0]).toContain(`My answer: ${q.choices[wrong(1)]}`);
+    expect(writes[0]).toContain(`Keyed answer: ${q.choices[keyed(1)]}`);
+    expect(writes[0]).toContain('Lesson section:');
   }, 60_000);
 
-  it('survives a reload: "Start quiz" counts down and opens when the 3 minutes are over (fake timers)', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    localStorage.setItem(FAILS_KEY, JSON.stringify({ fails: 2, until: Date.now() + GATE_COOLDOWN_MS }));
-    renderApp(`/play/${T1}`);
-    const start = await screen.findByRole('button', { name: /Start quiz in/ });
-    expect(start).toBeDisabled();
-    expect(start.textContent).toMatch(/Start quiz in (3:00|2:5\d)/);
-    expect(screen.getByTestId('gate-cooldown')).toBeInTheDocument();
-
-    act(() => {
-      vi.advanceTimersByTime(120_000);
-    });
-    expect(start).toBeDisabled();
-    expect(start.textContent).toMatch(/Start quiz in (1:00|0:5\d)/);
-
-    act(() => {
-      vi.advanceTimersByTime(61_000);
-    });
-    expect(screen.getByRole('button', { name: 'Start quiz' })).toBeEnabled();
-    expect(screen.queryByTestId('gate-cooldown')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Start quiz' }));
-    expect(screen.getByTestId('gate-step')).toBeInTheDocument();
-  }, 60_000);
-
-  it('a blocked localStorage never breaks the gate', async () => {
-    const get = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
-      throw new Error('blocked');
-    });
-    const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
-      throw new Error('blocked');
-    });
-    try {
-      const { api } = recorded();
-      const { user } = renderApp(`/play/${T1}`, api);
-      await user.click(await screen.findByRole('button', { name: /Start quiz/ }));
-      await takeGate(user, wrong, 'keys');
-      await user.click(screen.getByRole('button', { name: /Submit answers/ }));
-      expect(await screen.findByText('Below the pass mark')).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled();
-    } finally {
-      get.mockRestore();
-      set.mockRestore();
-    }
-  }, 60_000);
-
-  it('a campaign study quest has no cooldown and keeps its per-question marks after a fail', async () => {
+  it('a campaign study quest has no marks after a fail either, and allows a second try', async () => {
     const { user } = renderApp('/play/206');
-    for (let round = 0; round < 2; round++) {
-      await user.click(await screen.findByRole('button', { name: round === 0 ? /Start quiz/ : 'Try again' }));
-      for (let q = 1; q <= 5; q++) await user.click(screen.getByRole('radio', { name: `Q${q} choice 3` }));
-      await user.click(screen.getByRole('button', { name: /Submit answers/ }));
-      expect(await screen.findByText('Below the pass mark')).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled();
-      expect(screen.getByTestId('mark-1')).toBeInTheDocument();
-    }
-    expect(screen.queryByTestId('gate-cooldown')).toBeNull();
-    expect(screen.queryByTestId('reread')).toBeNull();
+    await user.click(await screen.findByRole('button', { name: /Start quiz/ }));
+    for (let q = 1; q <= 5; q++) await user.click(screen.getByRole('radio', { name: `Q${q} choice 3` }));
+    await user.click(screen.getByRole('button', { name: /Submit answers/ }));
+    expect(await screen.findByText('Below the pass mark')).toBeInTheDocument();
+    expect(screen.queryByTestId('mark-1')).toBeNull();
+    expect(screen.queryByRole('radio')).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(screen.getByRole('radio', { name: 'Q1 choice 1' })).not.toBeChecked();
   }, 60_000);
 });

@@ -92,6 +92,9 @@ export type { FundamentalsResponseExt, FundTopicDtoExt };
 // f52 S: progressive hints (GET /units/:id/hints, POST /units/:id/hint)
 import type { HintLockReason, HintsResponse, HintTakenResponse } from '@bootquest/shared/api-ext';
 export type { HintLockReason, HintsResponse, HintTakenResponse };
+// rv B: practice vs evidence, gate status, pinned source, hinted evidence (shared/src/api-ext.ts rv B section)
+import type { EvidenceRowDtoExt, GateStatusResponse, PracticeBody, PracticeItemDto, PracticeResponse, UnitSourceResponse } from '@bootquest/shared/api-ext';
+export type { EvidenceRowDtoExt, GateStatusResponse, PracticeBody, PracticeItemDto, PracticeResponse, UnitSourceResponse };
 
 /**
  * f52 wave B (app ruling 7): lesson aids of a Fundamentals topic (GET /units/:id/lesson-aids). Declared
@@ -384,6 +387,20 @@ export interface BootQuestApi {
    * other failure is `{ gate: {}, checks: [] }`.
    */
   getLessonAids(unitId: number): Promise<LessonAids>;
+
+  // ---- rv B: practice vs evidence (quiz gates, quick checks) + pinned source
+  /**
+   * GET /api/units/:id/gate-status — this unit's try number, the retry budget, the practice lock and what the
+   * latest failed gate try should re-read. Never rejects: an older server (404) or any failure is null.
+   */
+  getGateStatus(unitId: number): Promise<GateStatusResponse | null>;
+  /**
+   * POST /api/units/:id/practice — grades and explains every item and records NOTHING but the practice time:
+   * no attempt, XP, slot, evidence or unlock. A graded try of that unit then waits 2 days (409 NOT_DUE).
+   */
+  practiceUnit(unitId: number, body: PracticeBody): Promise<PracticeResponse>;
+  /** GET /api/units/:id/source — the pinned repo tree of an explain-back / kata (G2: open-book). Null when none. */
+  getUnitSource(unitId: number): Promise<UnitSourceResponse | null>;
 }
 
 /** Codes the client can raise itself on top of the server's envelope codes. */

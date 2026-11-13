@@ -1,10 +1,10 @@
 // A5 explain-back weights, client side (display + live preview only; the server decides `passed`).
 // A set whose every key point starts with `[w1]`/`[w2]`/`[w3]` is a WEIGHTED set: its coverage is
-// Σ weight(covered) / Σ weight(all) and it passes only with that >= the mark AND no [w3] missed.
+// Σ weight(covered) / Σ weight(all) and it passes only with that >= the mark AND at most one [w3] missed (rv B, D4).
 // Any other set is scored by plain covered / total, exactly as before. The prefix stays in the
 // served text; the client strips it for display and shows the weight as a chip.
 
-import { isWeightedSet, kpWeight } from '@bootquest/shared/eb-weight';
+import { EB_MAX_W3_MISSED, isWeightedSet, kpWeight } from '@bootquest/shared/eb-weight';
 
 export { kpWeight, stripKpWeight } from '@bootquest/shared/eb-weight';
 
@@ -50,7 +50,7 @@ export function ebTally(keyPoints: readonly { id: string; text: string }[], mark
   };
 }
 
-/** Does the tally meet `gatePct` percent? Integer math (4/5 vs 80% is exactly a pass); a weighted set also needs no [w3] missed. */
+/** Does the tally meet `gatePct` percent? Integer math (4/5 vs 80% is exactly a pass); a weighted set also needs at most EB_MAX_W3_MISSED [w3] missed. */
 export function ebMeetsGate(t: EbTally, gatePct: number): boolean {
-  return t.allWeight > 0 && t.hitWeight * 100 >= gatePct * t.allWeight && t.w3Missed.length === 0;
+  return t.allWeight > 0 && t.hitWeight * 100 >= gatePct * t.allWeight && t.w3Missed.length <= EB_MAX_W3_MISSED;
 }

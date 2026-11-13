@@ -38,6 +38,9 @@ import { HintBar, hintedXpNote } from './Player/HintBar';
 import { LessonProse } from './Player/LessonAids';
 import { NextStep } from './Player/NextStep';
 import { RevealPanel, promotionLeg, type Solution } from './Player/RevealFlow';
+import { rememberWhyOpen, whyOpenStored, WhyItWorksProse } from './Player/WhyItWorks';
+import { fmtWhen } from '../lib/format';
+import type { PracticeResponse } from '../api/types';
 
 const ID_RE = /^[1-9]\d{0,14}$/;
 
@@ -85,6 +88,12 @@ function Player({ detail }: { detail: UnitDetail }) {
   const [solution, setSolution] = useState<Solution | null>(null);
   // fix pass 2: a Fundamentals quiz gate is open (closed-book): "Learn more" and its `i` key are off
   const [gateOpen, setGateOpen] = useState(false);
+  // rv B (R5-07): a drill's "Why it works" section stays folded until its first failed submit or a pass
+  const [whyOpen, setWhyOpen] = useState(() => unit.state === 'done' || whyOpenStored(unit.id));
+  const openWhy = () => {
+    setWhyOpen(true);
+    rememberWhyOpen(unit.id);
+  };
   const isReading = unit.kind === 'reading';
   // fund wave: a Fundamentals topic unit — its instructions ARE the lesson (headings rendered)
   const isFundTopic = isFundTopicKey(unit.key);
@@ -110,6 +119,8 @@ function Player({ detail }: { detail: UnitDetail }) {
   // side (a code drill, a predict-output with its own instructions); everything else is ONE
   // column, and study / reading units get a centred reading column.
   const isCode = spec !== null && !answerFirst && spec.type !== 'quiz' && spec.type !== 'predict-output' && !isReading && !isWritten;
+  // the CodePane (Run / Submit) is what opens the fold; other panes never fold their instructions
+  const isCodeDrill = isCode;
   const twoCol = isCode || (spec?.type === 'predict-output' && hasProse && !isReading && !isWritten);
   const readingColumn = isReading || spec?.type === 'study-quiz';
   const hasRefs = (detail.refs ?? []).length > 0;
@@ -139,7 +150,7 @@ function Player({ detail }: { detail: UnitDetail }) {
   );
   const insMain = hasProse ? (
     // wave B: a Fundamentals lesson carries its "check yourself" cards (same rendering otherwise)
-    isFundTopic ? <LessonProse text={prose.instructions} className="ins-prose" /> : <Prose text={prose.instructions} className="ins-prose" />
+    isFundTopic ? <LessonProse text={prose.instructions} className="ins-prose" /> : <WhyItWorksProse text={prose.instructions} open={whyOpen || !isCodeDrill} className="ins-prose" />
   ) : paneCarriesTask ? null : isReading && !hasRefs ? (
     <ReadingEmpty unitId={unit.id} unitKey={unit.key} trackId={unit.trackId} />
   ) : (
@@ -226,7 +237,7 @@ function Player({ detail }: { detail: UnitDetail }) {
         ) : spec.type === 'predict-output' ? (
           <PredictPane detail={detail} prompt={prose.prompt} />
         ) : (
-          <CodePane detail={detail} spec={spec} />
+          <CodePane detail={detail} spec={spec} onSubmitted={openWhy} />
         )}
         {!twoCol && reveal && (
           <section className="panel player-aside" aria-label="Solution reveal">
@@ -429,7 +440,16 @@ function XpLine({ submit, hintNote = '' }: { submit: SubmitResponse; hintNote?: 
   const xp = submit.xp;
   // wave B: a hinted pass says what the hints cost, e.g. "+7 XP (75% · 1 hint)"
   const text =
-    xp === null ? '0 XP' : xp.amount > 0 ? `+${xp.amount} XP${hintNote ? ` ${hintNote}` : ''}` : xp.reason ? `0 XP (${xp.reason})` : '0 XP';
+    xp === null
+      ? '0 XP'
+      : xp.amount > 0
+        ? `+${xp.amount} XP${hintNote ? ` ${hintNote}` : ''}`
+        : xp.reason
+          ? `0 XP (${xp.reason})`
+          : // rv B (R4-09): a quick check passed after a failed first try is done, at 0 XP
+            submit.verdict === 'pass'
+            ? '0 XP (first try missed; the check is done)'
+            : '0 XP';
   return (
     <span className="verdict-xp">
       {text}
@@ -502,7 +522,7 @@ const readLastAttempt = (unitId: number): number | null => {
 const attemptCode = (answer: unknown): string | null =>
   typeof answer === 'object' && answer !== null && typeof (answer as { code?: unknown }).code === 'string' ? (answer as { code: string }).code : null;
 
-function CodePane({ detail, spec }: { detail: UnitDetail; spec: PublicCheck }) {
+function CodePane({ detail, spec, onSubmitted }: { detail: UnitDetail; spec: PublicCheck; onSubmitted?: () => void }) {
   const api = useApi();
   const id = detail.unit.id;
   const starter = detail.starter ?? '';
@@ -602,6 +622,7 @@ function CodePane({ detail, spec }: { detail: UnitDetail; spec: PublicCheck }) {
         const submit = await api.submitUnit(id, { code, selfAssisted: assisted });
         setOutcome({ kind, submit, hintNote: submit.verdict === 'pass' ? hintedXpNote(hintState.current) : '' });
         setHintRefresh((n) => n + 1); // a failed submit opens the first hint; a pass closes them
+        onSubmitted?.(); // rv B: a failed submit or a pass opens the folded "Why it works"
         storedSet(lastAttemptKey(id), String(submit.attempt.id));
         setLastAttempt(submit.attempt.id);
         setLoaded(false); // a new attempt to offer (an earlier "loaded" referred to an older one)
@@ -877,7 +898,8 @@ function useAnswerSubmit(unitId: number) {
       setSubmit(await api.submitUnit(unitId, s));
       refreshTracks(); // W10: a recorded submit can change the track's done count
     } catch (e) {
-      setError(errorText(e));
+      // rv B: a practised quick check is NOT_DUE for 2 days: the server's message says until when
+      setError(isApiError(e, 'NOT_DUE') ? `${e.message} (NOT_DUE)` : errorText(e));
     } finally {
       setBusy(false);
     }
@@ -904,6 +926,19 @@ function QuizPane({
   const { submit, error, busy, send } = useAnswerSubmit(detail.unit.id);
   const passed = submit?.result.pass === true;
   const [lastPick, setLastPick] = useState<number | null>(null);
+  // rv B (Q3): practice = the keyed answer + explanation at once, nothing recorded; the graded check then waits 2 days
+  const api = useApi();
+  const [practice, setPractice] = useState<PracticeResponse | null>(null);
+  const [practiceError, setPracticeError] = useState<string | null>(null);
+  const practise = async () => {
+    if (busy || (byChoice ? choice === null : text.trim() === '')) return;
+    setPracticeError(null);
+    try {
+      setPractice(await api.practiceUnit(detail.unit.id, { answer: byChoice ? choice! : text }));
+    } catch (e) {
+      setPracticeError(errorText(e));
+    }
+  };
   const firstRadio = useRef<HTMLInputElement>(null);
   const answerInput = useRef<HTMLInputElement>(null);
   const revealedIndex = solution?.kind === 'answer' && typeof solution.answer === 'number' ? solution.answer : null;
@@ -977,6 +1012,18 @@ function QuizPane({
       <div className="toolbar">
         <HelpCheckbox checked={assisted} onChange={setAssisted} />
         <span className="toolbar-spacer" />
+        {!passed && (
+          <button
+            type="button"
+            className="btn"
+            data-testid="quiz-practice"
+            disabled={busy || (byChoice ? choice === null : text.trim() === '')}
+            onClick={() => void practise()}
+            title="Shows the answer and why. Nothing is recorded; the graded check then opens 2 days later."
+          >
+            Practice
+          </button>
+        )}
         <button
           type="button"
           className="btn btn-primary"
@@ -986,14 +1033,40 @@ function QuizPane({
           {submit && !passed ? 'Try again' : 'Check answer'} <Kbd>Enter</Kbd>
         </button>
       </div>
+      {(practice || practiceError) && (
+        <div className="results" data-testid="quiz-practice-result">
+          {practiceError ? (
+            <div className="verdict verdict-error" role="alert">
+              <Icon name="warn" /> {practiceError}
+            </div>
+          ) : (
+            practice && (
+              <>
+                <div className={`verdict verdict-${practice.items[0]?.correct ? 'pass' : 'fail'}`}>
+                  <Icon name={practice.items[0]?.correct ? 'check' : 'warn'} />
+                  <strong>Practice: {practice.items[0]?.correct ? 'correct' : 'incorrect'}</strong>
+                  <span className="muted">nothing recorded · 0 XP</span>
+                </div>
+                {practice.items[0]?.answer && (
+                  <p className="small">
+                    <strong>Answer:</strong> <InlineProse text={practice.items[0].answer} />
+                  </p>
+                )}
+                {practice.items[0]?.explanation && <Prose text={practice.items[0].explanation} />}
+                <p className="muted small">The graded check opens {fmtWhen(practice.gradedOpensAt)}.</p>
+              </>
+            )
+          )}
+        </div>
+      )}
       <div className="results" aria-live="polite" data-testid="results">
         <AnswerVerdict
           submit={submit}
           error={error}
           idle={
             byChoice
-              ? `Pick an answer with 1–${choices.length}, then Enter. Every check is saved as an attempt.`
-              : 'Type your answer, then press Enter to check it. Every check is saved as an attempt.'
+              ? `Pick an answer with 1–${choices.length}, then Enter. Every check is saved as an attempt, and only a first-try pass earns XP. Practice shows the answer without saving anything.`
+              : 'Type your answer, then press Enter to check it. Every check is saved as an attempt, and only a first-try pass earns XP.'
           }
         />
         {submit && !error && <SubmitFollowUp submit={submit} unit={detail.unit} />}
