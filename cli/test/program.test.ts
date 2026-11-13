@@ -444,7 +444,7 @@ describe('slate (ab A1): show / choose the daily slate, effective tomorrow', () 
     const io = captureIo(proj, fetch);
     expect(await runCli(['slate'], io)).toBe(EXIT.OK);
     const out = io.stdout.join('\n');
-    expect(out).toContain('Not chosen yet: every track gives 1 drill a day (the default).');
+    expect(out).toContain('Not chosen yet: every drill set is off (the default day is the Fundamentals step + a senior rep).');
     expect(out).toMatch(/Today \(2026-10-07\):\n {2}js {9}on {3}1 drill {2}\(default\)/);
     expect(out).toContain('From tomorrow (2026-10-08):');
     expect(out).toContain('bootquest slate --tracks <a,b> [--size 1-10] | --preset default|full (full = 5 per track)');

@@ -275,7 +275,6 @@ export function loadCampaignIntoDb(db: Db, c: LoadedCampaign, now: Clock): Campa
       for (const r of db.all<{ id: number; actNo: number }>('SELECT id, act_no AS actNo FROM campaign_act WHERE track_id = ?', file.track)) {
         if (actIds.has(r.actNo)) continue;
         if (db.get('SELECT 1 AS x FROM quest WHERE act_id = ? LIMIT 1', r.id)) throw new CampaignLoadError(`act ${file.track}/${r.actNo} left the pack but still holds non-campaign quests`);
-        db.run('DELETE FROM skill_node WHERE act_id = ?', r.id);
         db.run('DELETE FROM campaign_act WHERE id = ?', r.id);
       }
 

@@ -6,6 +6,7 @@ import { DashboardPage } from './pages/Dashboard';
 import { PlayerPage } from './pages/Player';
 import { ReviewPage } from './pages/Review';
 import { StatsPage } from './pages/Stats';
+import { SettingsPage } from './pages/Settings';
 
 /** Router-agnostic so tests can mount it inside a MemoryRouter. */
 export function App() {
@@ -18,6 +19,7 @@ export function App() {
         <Route path="/play/:unitId" element={<PlayerPage />} />
         <Route path="/review" element={<ReviewPage />} />
         <Route path="/stats" element={<StatsPage />} />
+        <Route path="/settings" element={<SettingsPage />} />
         <Route path="*" element={<NotFound />} />
       </Routes>
     </AppShell>

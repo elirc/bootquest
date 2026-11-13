@@ -1,4 +1,6 @@
-import type { CanonicalRunResult, DashboardResponse, SubmitResponse, UnitDetailResponse } from '@bootquest/shared/api';
+import type { CanonicalRunResult, SubmitResponse, UnitDetailResponse } from '@bootquest/shared/api';
+// rv wave C: the dashboard's slate carries the Fundamentals step and the senior rep (api-ext slot kinds)
+import type { DashboardResponseExt as DashboardResponse } from '@bootquest/shared/api-ext';
 import type { SeedQueueResponse, SyncReport } from '@bootquest/shared/sync';
 import type { SlateSettingsResponse } from '@bootquest/shared/api-ext';
 import { ApiError, BadResponseError, ServerTimeoutError, ServerUnreachableError, UsageError } from './client.ts';
@@ -167,14 +169,35 @@ export function slateLabel(item: DashboardResponse['slate']['items'][number]): s
       return 'campaign step';
     case 'review-clear':
       return 'clear the review queue';
+    case 'fund-step':
+      return `Fundamentals step${item.track ? ` (${item.track})` : ''}`;
+    case 'senior-rep':
+      return `senior rep${item.rep ? ` (${SENIOR_REP_WORDS[item.rep]}; any senior rep counts)` : ''}`;
     default:
       return String((item as { kind: unknown }).kind);
   }
 }
 
+const SENIOR_REP_WORDS: Record<string, string> = { design: 'a DESIGN IT set', kata: 'a review kata', 'fund-senior': 'a Fundamentals JS 21-33 unit' };
+
+/** The partial-day rule (server engines/streak.ts PARTIAL_DAY_XP): this much XP keeps the streak, never grows it. */
+export const PARTIAL_DAY_XP = 20;
+
+/**
+ * Today's streak state in the words the web dashboard uses (rv wave C, R4-17): complete = the streak grows;
+ * >= 20 XP without a complete slate = kept, not grown; else how far from keeping it.
+ */
+export function todayStreakWords(d: DashboardResponse): string {
+  if (d.streak.todayComplete) return 'complete (the streak grows)';
+  const xp = d.heatmap.find((h) => h.day === d.today)?.xp ?? 0;
+  if (xp >= PARTIAL_DAY_XP) return `not complete yet - kept with ${xp} XP; finish the slate to grow it`;
+  return `not complete yet - ${xp}/${PARTIAL_DAY_XP} XP keeps it, the full slate grows it`;
+}
+
 /**
  * `bootquest today` (B4): today's slate with done state, reviews due, streak + freeze tokens
- * and next-up per track. Every number is the server's (GET /api/dashboard); nothing is derived.
+ * and next-up per track. Every number is the server's (GET /api/dashboard); nothing is derived
+ * (rv wave C: the partial-day words and the Fundamentals step line read the same response).
  */
 export function formatToday(d: DashboardResponse, server: string): string {
   const s = d.streak;
@@ -183,9 +206,13 @@ export function formatToday(d: DashboardResponse, server: string): string {
   const lines = [`BootQuest today: ${d.today}  (${server})`, `Slate: ${done}/${items.length} done (${d.slate.status})`];
   if (items.length === 0) lines.push('  (no slate slots today)');
   for (const i of items) lines.push(`  [${i.done ? 'x' : ' '}] ${slateLabel(i)}`);
+  // rv wave C: the hero's Fundamentals step, by name (server nextUp puts the ladder step first)
+  const fund = items.find((i) => i.kind === 'fund-step');
+  const fundUnit = fund ? d.nextUp.find((n) => n.trackId === fund.track)?.unit : undefined;
+  if (fund && fundUnit && /^fund[/-]/.test(fundUnit.key)) lines.push(`Fundamentals step: ${fundUnit.title} (id ${fundUnit.id})${fund.done ? ' - done today' : ''}`);
   lines.push(
     `Reviews due: ${d.reviewQueue.due}`,
-    `Streak: ${s.current} day${s.current === 1 ? '' : 's'} (longest ${s.longest}) - today ${s.todayComplete ? 'complete' : 'not complete yet'}`,
+    `Streak: ${s.current} day${s.current === 1 ? '' : 's'} (longest ${s.longest}) - today ${todayStreakWords(d)}`,
     `Freeze tokens: ${s.tokens}`,
     'Next up:',
   );
@@ -193,8 +220,13 @@ export function formatToday(d: DashboardResponse, server: string): string {
   for (const n of d.nextUp) {
     lines.push(n.unit ? `  ${n.trackId.padEnd(9)} ${n.unit.title} [${n.unit.kind}] id ${n.unit.id}` : `  ${n.trackId.padEnd(9)} (nothing available)`);
   }
+  lines.push(SOLVE_IN_EDITOR);
   return lines.join('\n');
 }
+
+/** R4-17: any drill can be solved in your own editor; the CLI grades it like the web player. */
+export const SOLVE_IN_EDITOR =
+  'Solve a drill in your editor: put {"unitId": <id>, "file": "<your file>"} in a .bootquest.json, then bootquest run (free) / bootquest submit (recorded).';
 
 /**
  * `bootquest slate` (ab A1): the daily slate shape today and from tomorrow, as the server reports it
@@ -210,7 +242,7 @@ export function formatSlateSettings(s: SlateSettingsResponse, server: string, sa
   };
   const lines = [`BootQuest daily slate settings  (${server})`];
   if (saved) lines.push(`Saved. It takes effect tomorrow (${s.effectiveDay}); today's slate stays as it is.`);
-  else if (!s.configured) lines.push(`Not chosen yet: every track gives ${s.defaultSize} drill${s.defaultSize === 1 ? '' : 's'} a day (the default).`);
+  else if (!s.configured) lines.push('Not chosen yet: every drill set is off (the default day is the Fundamentals step + a senior rep).');
   lines.push(`Today (${s.today}):`, ...shape(s.todayTracks), `From tomorrow (${s.effectiveDay}):`, ...shape(s.tomorrowTracks));
   lines.push(
     `Change it (takes effect tomorrow): bootquest slate --tracks <a,b> [--size ${s.minSize}-${s.maxSize}] | --preset default|full (full = ${s.fullSize} per track)`,

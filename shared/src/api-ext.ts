@@ -24,7 +24,7 @@ const SlateDayS1 = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 /** Bounds of a per-track drill-set size (migration 017 CHECK; server engines/streak.ts). */
 export const SLATE_SIZE_MIN = 1;
 export const SLATE_SIZE_MAX = 10;
-/** `default` = every slate track on, unconfigured default size (1); `full` = every slate track on, 5 drills each. */
+/** `default` = every per-track drill set OFF (rv wave C: the Fundamentals step + a senior rep carry the day); `full` = every slate track on, 5 drills each. */
 export const SLATE_PRESETS = ['default', 'full'] as const;
 export const SlatePreset = z.enum(SLATE_PRESETS);
 export type SlatePreset = z.infer<typeof SlatePreset>;
@@ -73,9 +73,64 @@ export const SlateSettingsResponse = z
     todayTracks: z.array(SlateTrackShape),
     /** tomorrow's shape, including today's saved changes */
     tomorrowTracks: z.array(SlateTrackShape),
+    /** rv wave C (migration 022): the learner's day-shape choices today and from tomorrow (optional for older servers) */
+    learner: z.lazy(() => LearnerSettingsDto).optional(),
   })
   .strict();
 export type SlateSettingsResponse = z.infer<typeof SlateSettingsResponse>;
+
+// ---- rv wave C: one finishable day (learner settings, slot kinds, routing) -----------------------------
+
+/** The primary-language choices (the Fundamentals ladders; server engines/streak.ts PRIMARY_LANGUAGES). */
+export const PRIMARY_LANGUAGES = ['js', 'csharp', 'java'] as const;
+export const PrimaryLanguage = z.enum(PRIMARY_LANGUAGES);
+export type PrimaryLanguage = z.infer<typeof PrimaryLanguage>;
+/** The senior rep kinds the slate's senior slot suggests (rotating by weekday). */
+export const SeniorRepKind = z.enum(['design', 'kata', 'fund-senior']);
+export type SeniorRepKind = z.infer<typeof SeniorRepKind>;
+
+export const LearnerShapeDto = z
+  .object({
+    /** the hero's Fundamentals ladder and the slate's Fundamentals step */
+    primaryLanguage: PrimaryLanguage,
+    /** the one-time "pick your primary language" prompt was answered */
+    primaryChosen: z.boolean(),
+    /** the campaign-step slot is on (default off) */
+    campaignStep: z.boolean(),
+    /** the senior-rep slot is on (default on) */
+    seniorRep: z.boolean(),
+  })
+  .strict();
+export type LearnerShapeDto = z.infer<typeof LearnerShapeDto>;
+
+export const LearnerSettingsDto = z.object({ today: LearnerShapeDto, tomorrow: LearnerShapeDto }).strict();
+export type LearnerSettingsDto = z.infer<typeof LearnerSettingsDto>;
+
+/**
+ * PUT /settings/learner: any subset. Takes effect TOMORROW, except the FIRST primary-language pick, which
+ * applies today when today's Fundamentals step is not done yet (the one-time picker on day one).
+ */
+export const LearnerSettingsBody = z
+  .object({ primaryLanguage: PrimaryLanguage.optional(), campaignStep: z.boolean().optional(), seniorRep: z.boolean().optional() })
+  .strict()
+  .refine((b) => Object.keys(b).length > 0, 'nothing to change');
+export type LearnerSettingsBody = z.infer<typeof LearnerSettingsBody>;
+
+/**
+ * GET /routing: the archive (content/archive.json) and the paths (content/paths/*.json) resolved to live
+ * unit ids. Archived units stay live and searchable; lists hide them behind an "Archived" toggle. A path
+ * step lists its units in path order (archived and unknown keys skipped).
+ */
+export const RoutingResponse = z
+  .object({
+    archivedUnitIds: z.array(z.number().int().positive()),
+    paths: z.record(
+      z.string(),
+      z.array(z.object({ id: z.string(), title: z.string(), unitIds: z.array(z.number().int().positive()) }).strict()),
+    ),
+  })
+  .strict();
+export type RoutingResponse = z.infer<typeof RoutingResponse>;
 
 // ---- S2 truth layer (review cards, demotion) --------------------------------------------------------
 
@@ -163,7 +218,12 @@ export type DueResponse = z.infer<typeof DueResponse>;
  * nothing to link). Computed in the response mapping only: it is NEVER part of the stored `SlateItem`
  * (`daily_slate.items`, frozen in closed days). Absent on the review slot and on older servers.
  */
-export const SlateItemDtoExt = api.SlateItemDto.extend({ targetUnitId: z.number().int().positive().nullable().optional() }).strict();
+export const SlateItemDtoExt = api.SlateItemDto.extend({
+  // rv wave C: the Fundamentals step and the senior rep join the three original slot kinds
+  kind: z.enum(['drill-set', 'campaign-step', 'review-clear', 'fund-step', 'senior-rep']),
+  rep: z.enum(['design', 'kata', 'fund-senior']).optional(),
+  targetUnitId: z.number().int().positive().nullable().optional(),
+}).strict();
 export type SlateItemDtoExt = z.infer<typeof SlateItemDtoExt>;
 
 export const DashboardResponseExt = api.DashboardResponse.extend({

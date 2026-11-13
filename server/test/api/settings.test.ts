@@ -39,7 +39,8 @@ describe('A1 first run: GET /api/dashboard on an empty DB', () => {
   it('<= 6 actions, no review slot, nothing ticked; opening it for days never paints missed days', async () => {
     stockDrills(ctx);
     const d = await dashboard(ctx);
-    expect(shape(d)).toEqual(['drill:jsx1', 'drill:csharpx1', 'drill:javax1', 'drill:sysdesignx1']);
+    // rv wave C (D3): drill sets off by default; no Fundamentals ladder in this fixture -> the primary (JS) set stands in
+    expect(shape(d)).toEqual(['drill:jsx1']);
     expect(d.slate.items.length).toBeLessThanOrEqual(6);
     expect(d.slate.items.some((i) => i.slot === 'review' || i.done)).toBe(false);
     for (let i = 0; i < 5; i++) {
@@ -64,16 +65,16 @@ describe('A1 first run: GET /api/dashboard on an empty DB', () => {
 describe('A1 GET/PUT /api/settings/slate', () => {
   const ctx = useApi();
 
-  it('GET on an empty DB: unconfigured, every slate track on at the default size, effective tomorrow', async () => {
+  it('GET on an empty DB: unconfigured, every slate track OFF at the default size (rv wave C), effective tomorrow', async () => {
     const res = await request(ctx.app).get('/api/settings/slate');
     expect(res.status).toBe(200);
     const s = SlateSettingsResponse.parse(res.body);
     expect(s).toMatchObject({ configured: false, today: '2026-10-01', effectiveDay: '2026-10-02', defaultSize: 1, fullSize: 5, minSize: 1, maxSize: 10 });
     expect(s.todayTracks.map((t) => [t.trackId, t.enabled, t.size, t.configured])).toEqual([
-      ['js', true, 1, false],
-      ['csharp', true, 1, false],
-      ['java', true, 1, false],
-      ['sysdesign', true, 1, false],
+      ['js', false, 1, false],
+      ['csharp', false, 1, false],
+      ['java', false, 1, false],
+      ['sysdesign', false, 1, false],
     ]);
     expect(s.tomorrowTracks).toEqual(s.todayTracks);
     expectError(await request(ctx.app).get('/api/settings/slate?x=1'), 400, 'VALIDATION');
@@ -94,7 +95,7 @@ describe('A1 GET/PUT /api/settings/slate', () => {
     expect(res.status).toBe(200);
     const s = SlateSettingsResponse.parse(res.body);
     expect(s.configured).toBe(true);
-    expect(s.todayTracks.every((t) => t.enabled && t.size === 1)).toBe(true);
+    expect(s.todayTracks.every((t) => !t.enabled && t.size === 1)).toBe(true);
     expect(s.tomorrowTracks.map((t) => [t.trackId, t.enabled, t.size])).toEqual([
       ['js', false, 1],
       ['csharp', false, 1],
@@ -121,12 +122,12 @@ describe('A1 GET/PUT /api/settings/slate', () => {
     expect(day3.heatmap.find((h) => h.day === '2026-10-01')!.status).toBe(status1);
   });
 
-  it('presets: full = 5 per track, default = back to the default size; rows are appended, never rewritten', async () => {
+  it('presets: full = 5 per track, default = every drill set off again (rv wave C); rows are appended, never rewritten', async () => {
     const full = SlateSettingsResponse.parse((await put(ctx, { preset: 'full' })).body);
     expect(full.tomorrowTracks.map((t) => [t.enabled, t.size])).toEqual(Array(4).fill([true, 5]));
     expect(rows(ctx)).toBe(4);
     const def = SlateSettingsResponse.parse((await put(ctx, { preset: 'default' })).body);
-    expect(def.tomorrowTracks.map((t) => [t.enabled, t.size, t.configured])).toEqual(Array(4).fill([true, 1, true]));
+    expect(def.tomorrowTracks.map((t) => [t.enabled, t.size, t.configured])).toEqual(Array(4).fill([false, 1, true]));
     expect(rows(ctx)).toBe(8);
     // an unlisted track keeps tomorrow's shape
     const one = SlateSettingsResponse.parse((await put(ctx, { tracks: [{ trackId: 'java', enabled: true, size: 2 }] })).body);
@@ -134,7 +135,7 @@ describe('A1 GET/PUT /api/settings/slate', () => {
     expect(rows(ctx)).toBe(9);
   });
 
-  it('refusals write nothing: bad shape, unknown / locked / drill-less track, duplicates, size bounds, every track off', async () => {
+  it('refusals write nothing: bad shape, unknown / locked / drill-less track, duplicates, size bounds (every track off is allowed now)', async () => {
     const cases: Array<[unknown, string]> = [
       [{}, 'body'],
       [{ preset: 'huge' }, 'body'],
@@ -147,19 +148,18 @@ describe('A1 GET/PUT /api/settings/slate', () => {
       [{ tracks: [{ trackId: 'js', enabled: 'yes' }] }, 'body'],
       [{ tracks: [{ trackId: 'agentic', enabled: true }] }, 'body.tracks.0.trackId'],
       [{ tracks: [{ trackId: 'js', enabled: true }, { trackId: 'js', enabled: false }] }, 'body.tracks.1.trackId'],
-      [{ tracks: ['js', 'csharp', 'java', 'sysdesign'].map((trackId) => ({ trackId, enabled: false })) }, 'body'],
     ];
     for (const [body, path] of cases) expectError(await put(ctx, body), 400, 'VALIDATION', path);
     ctx.db.run(`UPDATE track SET locked = 1 WHERE id = 'java'`);
     expectError(await put(ctx, { tracks: [{ trackId: 'java', enabled: true }] }), 400, 'VALIDATION', 'body.tracks.0.trackId');
-    // switching off the last track that is still on is refused too
+    // rv wave C: every drill set off is a valid day (the Fundamentals step + a senior rep carry it)
     ctx.db.run(`UPDATE track SET locked = 0 WHERE id = 'java'`);
     expect((await put(ctx, { tracks: ['js', 'csharp', 'java'].map((trackId) => ({ trackId, enabled: false })) })).status).toBe(200);
-    expectError(await put(ctx, { tracks: [{ trackId: 'sysdesign', enabled: false }] }), 400, 'VALIDATION', 'body');
-    expect(rows(ctx)).toBe(3);
+    expect((await put(ctx, { tracks: [{ trackId: 'sysdesign', enabled: false }] })).status).toBe(200);
+    expect(rows(ctx)).toBe(4);
     // the honesty guard: a PUT without a JSON content type never reaches the route
     const raw = await request(ctx.app).put('/api/settings/slate').set('Content-Type', 'text/plain').send('{"preset":"full"}');
     expectError(raw, 415, 'UNSUPPORTED_MEDIA_TYPE');
-    expect(rows(ctx)).toBe(3);
+    expect(rows(ctx)).toBe(4);
   });
 });

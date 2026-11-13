@@ -95,7 +95,7 @@ describe('Fundamentals section (Campaign page)', () => {
   it('the campaign acts follow the compact card directly (the first act is not pushed below a 20-topic list)', async () => {
     renderApp('/campaign/js');
     const section = await screen.findByTestId('fundamentals');
-    const acts = await screen.findByRole('tabpanel', { name: 'Campaign acts' });
+    const acts = await screen.findByRole('list', { name: 'Campaign acts' });
     expect(section.compareDocumentPosition(acts) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(within(section).getByTestId('fund-all')).not.toBeVisible();
   });

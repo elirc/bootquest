@@ -86,10 +86,10 @@ export function sectionCounts(units: readonly UnitSummary[]): Record<UnitSection
 
 /** Per-group done/total over the UNFILTERED list: the headers show these even while filters
  *  narrow the rows, so they always agree with the global "Showing X of Y · Z done" line. */
-export function groupTotals(units: readonly UnitSummary[]): ReadonlyMap<string, { done: number; total: number }> {
+export function groupTotals(units: readonly UnitSummary[], labelOf: (u: UnitSummary) => string = groupLabelOf): ReadonlyMap<string, { done: number; total: number }> {
   const totals = new Map<string, { done: number; total: number }>();
   for (const u of units) {
-    const label = groupLabelOf(u);
+    const label = labelOf(u);
     let t = totals.get(label);
     if (!t) {
       t = { done: 0, total: 0 };
@@ -113,11 +113,50 @@ export function moduleNumberOf(key: string): number | null {
   return m ? Number(m[1]) : null;
 }
 
-export type GroupTier = 'core' | 'repo';
+export type GroupTier = 'path' | 'core' | 'repo';
 
 /** Section headings for a track without campaign acts. */
 export function tierLabels(trackId: string): Record<GroupTier, string> {
-  return { core: 'Core drills', repo: trackId === 'sysdesign' ? 'Design a real system' : 'Real-repo practice' };
+  return { path: 'Path', core: 'Core drills', repo: trackId === 'sysdesign' ? 'Design a real system' : 'Real-repo practice' };
+}
+
+// ---------------------------------------------------------------- rv wave C: paths + archive (GET /routing)
+
+/** One step of a track's path (content/paths/<track>.json resolved to unit ids, in path order). */
+export interface PathStep {
+  id: string;
+  title: string;
+  unitIds: number[];
+}
+
+/** Path groups are labelled "Path NN · <step title>", so they sort in path order and tierGroups puts them first. */
+export const PATH_LABEL_PREFIX = 'Path ';
+
+/**
+ * A unit's group label with the track's path applied: a unit on the path is listed under its step
+ * (the first step that names it); every other unit keeps groupLabelOf.
+ */
+export function pathLabeler(steps: readonly PathStep[] | undefined): (u: Pick<UnitSummary, 'id' | 'key' | 'kind'>) => string {
+  if (!steps || steps.length === 0) return groupLabelOf;
+  const byUnit = new Map<number, string>();
+  steps.forEach((s, i) => {
+    const label = `${PATH_LABEL_PREFIX}${String(i + 1).padStart(2, '0')} · ${s.title}`;
+    for (const id of s.unitIds) if (!byUnit.has(id)) byUnit.set(id, label);
+  });
+  return (u) => byUnit.get(u.id) ?? groupLabelOf(u);
+}
+
+/** The order a unit has on the path (units off the path sort after, in served order). */
+export function pathOrder(steps: readonly PathStep[] | undefined): (u: Pick<UnitSummary, 'id'>) => number {
+  const at = new Map<number, number>();
+  let n = 0;
+  for (const s of steps ?? []) for (const id of s.unitIds) if (!at.has(id)) at.set(id, n++);
+  return (u) => at.get(u.id) ?? Number.MAX_SAFE_INTEGER;
+}
+
+/** Units minus the archived ones (content/archive.json), unless the Archived toggle is on. */
+export function withoutArchived<T extends Pick<UnitSummary, 'id'>>(units: readonly T[], archived: ReadonlySet<number>, show: boolean): T[] {
+  return show ? [...units] : units.filter((u) => !archived.has(u.id));
 }
 
 export interface GroupTierSection {
@@ -132,13 +171,17 @@ export interface GroupTierSection {
 export function tierGroups(groups: readonly UnitGroup[]): GroupTierSection[] {
   const numbered: { n: number; g: UnitGroup }[] = [];
   const rest: UnitGroup[] = [];
+  // rv wave C: path steps first, in path order (their labels are numbered)
+  const path = groups.filter((g) => g.label.startsWith(PATH_LABEL_PREFIX));
   for (const g of groups) {
+    if (g.label.startsWith(PATH_LABEL_PREFIX)) continue;
     const nums = g.units.map((u) => moduleNumberOf(u.key)).filter((n): n is number => n !== null);
     if (nums.length > 0) numbered.push({ n: Math.min(...nums), g });
     else rest.push(g);
   }
   numbered.sort((a, b) => a.n - b.n || a.g.label.localeCompare(b.g.label, 'en'));
   const out: GroupTierSection[] = [];
+  if (path.length) out.push({ tier: 'path', groups: [...path].sort((a, b) => a.label.localeCompare(b.label, 'en')) });
   if (numbered.length) out.push({ tier: 'core', groups: numbered.map((x) => x.g) });
   if (rest.length) out.push({ tier: 'repo', groups: rest });
   return out;
@@ -148,13 +191,13 @@ export function tierGroups(groups: readonly UnitGroup[]): GroupTierSection[] {
  * Filter then group. The query matches (case-insensitively) the title, the group label or the key.
  * Groups are sorted by label; units keep the order the server served them in.
  */
-export function groupUnits(units: readonly UnitSummary[], f: UnitFilter): UnitGroup[] {
+export function groupUnits(units: readonly UnitSummary[], f: UnitFilter, labelOf: (u: UnitSummary) => string = groupLabelOf): UnitGroup[] {
   const q = f.query.trim().toLowerCase();
   const byLabel = new Map<string, UnitGroup>();
   for (const u of units) {
     if (f.section !== 'all' && sectionOfUnit(u) !== f.section) continue;
     if (f.hideDone && u.state === 'done') continue;
-    const label = groupLabelOf(u);
+    const label = labelOf(u);
     if (q && !u.title.toLowerCase().includes(q) && !label.toLowerCase().includes(q) && !u.key.toLowerCase().includes(q)) continue;
     let group = byLabel.get(label);
     if (!group) {

@@ -14,6 +14,9 @@ import type { z } from 'zod';
 // ab S1: slate settings (the learner's daily slate shape; shared/src/api-ext.ts S1 section)
 import type { SlateSettingsBody, SlateSettingsResponse, SlateTrackShape } from '@bootquest/shared/api-ext';
 export type { SlateSettingsBody, SlateSettingsResponse, SlateTrackShape };
+// rv wave C: learner settings (primary language, campaign step, senior rep) + the archive/paths routing
+import type { LearnerSettingsBody, LearnerShapeDto, PrimaryLanguage, RoutingResponse, SeniorRepKind } from '@bootquest/shared/api-ext';
+export type { LearnerSettingsBody, LearnerShapeDto, PrimaryLanguage, RoutingResponse, SeniorRepKind };
 import type {
   AnswerRecordedResponse,
   AttemptDetailResponse,
@@ -346,6 +349,10 @@ export interface BootQuestApi {
    * moves). 400 VALIDATION for a track with no drill slot, a duplicate, a size outside 1-10, or every track off.
    */
   putSlateSettings(body: SlateSettingsBody): Promise<SlateSettingsResponse>;
+  /** rv wave C: PUT /api/settings/learner — primary language / campaign step / senior rep (effective tomorrow; the first language pick applies today). */
+  putLearnerSettings(body: LearnerSettingsBody): Promise<SlateSettingsResponse>;
+  /** rv wave C: GET /api/routing — archived unit ids + the sysdesign / agentic paths as unit ids. */
+  getRouting(): Promise<RoutingResponse>;
   // ---- ab wave S3: weak spots + due now (read-only)
   /** GET /api/stats/weak — per repo / drill module, released keys only, recency-weighted, capped. */
   getWeakSpots(): Promise<WeakSpotsResponse>;

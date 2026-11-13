@@ -16,7 +16,7 @@ import { insertCheck, insertUnit } from '../../src/store/content.ts';
 import { writeCampaignFixture } from '../campaign-fixture.ts';
 import { localNoon, makeTempDb, type TempDb } from '../helpers.ts';
 import { fakeDrillJs } from './harness.ts';
-import { legacySlate } from '../slate-fixtures.ts';
+import { legacySlate, preRvLearner } from '../slate-fixtures.ts';
 
 /** study-quiz stand-in: passes iff the answer is "pass" (the real quiz gate arrives with seed:quests). */
 const fakeStudyQuiz: Runner = async (_spec, sub) =>
@@ -38,6 +38,7 @@ function useCampaignApi(): Ctx {
     ctx.db = ctx.tmp.db;
     ctx.clock = fixedClock(localNoon(2026, 10, 1));
     loadCampaignIntoDb(ctx.db, readCampaign(writeCampaignFixture(join(ctx.tmp.dir, 'campaign'))), ctx.clock);
+    preRvLearner(ctx.db); // rv wave C: the campaign step is off by default; these pin it on
     ctx.app = createApp({ db: ctx.db, clock: ctx.clock, runners: { 'drill-js': fakeDrillJs, 'study-quiz': fakeStudyQuiz }, content: mapContentStore({}) });
   });
   afterEach(() => ctx.tmp.cleanup());

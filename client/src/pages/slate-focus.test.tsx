@@ -1,15 +1,15 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { createHttpApi } from '../api/http';
 import { createMockApi } from '../api/mock';
 import { ApiError, type BootQuestApi, type SlateSettingsBody } from '../api/types';
 import { renderApp } from '../test/render';
 
-// ab S1 (A1): the daily slate settings: http binding, the mock's ledger, and the dashboard's
-// "Choose your focus" card / summary line. A save takes effect TOMORROW; today's slate never moves.
+// ab S1 (A1): the daily slate settings: http binding, the mock's ledger, and the "Choose your focus" card /
+// summary line. A save takes effect TOMORROW; today's slate never moves. rv wave C: the card lives on
+// /settings (no longer on the dashboard) and every drill set is off by default.
 
 const focusCard = () => screen.findByTestId('slate-focus');
-const slateSlots = () => [...document.querySelectorAll<HTMLElement>('.slate [data-slot]')].map((e) => `${e.dataset.slot}:${e.className}`);
 
 /** the mock with every PUT body recorded */
 function recording(base = createMockApi({ slateSettings: 'unconfigured' })): { api: BootQuestApi; puts: SlateSettingsBody[] } {
@@ -46,15 +46,15 @@ describe('http client: /settings/slate', () => {
 });
 
 describe('mock slate settings (mirrors server/src/api/settings-service.ts)', () => {
-  it('unconfigured: every drill-slot track on at size 1; a PUT changes tomorrow only; refusals change nothing', async () => {
+  it('unconfigured: every drill-slot track OFF at size 1 (rv wave C); a PUT changes tomorrow only; refusals change nothing', async () => {
     const api = createMockApi({ slateSettings: 'unconfigured' });
     const s0 = await api.getSlateSettings();
     expect(s0).toMatchObject({ configured: false, today: '2026-10-07', effectiveDay: '2026-10-08', defaultSize: 1, fullSize: 5 });
     expect(s0.todayTracks.map((t) => [t.trackId, t.enabled, t.size])).toEqual([
-      ['js', true, 1],
-      ['csharp', true, 1],
-      ['java', true, 1],
-      ['sysdesign', true, 1],
+      ['js', false, 1],
+      ['csharp', false, 1],
+      ['java', false, 1],
+      ['sysdesign', false, 1],
     ]);
     const s1 = await api.putSlateSettings({
       tracks: [
@@ -76,7 +76,6 @@ describe('mock slate settings (mirrors server/src/api/settings-service.ts)', () 
       { tracks: [{ trackId: 'agentic', enabled: true }] },
       { tracks: [{ trackId: 'java', enabled: true }, { trackId: 'java', enabled: false }] },
       { tracks: [{ trackId: 'java', enabled: true, size: 11 }] },
-      { tracks: [{ trackId: 'java', enabled: false }, { trackId: 'sysdesign', enabled: false }] },
     ];
     for (const b of refusals) await expect(api.putSlateSettings(b)).rejects.toMatchObject({ status: 400, code: 'VALIDATION' });
     expect(await api.getSlateSettings()).toEqual(s1);
@@ -91,21 +90,18 @@ describe('mock slate settings (mirrors server/src/api/settings-service.ts)', () 
   });
 });
 
-describe('dashboard: Choose your focus (ab A1)', () => {
-  it('day one: the card is open; Save sends the choice and says it starts tomorrow; today\'s slate does not move', async () => {
+describe('/settings: Choose your focus (ab A1, moved off the dashboard in rv wave C)', () => {
+  it('day one: the card is open (every set off); Save sends the choice and says it starts tomorrow', async () => {
     const { api, puts } = recording();
-    const { user } = renderApp('/', api);
+    const { user } = renderApp('/settings', api);
     const card = await focusCard();
     expect(within(card).getByRole('heading', { name: 'Choose your focus' })).toBeInTheDocument();
-    expect(card).toHaveTextContent('Until you choose, every track gives 1 drill a day.');
-    expect(within(card).getAllByRole('checkbox').map((c) => (c as HTMLInputElement).checked)).toEqual([true, true, true, true]);
-    expect(within(card).getByTestId('slate-focus-when')).toHaveTextContent("Takes effect tomorrow (Oct 8); today's slate stays as it is.");
-    await waitFor(() => expect(slateSlots().length).toBeGreaterThan(0));
-    const before = slateSlots();
-
-    await user.click(within(card).getByRole('checkbox', { name: 'JS/TS' }));
-    await user.click(within(card).getByRole('checkbox', { name: 'C#/.NET' }));
+    expect(card).toHaveTextContent('Until you choose, every drill set is off: the Fundamentals step and the senior rep carry the day.');
+    expect(within(card).getAllByRole('checkbox').map((c) => (c as HTMLInputElement).checked)).toEqual([false, false, false, false]);
     expect(within(card).getByRole('combobox', { name: 'JS/TS drills per day' })).toBeDisabled();
+    await user.click(within(card).getByRole('checkbox', { name: 'Java' }));
+    await user.click(within(card).getByRole('checkbox', { name: 'System design' }));
+    expect(within(card).getByTestId('slate-focus-when')).toHaveTextContent("Takes effect tomorrow (Oct 8); today's slate stays as it is.");
     await user.selectOptions(within(card).getByRole('combobox', { name: 'Java drills per day' }), '3');
     await user.selectOptions(within(card).getByRole('combobox', { name: 'System design drills per day' }), '3');
     await user.click(within(card).getByRole('button', { name: 'Save' }));
@@ -123,26 +119,23 @@ describe('dashboard: Choose your focus (ab A1)', () => {
         ],
       },
     ]);
-    expect(slateSlots()).toEqual(before);
   });
 
-  it('every track off: Save is disabled and the card says why; a refused save shows the reason', async () => {
+  it('every track off is a valid choice (rv wave C); a refused save shows the reason', async () => {
     const base = createMockApi({ slateSettings: 'unconfigured' });
-    const api: BootQuestApi = { ...base, putSlateSettings: () => Promise.reject(new ApiError(400, 'VALIDATION', 'at least one track must stay on the daily slate')) };
-    const { user } = renderApp('/', api);
+    const api: BootQuestApi = { ...base, putSlateSettings: () => Promise.reject(new ApiError(400, 'VALIDATION', 'no slate track to set')) };
+    const { user } = renderApp('/settings', api);
     const card = await focusCard();
-    for (const name of ['JS/TS', 'C#/.NET', 'Java', 'System design']) await user.click(within(card).getByRole('checkbox', { name }));
-    expect(within(card).getByRole('button', { name: 'Save' })).toBeDisabled();
-    expect(within(card).getByTestId('slate-focus-when')).toHaveTextContent('Keep at least one track on.');
-    await user.click(within(card).getByRole('checkbox', { name: 'Java' }));
+    expect(within(card).getByRole('button', { name: 'Save' })).toBeEnabled();
+    expect(within(card).getByTestId('slate-focus-when')).toHaveTextContent('Every drill set off: the Fundamentals step and the senior rep carry the day (from Oct 8).');
     await user.click(within(card).getByRole('button', { name: 'Save' }));
-    expect(await within(card).findByRole('alert')).toHaveTextContent('at least one track must stay on the daily slate (VALIDATION)');
+    expect(await within(card).findByRole('alert')).toHaveTextContent('no slate track to set (VALIDATION)');
     expect(within(card).getByRole('button', { name: 'Save' })).toBeEnabled();
   });
 
   it('configured: no card, a one-line summary; Change reopens the form with Cancel', async () => {
     const { api, puts } = recording(createMockApi());
-    const { user } = renderApp('/', api);
+    const { user } = renderApp('/settings', api);
     const summary = await screen.findByTestId('slate-focus-summary');
     expect(summary).toHaveTextContent('Daily slate from Oct 8: JS/TS ×5 · C#/.NET ×5 · Java ×5 · System design ×5');
     expect(screen.queryByRole('heading', { name: 'Choose your focus' })).toBeNull();
@@ -155,19 +148,12 @@ describe('dashboard: Choose your focus (ab A1)', () => {
     expect(puts).toEqual([]);
   });
 
-  it('a failed settings read never blocks the dashboard: a one-line note with Retry', async () => {
-    const base = createMockApi();
-    let fail = true;
-    const api: BootQuestApi = {
-      ...base,
-      getSlateSettings: () => (fail ? Promise.reject(new ApiError(0, 'NETWORK', 'down')) : base.getSlateSettings()),
-    };
-    const { user } = renderApp('/', api);
-    const note = await screen.findByTestId('slate-focus-error');
-    expect(note).toHaveTextContent('Daily slate settings could not be loaded: Could not reach the BootQuest server. (NETWORK)');
+  it('a failed settings read never blocks the dashboard (no prompt, the slate still renders)', async () => {
+    const base = createMockApi({ slateSettings: 'unconfigured' });
+    const api: BootQuestApi = { ...base, getSlateSettings: () => Promise.reject(new ApiError(0, 'NETWORK', 'down')) };
+    renderApp('/', api);
+    await screen.findByTestId('hero-go', {}, { timeout: 15_000 });
     expect(document.querySelector('.slate')).not.toBeNull();
-    fail = false;
-    await user.click(within(note).getByRole('button', { name: 'Retry' }));
-    expect(await screen.findByTestId('slate-focus-summary')).toBeInTheDocument();
+    expect(screen.queryByTestId('primary-language')).toBeNull();
   });
 });

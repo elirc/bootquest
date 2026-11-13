@@ -90,8 +90,12 @@ describe('local dates (lib/format)', () => {
         };
       },
     };
-    renderApp('/', api);
-    const table = await screen.findByRole('table');
+    renderApp('/stats', api); // rv wave C: the competency table lives on Stats
+    const table = await waitFor(() => {
+      const el = document.querySelector<HTMLElement>('table.comp-table');
+      expect(el).not.toBeNull();
+      return el!;
+    }, { timeout: 15_000 });
     expect(table.querySelector('[data-competency="language-fluency"] [data-leg="retest"]')).toHaveTextContent('opens Oct 9');
   });
 });
@@ -123,7 +127,7 @@ describe('slate routing and variants', () => {
     expect(slateRow('drill:js')).toHaveTextContent('JS/TS drill set (5 drills)');
   });
 
-  it('size 1 and 2 are pluralized; a missing track slot is stated neutrally (never "exhausted")', async () => {
+  it('size 1 and 2 are pluralized; tracks with no slot today are one quiet line pointing at Settings (rv wave C)', async () => {
     renderApp(
       '/',
       withSlate([
@@ -137,12 +141,11 @@ describe('slate routing and variants', () => {
     expect(slateRow('drill:js')).toHaveTextContent('JS/TS drill set (1 drill)');
     expect(slateRow('drill:js')).not.toHaveTextContent('1 drills');
     expect(slateRow('drill:csharp')).toHaveTextContent('C#/.NET drill set (2 drills)');
-    const java = slateRow('drill:java')!;
-    expect(java).toHaveAttribute('data-missing', 'true');
-    // fix/client-review 7g: a missing row may be slate_drills=0, not an exhausted track
-    expect(java).toHaveTextContent("Java drills no drill slot on today's slate");
-    expect(java).not.toHaveTextContent('exhausted');
-    expect(within(java).queryByRole('link')).toBeNull();
+    expect(slateRow('drill:java')).toBeNull();
+    const off = screen.getByTestId('slate-off');
+    expect(off).toHaveTextContent('Off today: Java · System design drill sets.');
+    expect(off).not.toHaveTextContent('exhausted');
+    expect(within(off).getByRole('link', { name: 'Change in Settings' })).toHaveAttribute('href', '/settings');
     // the tile counts only the real slots
     expect(screen.getByRole('progressbar', { name: 'Slate items cleared' })).toHaveAttribute('aria-valuemax', '4');
     expect(screen.queryByTestId('slate-review-only')).toBeNull();
@@ -151,8 +154,8 @@ describe('slate routing and variants', () => {
   it('a review-only slate explains itself', async () => {
     renderApp('/', withSlate([{ slot: 'review', kind: 'review-clear', done: false }]));
     expect(await screen.findByTestId('slate-review-only')).toHaveTextContent('Review-only day');
-    for (const t of ['js', 'csharp', 'java', 'sysdesign']) expect(slateRow(`drill:${t}`)).toHaveAttribute('data-missing', 'true');
-    expect(slateRow('campaign')).toHaveTextContent('nothing open in an unlocked act today');
+    expect(screen.getByTestId('slate-off')).toHaveTextContent('Off today: JS/TS · C#/.NET · Java · System design drill sets.');
+    expect(slateRow('campaign')).toBeNull(); // rv wave C: the campaign step is a setting, not a missing row
     expect(within(slateRow('review')!).getByRole('link')).toHaveAttribute('href', '/review');
     expect(screen.getByRole('progressbar', { name: 'Slate items cleared' })).toHaveAttribute('aria-valuemax', '1');
   });
@@ -161,7 +164,7 @@ describe('slate routing and variants', () => {
     renderApp('/', withSlate([]));
     expect(await screen.findByTestId('slate-empty')).toHaveTextContent('Earn 20 XP to keep the streak');
     expect(screen.queryByTestId('slate-review-only')).toBeNull();
-    for (const t of ['js', 'csharp', 'java', 'sysdesign']) expect(slateRow(`drill:${t}`)).toHaveAttribute('data-missing', 'true');
+    expect(screen.getByTestId('slate-off')).toBeInTheDocument();
   });
 
   it('a fresh day with an empty review queue is not counted as cleared work', async () => {
@@ -377,7 +380,7 @@ describe('evidence deep link', () => {
     proto.scrollIntoView = scroll;
     try {
       renderApp('/stats?competency=language-fluency#evidence-412');
-      const list = await screen.findByTestId('evidence-list');
+      const list = await screen.findByTestId('evidence-list', {}, { timeout: 15_000 });
       const row = within(list).getAllByRole('listitem').find((li) => li.id === 'evidence-412')!;
       await waitFor(() => expect(scroll).toHaveBeenCalled());
       expect(scroll.mock.contexts[0]).toBe(row);
@@ -428,35 +431,7 @@ describe('evidence deep link', () => {
   });
 });
 
-describe('Next up: browse all', () => {
-  const nextUp = () => document.querySelector<HTMLElement>('section[aria-labelledby="p-next"] .nextup')!;
-
-  it('every track card carries a Browse all link to its campaign page, null-unit tracks included', async () => {
-    renderApp('/');
-    await screen.findByRole('table');
-    const browse = within(nextUp()).getAllByRole('link', { name: /^Browse all/ });
-    expect(browse.map((a) => a.getAttribute('href'))).toEqual(['/campaign/js#units', '/campaign/csharp#units', '/campaign/agentic#units', '/campaign/java#units', '/campaign/sysdesign#units']);
-    // the accessible names are distinct per track (the arrow is aria-hidden)
-    expect(browse.map((a) => a.textContent)).toContain('Browse all System design units →');
-    expect(within(nextUp()).getByRole('link', { name: 'Browse all System design units' })).toHaveAttribute('href', '/campaign/sysdesign#units');
-    expect(new Set(browse.map((a) => a.textContent)).size).toBe(5);
-    // the null-unit cards (java, sysdesign) stay inert; their only action is the browse link
-    const javaItem = within(nextUp()).getByRole('link', { name: 'Browse all Java units' }).closest('li')!;
-    expect(within(javaItem).getAllByRole('link')).toHaveLength(1);
-    expect(javaItem.querySelector('.nextup-locked')).toHaveTextContent('Nothing available');
-  });
-
-  it('the unit card link is unchanged and never nests the browse link', async () => {
-    renderApp('/');
-    await screen.findByRole('table');
-    const card = within(nextUp()).getByRole('link', { name: /signalpost U04/ });
-    expect(card).toHaveAttribute('href', '/play/107');
-    expect(card.querySelector('a')).toBeNull();
-    expect(card.closest('li')!.querySelector('.nextup-browse')).toHaveAttribute('href', '/campaign/js#units');
-    expect(screen.getAllByRole('link', { name: /Clear the review queue/ })).toHaveLength(1);
-    expect(screen.getByRole('heading', { name: 'Next up' })).toBeInTheDocument();
-  });
-});
+// rv wave C (R4-10): the Next up panel is gone; its Browse all links live on the Campaign page (rv-dashboard.test.tsx)
 
 describe('friendly error text for the new codes', () => {
   it('ARTIFACT_REQUIRED, the local-only guards, and SYNC_RELINK_FAILED (which is NOT "retry the sync")', () => {

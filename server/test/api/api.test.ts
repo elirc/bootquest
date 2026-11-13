@@ -27,7 +27,7 @@ import { insertUnit } from '../../src/store/content.ts';
 import { ledgerCounts } from '../../src/store/queries.ts';
 import { graduate, promoteTo } from '../helpers.ts';
 import { fixture, servedQuizAnswer, useApi } from './harness.ts';
-import { cardOnFile, legacySlate } from '../slate-fixtures.ts';
+import { abSlate, cardOnFile, legacySlate } from '../slate-fixtures.ts';
 
 /** An unpassed drill unit (stub drill-js check) — a track with no drills left has no slate slot (fix/slate). */
 function seedDrill(ctx: { db: Parameters<typeof insertUnit>[0]; clock: Parameters<typeof insertUnit>[2] }, key: string, track: string): number {
@@ -299,6 +299,7 @@ describe('POST /api/units/:id/submit', () => {
   });
 
   it('five first-ever DRILL passes on a track tick its slate slot; five quiz passes do not', async () => {
+    abSlate(ctx.db); // rv wave C: drill sets are off by default; pin the ab slate (every track on)
     const drills = Array.from({ length: 5 }, (_, i) => seedDrill(ctx, `slate:d${i}`, 'csharp'));
     for (let i = 0; i < 5; i++) {
       const id = insertUnit(
@@ -642,15 +643,18 @@ describe('GET /api/dashboard', () => {
     expect(d.competencies.find((c) => c.id === 'communication')!.lastEvidence).toBeNull();
     expect(d.reviewQueue.due).toBe(1);
     // no campaign quests are seeded: the campaign slot is absent rather than impossible
-    // ab A1: no review slot yet (the only card was created today); 1 drill per track by default
-    expect(d.slate.items.map((i) => i.slot)).toEqual(['drill:js', 'drill:csharp', 'drill:java']);
-    expect(d.slate.items.map((i) => (i.kind === 'drill-set' ? i.size : null))).toEqual([1, 1, 1]);
+    // ab A1: no review slot yet (the only card was created today); rv wave C (D3): every drill set is off by
+    // default and this fixture has no Fundamentals ladder, so the primary (JS) set stands in for the step
+    expect(d.slate.items.map((i) => i.slot)).toEqual(['drill:js']);
+    expect(d.slate.items.map((i) => (i.kind === 'drill-set' ? i.size : null))).toEqual([1]);
     expect(d.nextUp.map((n) => n.trackId)).toEqual(['js', 'csharp', 'java', 'agentic', 'sysdesign']); // every unlocked track
     expect(d.nextUp.find((n) => n.trackId === 'js')!.unit!.key).toBe('fixture:quiz-typeof');
-    expect(d.streak).toMatchObject({ current: 0, tokens: 0, todayComplete: false });
+    // rv wave C (D5): the one default drill passed today completes the default day, so the streak shows +1
+    expect(d.streak).toMatchObject({ current: 1, tokens: 0, todayComplete: true });
   });
 
   it('streak and heatmap close elapsed days under the injected clock', async () => {
+    abSlate(ctx.db); // rv wave C: pin the ab slate (every drill set on) so the csharp set stays open
     seedDrill(ctx, 'heat:cs', 'csharp'); // csharp still has an unpassed drill: its set is not done
     await request(ctx.app).post(`/api/units/${ctx.id('fixture:drill-add')}/submit`).send({ code: fixture.submissions.addRight });
     await request(ctx.app).post(`/api/units/${ctx.id('fixture:drill-mul')}/submit`).send({ code: 'export const mul = (a, b) => a * b;' });

@@ -131,7 +131,7 @@ describe('pickHero (council ruling 5)', () => {
     });
   });
 
-  it('then the first undone slate item (not the review slot), then Next up; never an explain-back', async () => {
+  it('then the first undone slate item (not the review slot), then Next up (rv wave C: the server routes it, explain-backs included)', async () => {
     const d = await dash({ reviewQueue: { due: 0 } });
     // the fixture slate: drill:js done, drill:csharp open (target 202)
     expect(pickHero(d, null)).toMatchObject({ kind: 'slate', href: '/play/202', label: 'Start: C#/.NET drill set (5 drills)' });
@@ -141,10 +141,11 @@ describe('pickHero (council ruling 5)', () => {
       ...allDone,
       nextUp: [{ trackId: 'agentic' as const, unit: { id: 999, key: 'ladder/g2/x/1', title: 'Explain back: x', kind: 'explain-back' as const } }, ...allDone.nextUp],
     };
-    expect(pickHero(ebFirst, null)).toMatchObject({ kind: 'next', href: '/play/107' });
-    // a campaign step whose target Next up lists as an explain-back is skipped too
-    const ebStep = { ...ebFirst, slate: { ...ebFirst.slate, items: [{ slot: 'campaign', kind: 'campaign-step' as const, done: false, targetUnitId: 999 }] } };
-    expect(pickHero(ebStep, null)).toMatchObject({ kind: 'next', href: '/play/107' });
+    // rv wave C: next-up is server-routed (paths, archive, G3/G4 order), so an explain-back it names is offered
+    expect(pickHero(ebFirst, null)).toMatchObject({ kind: 'next', href: '/play/999' });
+    // and a senior-rep slot that links to a DESIGN IT set is the point of that slot
+    const ebStep = { ...ebFirst, slate: { ...ebFirst.slate, items: [{ slot: 'senior', kind: 'senior-rep' as const, rep: 'design' as const, done: false, targetUnitId: 999 }] } };
+    expect(pickHero(ebStep, null)).toMatchObject({ kind: 'slate', href: '/play/999', label: 'Start: Senior rep · DESIGN IT' });
     const nothing = { ...allDone, nextUp: allDone.nextUp.map((n) => ({ ...n, unit: null })) };
     expect(pickHero(nothing, null)).toMatchObject({ kind: 'none', href: '/campaign' });
   });
@@ -179,14 +180,20 @@ describe('dashboard hero (rendered)', () => {
     expect(context).toHaveTextContent('Fundamentals · JS/TS · Topic 1 of 2 · drill 2 of 2 · ≈5 min');
   });
 
-  it('JS off the slate: only the C# ladder is read; with none there, the first undone slate item', async () => {
+  // rv wave C (D3): the hero walks ONE ladder, the primary language (learner settings)
+  const primary = (lang: 'js' | 'csharp' | 'java') => (s: SlateSettingsResponse): SlateSettingsResponse => {
+    const l = { primaryLanguage: lang, primaryChosen: true, campaignStep: false, seniorRep: true };
+    return { ...s, learner: { today: l, tomorrow: l } };
+  };
+
+  it('primary C#: only the C# ladder is read; with none there, the first undone slate item', async () => {
     const asked: TrackId[] = [];
     const base = createMockApi();
     renderApp(
       '/',
       api({
         due: 0,
-        settings: (s) => ({ ...s, todayTracks: s.todayTracks.map((t) => (t.trackId === 'js' ? { ...t, enabled: false } : t)) }),
+        settings: primary('csharp'),
         fund: (t) => {
           asked.push(t);
           return base.getFundamentals(t);
@@ -199,7 +206,7 @@ describe('dashboard hero (rendered)', () => {
     expect(go).toHaveAttribute('href', '/play/202');
   });
 
-  it('fix pass 1: a finished JS ladder is skipped; the hero points at the first unfinished enabled ladder (C#)', async () => {
+  it('a finished primary ladder is not replaced by another language: the hero moves on to the slate', async () => {
     const asked: TrackId[] = [];
     renderApp(
       '/',
@@ -207,42 +214,20 @@ describe('dashboard hero (rendered)', () => {
         due: 0,
         fund: async (t) => {
           asked.push(t);
-          if (t === 'js') return ladder([topic(1, unit(207, 'done'), [drill(301, 'done')])], 'js');
-          return ladder([topic(1, unit(501, 'done', { trackId: t })), topic(2, unit(502, 'available', { trackId: t }))], t);
+          return ladder([topic(1, unit(207, 'done'), [drill(301, 'done')])], 'js');
         },
       }),
     );
-    const { go, box, context } = await hero();
-    expect(box).toHaveAttribute('data-kind', 'fundamentals');
-    expect(go).toHaveAttribute('href', '/play/502');
-    expect(context).toHaveTextContent('Fundamentals · C#/.NET · Topic 2 of 2');
-    // the walk stops at the first unfinished ladder: Java is never read
-    expect(asked).toEqual(['js', 'csharp']);
+    const { box } = await hero();
+    expect(box).toHaveAttribute('data-kind', 'slate');
+    expect(asked).toEqual(['js']);
   });
 
-  it('fix pass 1: an unfinished first ladder is ONE read, and a disabled track is never read even when JS is finished', async () => {
+  it('an unfinished ladder is ONE read', async () => {
     const one: TrackId[] = [];
-    const first = renderApp('/', api({ due: 0, fund: async (t) => (one.push(t), ladder([topic(1, unit(207, 'available'))], t)) }));
+    renderApp('/', api({ due: 0, fund: async (t) => (one.push(t), ladder([topic(1, unit(207, 'available'))], t)) }));
     await hero();
     expect(one).toEqual(['js']);
-    first.unmount();
-
-    const asked: TrackId[] = [];
-    renderApp(
-      '/',
-      api({
-        due: 0,
-        settings: (s) => ({ ...s, todayTracks: s.todayTracks.map((t) => (t.trackId === 'csharp' ? { ...t, enabled: false } : t)) }),
-        fund: async (t) => {
-          asked.push(t);
-          return t === 'js' ? ladder([topic(1, unit(207, 'done'))], 'js') : ladder([topic(1, unit(601, 'available', { trackId: t }))], t);
-        },
-      }),
-    );
-    const { go, context } = await hero();
-    expect(asked).toEqual(['js', 'java']);
-    expect(go).toHaveAttribute('href', '/play/601');
-    expect(context).toHaveTextContent('Fundamentals · Java');
   });
 
   it('a failed ladder read never blocks the hero: it moves on to the slate', async () => {
@@ -251,17 +236,18 @@ describe('dashboard hero (rendered)', () => {
     expect(box).toHaveAttribute('data-kind', 'slate');
   });
 
-  it('layout: hero and slate on top, then tiles, Due now, Next up, Competencies, Activity, the focus line, last', async () => {
+  it('layout: hero and slate on top, then tiles, Due now, Activity (rv wave C: no Next up, competencies on Stats, the focus form on /settings)', async () => {
     renderApp('/');
     await hero();
-    await screen.findByTestId('slate-focus-summary');
-    const order = ['p-hero', 'p-slate', 't-streak', 'p-due', 'p-next', 'p-comp', 'p-activity'].map((id) => document.getElementById(id)!);
+    const order = ['p-hero', 'p-slate', 't-streak', 'p-due', 'p-activity'].map((id) => document.getElementById(id)!);
     for (let i = 1; i < order.length; i++) {
       expect(order[i - 1]!.compareDocumentPosition(order[i]!) & Node.DOCUMENT_POSITION_FOLLOWING, `${order[i - 1]!.id} before ${order[i]!.id}`).toBeTruthy();
     }
     const top = document.querySelector('.dash-top')!;
     expect(within(top as HTMLElement).getByRole('heading', { name: "Today's slate" })).toBeInTheDocument();
-    expect(order.at(-1)!.compareDocumentPosition(screen.getByTestId('slate-focus-summary')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(document.getElementById('p-next')).toBeNull();
+    expect(document.getElementById('p-comp')).toBeNull();
+    expect(screen.queryByTestId('slate-focus-summary')).toBeNull();
   });
 
   it('nothing due: "Due now" is a single line', async () => {
@@ -270,27 +256,29 @@ describe('dashboard hero (rendered)', () => {
   });
 });
 
-describe('competencies on day one (f52 U8)', () => {
+// rv wave C (R4-20): the competency table moved to Stats, where the day-one collapse still applies
+const compTable = () => document.querySelector<HTMLElement>('table.comp-table');
+describe('competencies on day one (f52 U8, on Stats)', () => {
   const fresh = () => api({ dash: (d) => ({ ...d, competencies: d.competencies.map((c) => ({ ...c, rating: 1, lastEvidence: null })) }) });
 
   it('all at rating 1 with no evidence: a one-line summary; Show opens the table of "Not started" rows', async () => {
-    const { user } = renderApp('/', fresh());
+    const { user } = renderApp('/stats', fresh());
     const summary = await screen.findByTestId('comp-summary', {}, { timeout: 15_000 });
     expect(summary).toHaveTextContent('8 competencies · not started yet.');
-    expect(screen.queryByRole('table')).toBeNull();
+    expect(compTable()).toBeNull();
     const toggle = within(summary).getByRole('button', { name: 'Show' });
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
     await user.click(toggle);
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
     expect(toggle).toHaveTextContent('Hide');
-    const table = screen.getByRole('table');
+    const table = compTable()!;
     expect(within(table).getAllByText('Not started')).toHaveLength(8);
     expect(table.querySelector('.evidence-cell svg')).toBeNull();
   });
 
   it('one competency above rating 1 keeps the table open', async () => {
-    renderApp('/', api({ dash: (d) => ({ ...d, competencies: d.competencies.map((c, i) => ({ ...c, rating: i === 0 ? 2 : 1, lastEvidence: null })) }) }));
-    await screen.findByRole('table', {}, { timeout: 15_000 });
+    renderApp('/stats', api({ dash: (d) => ({ ...d, competencies: d.competencies.map((c, i) => ({ ...c, rating: i === 0 ? 2 : 1, lastEvidence: null })) }) }));
+    await waitFor(() => expect(compTable()).not.toBeNull(), { timeout: 15_000 });
     expect(screen.queryByTestId('comp-summary')).toBeNull();
   });
 });
@@ -302,32 +290,26 @@ describe('streak tile (f52 U16)', () => {
       dash: (d) => ({ ...d, streak: { ...d.streak, todayComplete: complete }, heatmap: d.heatmap.map((h) => (h.day === d.today ? { ...h, xp } : h)) }),
     });
 
-  it('20 XP today: "Streak safe for today"', async () => {
+  it('20 XP today without the slate: kept, not grown (rv wave C, R4-05)', async () => {
     renderApp('/', today(20));
     await screen.findByTestId('hero-go', {}, { timeout: 15_000 });
-    expect(within(streakTile()).getByTestId('streak-safe')).toHaveTextContent('Streak safe for today ✓');
+    expect(within(streakTile()).getByTestId('streak-kept')).toHaveTextContent('Kept today · finish the slate to grow it');
+    expect(within(streakTile()).queryByTestId('streak-safe')).toBeNull();
   });
 
   it('19 XP and an open slate: not yet; a complete slate with 0 XP: safe', async () => {
     const r = renderApp('/', today(19));
     await screen.findByTestId('hero-go', {}, { timeout: 15_000 });
     expect(within(streakTile()).queryByTestId('streak-safe')).toBeNull();
+    expect(within(streakTile()).queryByTestId('streak-kept')).toBeNull();
     r.unmount();
     renderApp('/', today(0, true));
     await screen.findByTestId('hero-go', {}, { timeout: 15_000 });
-    expect(within(streakTile()).getByTestId('streak-safe')).toBeInTheDocument();
+    expect(within(streakTile()).getByTestId('streak-safe')).toHaveTextContent('Today counts ✓ · +1');
   });
 });
 
 describe('layout widths (f52 U19 + U20)', () => {
-  it('Next up carries its card count for the no-orphan rows (5 tracks: one row, then 3 + 2)', async () => {
-    renderApp('/');
-    await screen.findByTestId('hero-go', {}, { timeout: 15_000 });
-    const ul = document.querySelector<HTMLElement>('.nextup')!;
-    expect(ul.style.getPropertyValue('--nextup-n')).toBe('5');
-    expect(ul.style.getPropertyValue('--nextup-half')).toBe('3');
-  });
-
   it('Dashboard and Campaign render inside the same centred column', async () => {
     const r = renderApp('/');
     await screen.findByTestId('hero-go', {}, { timeout: 15_000 });
@@ -335,7 +317,7 @@ describe('layout widths (f52 U19 + U20)', () => {
     expect(document.querySelector('.page-col .dash')).not.toBeNull();
     r.unmount();
     renderApp('/campaign/js');
-    await screen.findByRole('tabpanel', { name: 'Campaign acts' }, { timeout: 15_000 });
+    await screen.findByRole('list', { name: 'Campaign acts' }, { timeout: 15_000 });
     expect(screen.getByRole('heading', { level: 1 }).closest('.page-col')).not.toBeNull();
     expect(document.querySelector('.page-col .campaign')).not.toBeNull();
   });
@@ -350,8 +332,8 @@ describe('layout widths (f52 U19 + U20)', () => {
 });
 
 describe('copy (f52 U18): short text, the full rule in a tooltip', () => {
-  it('Competencies says "rated 1–5"; the promotion rule is its tooltip', async () => {
-    renderApp('/');
+  it('Competencies says "rated 1–5"; the promotion rule is its tooltip (on Stats since rv wave C)', async () => {
+    renderApp('/stats');
     const rule = await screen.findByTestId('comp-rule', {}, { timeout: 15_000 });
     expect(rule).toHaveTextContent(/^rated 1–5$/);
     expect(rule).toHaveAttribute('title', expect.stringContaining('an explain-back with at least 80% coverage, and a retest at least 2 days later'));

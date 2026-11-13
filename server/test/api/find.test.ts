@@ -14,6 +14,7 @@ import { insertUnit } from '../../src/store/content.ts';
 import { writeCampaignFixture } from '../campaign-fixture.ts';
 import { localNoon, makeTempDb, type TempDb } from '../helpers.ts';
 import { fakeDrillJs } from './harness.ts';
+import { abSlate } from '../slate-fixtures.ts';
 
 const RIGHT = 'export function f(a, b) { return a + b; }\n';
 const WRONG = 'export function f(a, b) { return a - b; }\n';
@@ -57,6 +58,7 @@ function useFindApi(): Ctx {
     ctx.clock = fixedClock(localNoon(2026, 10, 1));
     loadCampaignIntoDb(ctx.db, readCampaign(writeCampaignFixture(join(ctx.tmp.dir, 'campaign'))), ctx.clock);
     for (const u of UNITS) insertUnit(ctx.db, u, ctx.clock);
+    abSlate(ctx.db); // rv wave C: these pin the ab slate (every drill set + the campaign step)
     ctx.id = (key) => ctx.db.get<{ id: number }>('SELECT id FROM unit WHERE key = ?', key)!.id;
     // prose / starter / solution of every unit carry the marker: none of it is searchable
     const content = Object.fromEntries(

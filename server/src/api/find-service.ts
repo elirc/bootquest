@@ -7,6 +7,8 @@ import { DAY_MS, dayKey, nowMs, type Clock } from '../engines/clock.ts';
 import type { SlateItem } from '../engines/streak.ts';
 import { getTrack, listTracks, passedUnitIds, prerequisiteMap, revealedUnitIds, searchUnitRows, unitsForTrack } from '../store/queries.ts';
 import { lockStateFor } from './service.ts';
+import { isArchivedKey } from '../store/routing.ts';
+import { fundStepTarget, nextCtx, seniorRepTarget, type NextCtx } from './nextstep-service.ts';
 
 /**
  * ab S4 "find things": unit search, the dashboard's slate link targets and the mixed drill rotation.
@@ -43,7 +45,8 @@ export function firstOpenDrill(ctx: FindCtx, trackId: string): DrillPick | null 
   const track = getTrack(ctx.db, trackId);
   if (!track || track.locked) return null;
   const u = unitsForTrack(ctx.db, track.id).find(
-    (x) => x.kind === 'drill' && !ctx.revealed.has(x.id) && lockStateFor(x, false, ctx.passed, ctx.prereqs) === 'available',
+    // rv wave C: an archived drill (content/archive.json) is never handed out
+    (x) => x.kind === 'drill' && !ctx.revealed.has(x.id) && !isArchivedKey(x.key) && lockStateFor(x, false, ctx.passed, ctx.prereqs) === 'available',
   );
   return u ? { id: u.id, key: u.key, trackId: u.trackId, title: u.title, difficulty: u.difficulty } : null;
 }
@@ -133,6 +136,7 @@ export function firstOpenSlateDrill(ctx: FindCtx, trackId: string): DrillPick | 
     (x) =>
       x.kind === 'drill' &&
       !ctx.revealed.has(x.id) &&
+      !isArchivedKey(x.key) &&
       lockStateFor(x, false, ctx.passed, ctx.prereqs) === 'available' &&
       (fv === null || !x.key.startsWith(fv.prefix) || fv.topicOpen(fv.topicOf(x.key))),
   );
@@ -148,7 +152,7 @@ export function campaignTarget(acts: readonly ActState[]): number | null {
   for (const trackId of [...new Set(acts.map((a) => a.trackId))]) {
     const open = acts
       .filter((a) => a.trackId === trackId && a.unlocked)
-      .flatMap((a) => a.quests.filter((q) => q.state === 'available' && q.unitId !== null));
+      .flatMap((a) => a.quests.filter((q) => q.state === 'available' && q.unitId !== null && !q.archived));
     const pick = open.find((q) => q.started && !q.done) ?? open[0];
     if (pick && pick.unitId !== null) return pick.unitId;
   }
@@ -164,9 +168,13 @@ export type SlateItemWithTarget = SlateItem & { targetUnitId?: number | null };
  * stored slate (daily_slate.items, frozen in closed days) is never touched: targetUnitId exists
  * in the response only. The review slot gets no target (it links to the review queue).
  */
-export function withSlateTargets(ctx: FindCtx, items: readonly SlateItem[]): SlateItemWithTarget[] {
+export function withSlateTargets(ctx: FindCtx | NextCtx, items: readonly SlateItem[]): SlateItemWithTarget[] {
   let campaign: number | null | undefined;
+  const nctx = 'selfScored' in ctx ? ctx : nextCtx(ctx);
   return items.map((item): SlateItemWithTarget => {
+    // rv wave C: the Fundamentals step -> the primary ladder's step; the senior rep -> the day's suggested rep
+    if (item.kind === 'fund-step') return { ...item, targetUnitId: fundStepTarget(nctx, item.track) };
+    if (item.kind === 'senior-rep') return { ...item, targetUnitId: seniorRepTarget(nctx, item.rep) };
     // f52 U6: a language track's drill set links to its next Fundamentals drill first
     if (item.kind === 'drill-set') return { ...item, targetUnitId: (firstFundamentalsDrill(ctx, item.track) ?? firstOpenSlateDrill(ctx, item.track))?.id ?? null };
     if (item.kind === 'campaign-step') {

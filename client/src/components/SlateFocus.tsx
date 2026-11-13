@@ -7,6 +7,8 @@ import type { AsyncState } from '../lib/useAsync';
 import { TRACK_LABEL, isTrackId } from '../lib/view';
 
 /**
+ * rv wave C: rendered on /settings (pages/Settings.tsx), no longer on the dashboard; every drill set is off
+ * by default, so saving with every track off is allowed.
  * ab A1 "Choose your focus": the learner picks which tracks give a daily drill set and how many
  * new drills each asks for (GET/PUT /api/settings/slate). Shown open while no choice was ever saved
  * (day one: every track gives 1 drill); afterwards a one-line summary of tomorrow's slate with a
@@ -53,7 +55,7 @@ export function SlateFocus({ q }: { q: AsyncState<SlateSettingsResponse> & { rel
         </span>
       )}
       <span className="muted">Daily slate from {fmtShortDate(s.effectiveDay)}: </span>
-      {on.map((t) => `${label(t)} ×${t.size}`).join(' · ')}{' '}
+      {on.length ? on.map((t) => `${label(t)} ×${t.size}`).join(' · ') : 'no drill sets'}{' '}
       <button type="button" className="link-btn" onClick={() => setEditing(true)}>
         Change daily slate
       </button>
@@ -107,7 +109,7 @@ function FocusForm({
       </header>
       <p className="small muted">
         Pick your tracks and how many new drills each gives a day.
-        {first && ` Until you choose, every track gives ${s.defaultSize} drill${s.defaultSize === 1 ? '' : 's'} a day.`}
+        {first && ' Until you choose, every drill set is off: the Fundamentals step and the senior rep carry the day.'}
       </p>
       <ul className="slate-focus-tracks">
         {s.tomorrowTracks.map((t) => {
@@ -140,7 +142,7 @@ function FocusForm({
         </div>
       )}
       <div className="slate-focus-actions">
-        <button type="button" className="btn btn-sm btn-primary" onClick={() => void save()} disabled={busy || noneOn}>
+        <button type="button" className="btn btn-sm btn-primary" onClick={() => void save()} disabled={busy}>
           {busy ? 'Saving…' : 'Save'}
         </button>
         {onCancel && (
@@ -150,7 +152,7 @@ function FocusForm({
         )}
         <span className="small muted" data-testid="slate-focus-when">
           {noneOn
-            ? 'Keep at least one track on.'
+            ? `Every drill set off: the Fundamentals step and the senior rep carry the day (from ${fmtShortDate(s.effectiveDay)}).`
             : `Takes effect tomorrow (${fmtShortDate(s.effectiveDay)}); today's slate stays as it is.`}
         </span>
       </div>

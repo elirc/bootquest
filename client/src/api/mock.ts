@@ -175,6 +175,9 @@ export interface MockApiOptions {
   lockedTracks?: readonly TrackId[];
   /** ab S1: 'full' (default, the fixture learner's 5-drill sets) or 'unconfigured' (day one: no slate_setting row). */
   slateSettings?: 'full' | 'unconfigured';
+  /** rv wave C: GET /routing — archived unit ids and per-track paths (default: none) */
+  archivedUnitIds?: readonly number[];
+  paths?: Record<string, { id: string; title: string; unitIds: number[] }[]>;
 }
 
 // ---- pass rates: mirrors server/src/engines/stats.ts passRate / passRatesBy and the
@@ -1479,6 +1482,8 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
     // ---- ab S1: slate settings (client/src/api/mock-slate.ts; drill-slot tracks = js, csharp, java, sysdesign)
     getSlateSettings: () => wrap(() => slateSettings.get()),
     putSlateSettings: (body) => wrap(() => slateSettings.put(body)),
+    putLearnerSettings: (body) => wrap(() => slateSettings.putLearner(body)),
+    getRouting: () => wrap(() => ({ archivedUnitIds: [...(opts.archivedUnitIds ?? [])], paths: opts.paths ?? {} })),
     searchUnits: (q, limit = 30) =>
       wrap((): UnitSearchResponse => {
         const query = q.trim();

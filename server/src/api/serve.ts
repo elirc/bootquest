@@ -1,7 +1,7 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import type { Server } from 'node:http';
 import { createServer } from 'node:net';
-import { join, resolve } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { PackManifest } from '@bootquest/shared';
 import type { UnitContentEntry } from '@bootquest/shared/api';
@@ -346,8 +346,48 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
     return { server, db, port, host, close, backup: backupKept, packs: packStats, campaign, csharpScratch: csharp?.appDataDir ?? null, javaScratch: java?.appDataDir ?? null, seedPacks, ladder, studyQuests, reviewCards, fundamentals };
   } catch (err) {
     db.close();
-    throw err;
+    throw explainStartupError(err);
   }
+}
+
+/** This checkout's repo root (server/src/api/ -> three levels up). */
+export const CHECKOUT_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
+
+/**
+ * R4-19: the checkout whose workspace packages this one actually imports, when that is ANOTHER clone
+ * (`node_modules` or `node_modules/@bootquest/shared` is a junction into a different checkout), else null.
+ */
+export function mixedCheckoutRoot(root: string = CHECKOUT_ROOT): string | null {
+  const link = join(root, 'node_modules', '@bootquest', 'shared');
+  if (!existsSync(link)) return null;
+  let real: string;
+  try {
+    real = realpathSync(link);
+  } catch {
+    return null;
+  }
+  const rel = relative(realpathSync(root), real);
+  if (rel === '' || (!rel.startsWith('..') && !/^[a-zA-Z]:/.test(rel))) return null;
+  return resolve(real, '..');
+}
+
+/**
+ * R4-19: a fingerprint / import-gate refusal in a checkout whose workspace packages resolve to another
+ * clone is NOT stale content: the two fingerprint modules hash files from two different repo roots. Say
+ * that, and do not advise a restamp (expensive, and it would stamp the wrong tree). Any other error, or a
+ * normal checkout, passes through unchanged.
+ */
+export function explainStartupError(err: unknown, root: string = CHECKOUT_ROOT): unknown {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (!/IMPORT_GATE_FILES|fingerprint/.test(msg)) return err;
+  const other = mixedCheckoutRoot(root);
+  if (other === null) return err;
+  const original = msg.replace(/ — run `npm run seed:check -- --restamp`.*$/s, '');
+  return new Error(
+    `mixed checkouts: this server runs from ${root} but its workspace packages (node_modules/@bootquest) resolve to ${other}, ` +
+      'so the stamp check compares files from two clones. Nothing is stale: do NOT restamp. ' +
+      `Run \`npm install\` in ${root} (so node_modules belongs to this checkout), or start the app from ${other}. (${original})`,
+  );
 }
 
 /**

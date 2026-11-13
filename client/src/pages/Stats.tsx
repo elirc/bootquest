@@ -16,6 +16,7 @@ import type {
 import { BarChart, DataTable, Legend, RateChart, ShareBar, type BarDatum, type ChartSeries } from '../components/StatsCharts';
 import { Chip, LoadState, PageHeader, Panel, ProgressBar } from '../components/ui';
 import { WeakSpotsPanel } from '../components/WeakSpots';
+import { CompetencyPanel } from './Dashboard';
 import { fmtRate, longDate, monthStarts, shortDate, weekdayLabel } from '../lib/chart';
 import { fmtInt, fmtStamp } from '../lib/format';
 import { buildHeatGrid } from '../lib/heatmap';
@@ -89,6 +90,10 @@ export function StatsPage() {
             <ReviewPanel q={reviews} />
             <CampaignProgressPanel q={campaign} />
             <CatchRatePanel q={katas} />
+            {/* rv wave C (R4-20): the competency ladder lives here, off the dashboard, until a promotion path exists */}
+            <div className="span-all">
+              <CompetencyPanel rows={q.data.competencies} today={q.data.today} dueRetestUnits={new Set<number>()} />
+            </div>
             <EvidenceBrowser />
           </div>
         </div>

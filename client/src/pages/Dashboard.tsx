@@ -1,4 +1,4 @@
-import { useRef, useState, type CSSProperties } from 'react';
+import { useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useApi } from '../api/context';
 import { errorText } from '../api/errors';
@@ -7,8 +7,10 @@ import type {
   CompetencyRow,
   Dashboard as DashboardData,
   FundamentalsResponse,
+  PrimaryLanguage,
   PromotionLegState,
   PromotionProgress,
+  SeniorRepKind,
   SlateItem,
   SlateSettingsResponse,
   TrackId,
@@ -16,7 +18,6 @@ import type {
 import { DueNowPanel } from '../components/DueNow';
 import { Heatmap } from '../components/Heatmap';
 import { Icon } from '../components/Icon';
-import { SlateFocus } from '../components/SlateFocus';
 import { Chip, Kbd, LoadState, PageHeader, Panel, ProgressBar, RatingPips } from '../components/ui';
 import { WeakSpotsTeaser } from '../components/WeakSpots';
 import { TOPIC_MINUTES, drillMinutes, fmtMinutes, reviewEstimate } from '../lib/estimates';
@@ -37,15 +38,21 @@ export const DONE_XP = 50;
 export const xpTodayOf = (d: DashboardData): number => d.heatmap.find((h) => h.day === d.today)?.xp ?? 0;
 
 /**
- * wave B (ruling 6): "Done for today" — nothing due for review AND (today's slate is complete OR at
- * least 50 XP today). The hero then says so and keeps the next step as a secondary button.
+ * rv wave C (R4-05, D5): "Done for today" means exactly what the streak counts: today's slate is
+ * complete (the server's todayComplete), so the hero, the streak tile and `bootquest today` agree.
+ * 20 XP without a complete slate only KEEPS the streak (partialDay), it never grows it.
  */
 export function doneForToday(d: DashboardData): boolean {
-  if (d.reviewQueue.due > 0) return false;
-  const counted = d.slate.items.filter((s) => !vacuousReviewSlot(d.slate.items, d.reviewQueue.due)(s));
-  const slateComplete = d.streak.todayComplete || (counted.length > 0 && counted.every((s) => s.done));
-  return slateComplete || xpTodayOf(d) >= DONE_XP;
+  return d.streak.todayComplete;
 }
+
+/** The partial-day rule (server engines/streak.ts): 20 XP keeps the streak but does not grow it. */
+export function partialDay(d: DashboardData): boolean {
+  return !d.streak.todayComplete && xpTodayOf(d) >= STREAK_XP;
+}
+
+/** Kept for older imports: the pre-rv 50 XP "full day" number (no longer decides anything). */
+export const LEGACY_DONE_XP = DONE_XP;
 
 export function DashboardPage() {
   const api = useApi();
@@ -70,7 +77,7 @@ export function DashboardPage() {
         eyebrow={q.data ? new Date(`${q.data.today}T00:00:00Z`).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC' }) : ' '}
         title="Dashboard"
       />
-      {showBody ? <DashboardBody d={q.data} comp={comp} slate={slate} fund={fund} /> : <LoadState error={q.error} onRetry={q.reload} minHeight={720} />}
+      {showBody ? <DashboardBody d={q.data} comp={comp} slate={slate} fund={fund} onPicked={() => { slate.reload(); q.reload(); }} /> : <LoadState error={q.error} onRetry={q.reload} minHeight={720} />}
     </div>
   );
 }
@@ -81,11 +88,13 @@ export function DashboardPage() {
 const FUND_TRACKS: readonly TrackId[] = ['js', 'csharp', 'java'];
 
 /**
- * The language tracks on today's slate (slate settings), in the order the hero tries their ladders.
- * A failed settings read counts as every track on (JS first); no language track on is no ladder.
+ * rv wave C (D3): the hero walks ONE ladder, the learner's primary language (learner settings; JS until
+ * the one-time picker is answered). A failed settings read is JS. An older server without learner
+ * settings falls back to the ab rule: the language tracks on today's slate, in ladder order.
  */
 export function enabledFundTracks(s: SlateSettingsResponse | undefined): TrackId[] {
-  if (!s) return [...FUND_TRACKS];
+  if (!s) return ['js'];
+  if (s.learner) return [s.learner.today.primaryLanguage];
   const on = new Set<string>(s.todayTracks.filter((t) => t.enabled).map((t) => t.trackId));
   return FUND_TRACKS.filter((t) => on.has(t));
 }
@@ -173,9 +182,13 @@ type FundState = { settled: false } | { settled: true; step: FundStep | null };
  */
 function useFundamentalsStep(slate: AsyncState<SlateSettingsResponse>): FundState {
   const api = useApi();
-  // fixed by the first settled settings read, so a settings Retry never refetches the ladder
+  // fixed by the settled settings read, so a settings Retry never refetches the ladder; rv wave C: a NEW
+  // primary language (the one-time prompt) does
   const tracks = useRef<TrackId[] | undefined>(undefined);
-  if (tracks.current === undefined && slate.status !== 'loading') tracks.current = enabledFundTracks(slate.data);
+  if (slate.status !== 'loading') {
+    const next = enabledFundTracks(slate.data);
+    if (tracks.current === undefined || tracks.current.join() !== next.join()) tracks.current = next;
+  }
   const t = tracks.current;
   const q = useAsync<FundStep | null>(
     () => (t === undefined ? new Promise<never>(() => {}) : firstUnfinishedStep(t, (id) => api.getFundamentals(id))),
@@ -193,8 +206,9 @@ export interface HeroPick {
 }
 
 /**
- * Council ruling 5: reviews due -> the Fundamentals next step -> the first undone slate item ->
- * the first Next-up unit. Never an explain-back.
+ * Council ruling 5 (rv wave C): reviews due -> the Fundamentals next step -> the first undone slate
+ * item (the senior rep may be a DESIGN IT set or a kata: that is the point of the slot) -> the first
+ * Next-up unit (server-routed: never archived, never G3/G4 out of order).
  */
 export function pickHero(d: DashboardData, fund: FundStep | null): HeroPick {
   const due = d.reviewQueue.due;
@@ -221,17 +235,15 @@ export function pickHero(d: DashboardData, fund: FundStep | null): HeroPick {
       context: `${where} · ${fmtMinutes(fund.minutes)}${progress}`,
     };
   }
-  // a slate row does not say its unit's kind; a target that Next up lists as an explain-back is skipped
-  const explainBacks = new Set(d.nextUp.flatMap((n) => (n.unit?.kind === 'explain-back' ? [n.unit.id] : [])));
   const items = d.slate.items;
   const vacuous = vacuousReviewSlot(items, due);
   const counted = items.filter((s) => !vacuous(s));
-  const open = items.find((s) => !s.done && s.kind !== 'review-clear' && !(s.targetUnitId != null && explainBacks.has(s.targetUnitId)));
+  const open = items.find((s) => !s.done && s.kind !== 'review-clear');
   if (open) {
     const v = slateView(open);
     return { kind: 'slate', label: `Start: ${v.label}`, href: v.href, context: `Today's slate · ${counted.filter((s) => s.done).length} of ${counted.length} done` };
   }
-  const next = d.nextUp.find((n) => n.unit && n.unit.kind !== 'explain-back');
+  const next = d.nextUp.find((n) => n.unit);
   if (next?.unit) return { kind: 'next', label: next.unit.title, href: `/play/${next.unit.id}`, context: `Next up · ${TRACK_LABEL[next.trackId]} · ${next.unit.kind}` };
   return { kind: 'none', label: 'Open the campaign', href: '/campaign', context: 'Nothing is queued right now' };
 }
@@ -240,8 +252,10 @@ function Hero({ d, fund }: { d: DashboardData; fund: FundState }) {
   // reviews win outright; otherwise wait for the ladder so the button never changes under the cursor
   const ready = d.reviewQueue.due > 0 || fund.settled;
   const pick = ready ? pickHero(d, fund.settled ? fund.step : null) : null;
-  // wave B (ruling 6): a full day says so; what would be next stays one (secondary) click away
+  // rv wave C: "done" is the streak's own rule (a complete slate); a partial day says the streak is kept
   const done = doneForToday(d);
+  const partial = partialDay(d);
+  const [ten, setTen] = useState(false);
   return (
     <section
       className={`panel dash-hero${done ? ' dash-hero-done' : ''}`}
@@ -255,7 +269,12 @@ function Hero({ d, fund }: { d: DashboardData; fund: FundState }) {
       </h2>
       {done && (
         <p className="dash-hero-donetext pos" data-testid="hero-done">
-          Done for today ✓ · streak safe
+          Done for today ✓ · the streak grows
+        </p>
+      )}
+      {partial && (
+        <p className="dash-hero-partial small muted" data-testid="hero-partial">
+          Streak kept today. Finish the slate to grow it.
         </p>
       )}
       {pick ? (
@@ -266,6 +285,15 @@ function Hero({ d, fund }: { d: DashboardData; fund: FundState }) {
           <p className="dash-hero-context muted" data-testid="hero-context">
             {pick.context}
           </p>
+          <div className="dash-hero-tools">
+            <button type="button" className="btn btn-sm" aria-expanded={ten} aria-controls="ten-minute" onClick={() => setTen((t) => !t)} data-testid="ten-minute-btn">
+              <Icon name="clock" /> 10-minute mode
+            </button>
+            <Link to="/settings" className="small">
+              Settings
+            </Link>
+          </div>
+          {ten && <TenMinutePlan d={d} fund={fund.settled ? fund.step : null} />}
         </>
       ) : (
         <div className="dash-hero-wait" aria-busy="true">
@@ -292,11 +320,14 @@ function DashboardBody({
   comp,
   slate,
   fund,
+  onPicked,
 }: {
   d: DashboardData;
   comp: Loaded<CompetenciesResponse>;
   slate: Loaded<SlateSettingsResponse>;
   fund: FundState;
+  /** rv wave C: the primary language was picked: re-read the settings and the dashboard */
+  onPicked: () => void;
 }) {
   const items = d.slate.items;
   const vacuous = vacuousReviewSlot(items, d.reviewQueue.due);
@@ -305,8 +336,7 @@ function DashboardBody({
   const xpToday = xpTodayOf(d);
   const tokens = Math.min(d.streak.tokens, FREEZE_TOKENS_MAX);
   const streakSafe = xpToday >= STREAK_XP || d.streak.todayComplete;
-  const retests = comp.data?.retests ?? [];
-  const dueRetestUnits = new Set(retests.filter((r) => r.due).map((r) => r.unitId));
+  void comp;
   return (
     <div className="dash">
       {/* f52 U7: the one next step, with today's slate beside it (both above the fold at 1440x900) */}
@@ -326,10 +356,14 @@ function DashboardBody({
             {d.streak.current}
             <span className="tile-unit">days</span>
           </div>
-          {/* f52 U16 (display only): 20 XP today, or a complete slate, already keeps the streak */}
-          {streakSafe ? (
-            <p className="tile-safe pos" data-testid="streak-safe" title="20 XP today or a cleared slate keeps the streak">
-              Streak safe for today ✓
+          {/* rv wave C (R4-05): a complete slate GROWS the streak; 20 XP only keeps it */}
+          {d.streak.todayComplete ? (
+            <p className="tile-safe pos" data-testid="streak-safe" title="A complete slate grows the streak; 20 XP only keeps it">
+              Today counts ✓ · +1
+            </p>
+          ) : streakSafe ? (
+            <p className="tile-safe muted" data-testid="streak-kept" title="A complete slate grows the streak; 20 XP only keeps it">
+              Kept today · finish the slate to grow it
             </p>
           ) : (
             // wave B (ruling 6): until then, how far today's XP is from keeping it
@@ -402,50 +436,22 @@ function DashboardBody({
           </div>
           <ProgressBar value={slateDone} max={counted.length} label="Slate items cleared" tone="success" />
           <div className="tile-meta">
-            <span>{d.streak.todayComplete ? 'Slate complete — today counts' : 'Clear the slate (or earn 20 XP) to keep the streak'}</span>
+            <span>{d.streak.todayComplete ? 'Slate complete — today counts' : 'Finish the slate to grow the streak (20 XP only keeps it)'}</span>
           </div>
         </section>
       </div>
 
       <DueNowPanel />
 
-      <Panel title="Next up" labelledBy="p-next">
-        {/* f52 U19: rows of equal cards (all in one row when wide, then halves), never one card alone */}
-        <ul className="nextup" style={{ '--nextup-n': d.nextUp.length, '--nextup-half': Math.ceil(d.nextUp.length / 2) } as CSSProperties}>
-          {d.nextUp.map((n) => (
-            <li key={n.trackId}>
-              {n.unit ? (
-                <Link to={`/play/${n.unit.id}`} className="nextup-card">
-                  <span className={`track-badge track-${n.trackId}`}>{TRACK_LABEL[n.trackId]}</span>
-                  <span className="nextup-title">{n.unit.title}</span>
-                  <span className="nextup-meta">{n.unit.kind}</span>
-                </Link>
-              ) : (
-                <div className="nextup-card nextup-locked" aria-disabled="true">
-                  <span className="track-badge">{TRACK_LABEL[n.trackId]}</span>
-                  <span className="nextup-title">Nothing available</span>
-                  <span className="nextup-meta">locked, or every unit is done</span>
-                </div>
-              )}
-              {/* a sibling of the card (never a nested anchor): the track's whole unit list, so a
-                  null-unit card has an action too; #units opens and focuses the Practice-units browser) */}
-              <Link to={`/campaign/${n.trackId}#units`} className="nextup-browse small">
-                Browse all<span className="sr-only"> {TRACK_LABEL[n.trackId]} units</span> <span aria-hidden="true">→</span>
-              </Link>
-            </li>
-          ))}
-        </ul>
-      </Panel>
-
-      <CompetencyPanel rows={d.competencies} today={d.today} dueRetestUnits={dueRetestUnits} />
+      {/* rv wave C: the Next up panel is gone (R4-10: it contradicted the hero; the hero, the slate and the
+          Campaign page cover it) and the competency table moved to Stats until a promotion path exists (R4-20) */}
 
       <Panel title="Activity" labelledBy="p-activity" className="dash-heat" aside={<span className="muted">last {d.heatmap.length} days</span>}>
         <Heatmap days={d.heatmap} today={d.today} />
       </Panel>
 
-      {/* ab S1: "Choose your focus" until a slate choice is saved, then a summary + Change link
-          (f52: below the page's work; it reads the settings the hero already fetched) */}
-      <SlateFocus q={slate} />
+      {/* rv wave C: the 40-option focus form lives on /settings now; day one asks only for the primary language */}
+      <PrimaryLanguagePrompt q={slate} onPicked={onPicked} />
 
       {/* ab wave S3: last on the page, so its late arrival never pushes anything down; absent without data */}
       <WeakSpotsTeaser />
@@ -477,8 +483,21 @@ function slateView(s: SlateItem): { label: string; href: string; hint?: string }
       return target !== null ? { label: 'Campaign step', href: `/play/${target}` } : { label: 'Campaign step', href: '/campaign' };
     case 'review-clear':
       return { label: 'Clear the review queue', href: '/review' };
+    case 'fund-step': {
+      const track = s.track && isTrackId(s.track) ? s.track : null;
+      const label = `Fundamentals step${track ? ` · ${TRACK_LABEL[track]}` : ''}`;
+      return { label, href: target !== null ? `/play/${target}` : `/campaign/${track ?? 'js'}`, hint: 'a topic gate or one of its drills' };
+    }
+    case 'senior-rep': {
+      const rep = s.rep ?? 'design';
+      return { label: `Senior rep · ${SENIOR_REP_LABEL[rep]}`, href: target !== null ? `/play/${target}` : SENIOR_REP_HOME[rep], hint: 'any senior rep counts' };
+    }
   }
 }
+
+/** rv wave C: what each senior-rep suggestion is (it rotates by weekday; any of them ticks the slot). */
+export const SENIOR_REP_LABEL: Record<SeniorRepKind, string> = { design: 'DESIGN IT', kata: 'review kata', 'fund-senior': 'Fundamentals JS 21-33' };
+const SENIOR_REP_HOME: Record<SeniorRepKind, string> = { design: '/campaign/sysdesign', kata: '/campaign/agentic', 'fund-senior': '/campaign/js' };
 
 function Slate({ d }: { d: DashboardData }) {
   const tracks = useTracks();
@@ -486,10 +505,8 @@ function Slate({ d }: { d: DashboardData }) {
   // while /tracks loads, the placeholder (all unlocked) stands in, so rows do not pop in later
   const trackRows: readonly { id: TrackId; locked: boolean }[] = tracks.data?.tracks ?? TRACK_PLACEHOLDER;
   const unlocked = (t: TrackId) => trackRows.some((r) => r.id === t && !r.locked);
-  // fix/client-review 7g: the list is a client-side guess (slate_drills is server config), so a
-  // missing row is stated neutrally, never as "track exhausted"
-  const noDrillSlot = SLATE_DRILL_TRACKS.filter((t) => unlocked(t) && !items.some((s) => slateTrack(s) === t));
-  const noCampaign = !items.some((s) => s.kind === 'campaign-step');
+  // rv wave C: other drill sets and the campaign step are off by default: one quiet line points at Settings
+  const offTracks = SLATE_DRILL_TRACKS.filter((t) => unlocked(t) && !items.some((s) => slateTrack(s) === t));
   // an empty slate (every chosen track exhausted, no campaign step, no review card yet) is not a
   // review-only day: the server never counts it as a slate-day, so only the 20 XP partial rule applies
   const emptySlate = items.length === 0;
@@ -501,27 +518,13 @@ function Slate({ d }: { d: DashboardData }) {
         {items.map((s) => (
           <SlateRow key={s.slot} s={s} view={slateView(s)} vacuous={vacuous(s)} />
         ))}
-        {noDrillSlot.map((t) => (
-          <li key={`gone-${t}`} className="slate-row slate-gone" data-slot={`drill:${t}`} data-missing="true">
-            <span className="slate-check slate-check-gone" aria-hidden="true">
-              –
-            </span>
-            <span className="slate-label">
-              {TRACK_LABEL[t]} drills <span className="slate-why">no drill slot on today&apos;s slate</span>
-            </span>
-          </li>
-        ))}
-        {noCampaign && (
-          <li className="slate-row slate-gone" data-slot="campaign" data-missing="true">
-            <span className="slate-check slate-check-gone" aria-hidden="true">
-              –
-            </span>
-            <span className="slate-label">
-              Campaign step <span className="slate-why">nothing open in an unlocked act today</span>
-            </span>
-          </li>
-        )}
       </ul>
+      {offTracks.length > 0 && (
+        <p className="slate-note muted small" data-testid="slate-off">
+          Off today: {offTracks.map((t) => TRACK_LABEL[t]).join(' · ')} drill sets.{' '}
+          <Link to="/settings">Change in Settings</Link>
+        </p>
+      )}
       {emptySlate && (
         <p className="slate-note muted small" data-testid="slate-empty" title="No drill set, campaign step or review could be scheduled today.">
           Nothing on today&apos;s slate. Earn 20 XP to keep the streak.
@@ -588,6 +591,74 @@ function MixedDrills({ tracks }: { tracks: readonly TrackId[] }) {
         </p>
       )}
     </div>
+  );
+}
+
+/**
+ * rv wave C (N1): a bounded session for a day that is hard to start: due reviews capped at 20, then one
+ * Fundamentals step (or, with the ladder finished, the day's first open slate item), then stop.
+ */
+export const TEN_MINUTE_REVIEW_CAP = 20;
+
+function TenMinutePlan({ d, fund }: { d: DashboardData; fund: FundStep | null }) {
+  const due = Math.min(d.reviewQueue.due, TEN_MINUTE_REVIEW_CAP);
+  const open = d.slate.items.find((s) => !s.done && s.kind !== 'review-clear');
+  const step = fund ? { label: fund.title, href: `/play/${fund.unitId}` } : open ? slateView(open) : null;
+  return (
+    <ol className="ten-minute small" id="ten-minute" data-testid="ten-minute">
+      {due > 0 && (
+        <li>
+          <Link to="/review">Review {plural(due, 'card')}</Link>
+          {d.reviewQueue.due > TEN_MINUTE_REVIEW_CAP ? <span className="muted"> (stop after {TEN_MINUTE_REVIEW_CAP})</span> : null}
+        </li>
+      )}
+      {step && (
+        <li>
+          One step: <Link to={step.href}>{step.label}</Link>
+        </li>
+      )}
+      <li className="muted">Stop. That was the day&apos;s minimum.</li>
+    </ol>
+  );
+}
+
+const LANGUAGE_CHOICES: readonly PrimaryLanguage[] = ['js', 'csharp', 'java'];
+
+/**
+ * rv wave C (D3, R5-11): the one-time "pick your primary language" prompt. It sets the hero's ladder and
+ * the slate's Fundamentals step (PUT /settings/learner); the first pick applies today. Hidden once
+ * answered, and on an older server without learner settings.
+ */
+function PrimaryLanguagePrompt({ q, onPicked }: { q: Loaded<SlateSettingsResponse>; onPicked: () => void }) {
+  const api = useApi();
+  const [state, setState] = useState<{ busy: boolean; error: string | null; done: boolean }>({ busy: false, error: null, done: false });
+  if (q.status !== 'ready' || !q.data.learner || q.data.learner.today.primaryChosen || state.done) return null;
+  const pick = (lang: PrimaryLanguage) => {
+    setState({ busy: true, error: null, done: false });
+    api.putLearnerSettings({ primaryLanguage: lang }).then(
+      () => {
+        setState({ busy: false, error: null, done: true });
+        onPicked();
+      },
+      (e: unknown) => setState({ busy: false, error: errorText(e), done: false }),
+    );
+  };
+  return (
+    <Panel title="Pick your primary language" labelledBy="p-lang" className="dash-lang">
+      <p className="small muted">One language for the next 90 days: the hero walks its Fundamentals ladder and the daily slate asks for one step on it. The other languages stay one setting away.</p>
+      <div className="dash-lang-choices" data-testid="primary-language">
+        {LANGUAGE_CHOICES.map((l) => (
+          <button key={l} type="button" className={`btn${l === 'js' ? ' btn-primary' : ''}`} disabled={state.busy} onClick={() => pick(l)}>
+            {TRACK_LABEL[l]}
+          </button>
+        ))}
+      </div>
+      {state.error && (
+        <p className="small" role="alert">
+          {state.error}
+        </p>
+      )}
+    </Panel>
   );
 }
 
@@ -661,10 +732,11 @@ export const COMP_RULE = 'Rated 1–5 and never averaged. A promotion needs an a
 export const competenciesUntouched = (rows: readonly CompetencyRow[]): boolean => rows.every((r) => (r.rating ?? 1) <= 1 && !r.lastEvidence);
 
 /**
+ * rv wave C: shown on Stats only (the dashboard hides it until a promotion path exists, R4-20).
  * f52 U8: on day one the table is eight empty rows, so the panel collapses to a one-line summary
  * with a Show toggle until any competency has evidence (or a rating above 1).
  */
-function CompetencyPanel({ rows, today, dueRetestUnits }: { rows: CompetencyRow[]; today: string; dueRetestUnits: ReadonlySet<number> }) {
+export function CompetencyPanel({ rows, today, dueRetestUnits }: { rows: CompetencyRow[]; today: string; dueRetestUnits: ReadonlySet<number> }) {
   const untouched = competenciesUntouched(rows);
   const [shown, setShown] = useState(false);
   const open = !untouched || shown;

@@ -236,7 +236,9 @@ export function buildProgram(io: CliIo, setExit: (code: number) => void): Comman
     .name('bootquest')
     .description(
       'BootQuest CLI: check and submit the project you are coding in your own editor.\n' +
-        'The current unit comes from .bootquest.json (searched from the cwd upwards).',
+        'The current unit comes from .bootquest.json (searched from the cwd upwards).\n' +
+        'Any drill works too: put {"unitId": <id>, "file": "<your file>"} in a .bootquest.json and solve it in your editor\n' +
+        '(bootquest run = free check, bootquest submit = recorded, XP on pass).',
     )
     .version(io.version ?? '0.1.0', '-V, --version')
     .option('--server <url>', `BootQuest server URL (env BOOTQUEST_SERVER, default ${DEFAULT_SERVER})`)
@@ -272,7 +274,7 @@ export function buildProgram(io: CliIo, setExit: (code: number) => void): Comman
   program
     .command('today')
     .description(
-      "today's slate (slots + done state), reviews due, streak + freeze tokens and next up per track. " +
+      "today's slate (slots + done state, the Fundamentals step), reviews due, streak (complete / kept / not yet) + freeze tokens and next up per track. " +
         'Read-only (one GET). Exit 0 shown, 2 when the server could not be read (it says so)',
     )
     .action(async (_o: unknown, cmd: Command) => {
@@ -296,7 +298,7 @@ export function buildProgram(io: CliIo, setExit: (code: number) => void): Comman
     )
     .option('--tracks <ids>', 'comma-separated tracks on the slate from tomorrow (e.g. java,sysdesign); every other track goes off')
     .option('--size <n>', 'drills per track from tomorrow (with --tracks: those tracks; alone: every track that is on)')
-    .option('--preset <name>', 'default (every track, 1 drill) or full (every track, 5 drills)')
+    .option('--preset <name>', 'default (every drill set off: the Fundamentals step + a senior rep carry the day) or full (every track, 5 drills)')
     .action(async (o: SlateOpts, cmd: Command) => {
       const client = new ApiClient(serverUrl(cmd.optsWithGlobals<GlobalOpts>(), io.env), io.fetch);
       const change = parseSlateOpts(o);
@@ -342,8 +344,9 @@ export function buildProgram(io: CliIo, setExit: (code: number) => void): Comman
       setExit(resp.verdict === 'pass' ? EXIT.OK : EXIT.NOT_PASSED);
     });
 
+  // R4-17: mutate stays (a self-run gate for the 2 project units) but is hidden from --help
   program
-    .command('mutate [path]')
+    .command('mutate [path]', { hidden: true })
     .description(
       'mutation gate for the current SOLO-PROJECT unit (spec §5; never drills): runs Stryker (JS, --incremental) or ' +
         'Stryker.NET (C#) on your project dir (default: the directory holding .bootquest.json; for C#, your TEST project dir), ' +

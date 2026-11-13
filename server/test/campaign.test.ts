@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import type { Db } from '../src/db/database.ts';
 import { selfAttestReading } from '../src/engines/attempts.ts';
 import { actUnlockStates, campaignState, meetsCorePct, questUnitUnlocked, type ActGate } from '../src/engines/campaign.ts';
@@ -12,6 +12,7 @@ import { CampaignLoadError, loadCampaignIntoDb, readCampaign } from '../src/stor
 import { insertCheck } from '../src/store/content.ts';
 import { defaultFixtureTracks, quest, writeCampaignFixture } from './campaign-fixture.ts';
 import { submit, useTempDb } from './helpers.ts';
+import { preRvLearner } from './slate-fixtures.ts';
 
 const gate = (actNo: number, coreDone: number, coreTotal: number, over: Partial<ActGate> = {}): ActGate => ({
   actNo,
@@ -154,6 +155,7 @@ describe('campaign loader', { timeout: 30_000 }, () => {
 
 describe('campaign state + slate (engine)', { timeout: 30_000 }, () => {
   const ctx = useTempDb();
+  beforeEach(() => preRvLearner(ctx.db)); // rv wave C: the campaign step is off by default; these pin it on
   const load = () => loadCampaignIntoDb(ctx.db, readCampaign(writeCampaignFixture(join(ctx.tmp.dir, 'campaign'))), ctx.clock);
 
   it('act 1 open, act 2 locked; study quests are pending until their quiz gate is seeded; reading steps are non-core', () => {

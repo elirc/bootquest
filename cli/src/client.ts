@@ -1,7 +1,7 @@
 import type {
   ApiErrorCode,
   CanonicalRunResult,
-  DashboardResponse,
+
   MutationMarkerBody,
   MutationMarkerResponse,
   SubmissionBodyInput,
@@ -10,7 +10,7 @@ import type {
   UnitSummary,
 } from '@bootquest/shared/api';
 import type { SeedQueueResponse, SyncReport } from '@bootquest/shared/sync';
-import type { SlateSettingsBody, SlateSettingsResponse } from '@bootquest/shared/api-ext';
+import type { DashboardResponseExt, SlateSettingsBody, SlateSettingsResponse } from '@bootquest/shared/api-ext';
 
 /**
  * Thin HTTP client for the BootQuest API (contract: shared/src/api.ts + api-ext.ts; the
@@ -214,7 +214,7 @@ export class ApiClient {
   health(): Promise<HealthResponse> {
     return this.request('GET', '/health');
   }
-  dashboard(): Promise<DashboardResponse> {
+  dashboard(): Promise<DashboardResponseExt> {
     return this.request('GET', '/dashboard');
   }
   tracks(): Promise<TracksResponse> {

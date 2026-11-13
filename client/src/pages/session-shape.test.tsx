@@ -1,5 +1,5 @@
 // f52 wave B (app ruling 6): session shape on the dashboard — static time estimates in the hero
-// context, the "Done for today ✓ · streak safe" hero state, and "12 / 20 XP today" on the streak
+// context, the "Done for today" hero state (rv wave C: only on a complete slate), and "12 / 20 XP today" on the streak
 // tile until the streak is safe.
 import { screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
@@ -76,25 +76,24 @@ describe('static estimates in the hero context', () => {
 });
 
 describe('doneForToday', () => {
-  it('no review due AND (slate complete OR 50 XP today)', async () => {
-    expect(DONE_XP).toBe(50);
-    expect(doneForToday(await dash({ xp: 50 }))).toBe(true);
-    expect(doneForToday(await dash({ xp: 49 }))).toBe(false);
+  it("rv wave C (R4-05): exactly the streak rule — today's slate complete (server todayComplete); XP alone never", async () => {
+    expect(DONE_XP).toBe(50); // the pre-rv number, kept for imports; it decides nothing now
+    expect(doneForToday(await dash({ xp: 50 }))).toBe(false);
+    expect(doneForToday(await dash({ xp: 500 }))).toBe(false);
     expect(doneForToday(await dash({ xp: 0, complete: true }))).toBe(true);
-    expect(doneForToday(await dash({ xp: 0, allSlateDone: true }))).toBe(true);
-    // a review that is due always comes first
-    expect(doneForToday(await dash({ xp: 500, complete: true, due: 1 }))).toBe(false);
+    expect(doneForToday(await dash({ xp: 0, allSlateDone: true }))).toBe(false); // only the server's todayComplete counts
+    expect(doneForToday(await dash({ xp: 500, complete: true, due: 1 }))).toBe(true); // the streak tile says the same
     expect(xpTodayOf(await dash({ xp: 37 }))).toBe(37);
   });
 });
 
 describe('the hero when the day is done', () => {
-  it('says "Done for today ✓ · streak safe" and keeps the next step as a secondary button', async () => {
-    renderApp('/', apiWith(await dash({ xp: 60 })));
+  it('says "Done for today ✓ · the streak grows" and keeps the next step as a secondary button', async () => {
+    renderApp('/', apiWith(await dash({ xp: 60, complete: true })));
     const go = await heroReady();
     const box = screen.getByTestId('dash-hero');
     expect(box).toHaveAttribute('data-done', 'true');
-    expect(within(box).getByTestId('hero-done')).toHaveTextContent('Done for today ✓ · streak safe');
+    expect(within(box).getByTestId('hero-done')).toHaveTextContent('Done for today ✓ · the streak grows');
     expect(within(box).getByRole('heading', { name: 'Today' })).toBeInTheDocument();
     // the next step is still there (Fundamentals topic 1 in the mock), but no longer the primary button
     expect(box).toHaveAttribute('data-kind', 'fundamentals');
@@ -114,8 +113,8 @@ describe('the hero when the day is done', () => {
     expect(go).toHaveClass('btn-primary');
   });
 
-  it('reviews due: never "done", whatever the XP', async () => {
-    renderApp('/', apiWith(await dash({ xp: 300, complete: true, due: 2 })));
+  it('reviews due on an incomplete day: not done, whatever the XP; reviews first', async () => {
+    renderApp('/', apiWith(await dash({ xp: 300, due: 2 })));
     const go = await heroReady();
     expect(go).toHaveAttribute('href', '/review');
     expect(go).toHaveClass('btn-primary');
@@ -134,10 +133,11 @@ describe('the streak tile until the streak is safe', () => {
     expect(within(tile()).queryByTestId('streak-safe')).toBeNull();
   });
 
-  it('at 20 XP, or with the slate complete, the safe line replaces it', async () => {
+  it('at 20 XP the streak is kept (not grown); with the slate complete the day counts', async () => {
     const a = renderApp('/', apiWith(await dash({ xp: 20 })));
     await heroReady();
-    expect(within(tile()).getByTestId('streak-safe')).toBeInTheDocument();
+    expect(within(tile()).getByTestId('streak-kept')).toBeInTheDocument();
+    expect(within(tile()).queryByTestId('streak-safe')).toBeNull();
     expect(within(tile()).queryByTestId('streak-progress')).toBeNull();
     a.unmount();
     renderApp('/', apiWith(await dash({ xp: 0, complete: true })));
