@@ -59,6 +59,7 @@ import { NetworkUnavailableError } from '../sync/github.ts';
 import type { RefContentResponse, RefLink } from '@bootquest/shared/sync';
 import type { DashboardResponseExt as DashboardResponse } from '@bootquest/shared/api-ext';
 import { findCtx, withSlateTargets } from './find-service.ts';
+import { nextCtx, nextUpList } from './nextstep-service.ts';
 
 /**
  * API service layer: orchestrates the W1a engines. No XP / streak / FSRS /
@@ -765,32 +766,6 @@ export function gradeReview(deps: ServiceDeps, itemId: number, gradeValue: 'agai
 
 // ---------------------------------------------------------------- dashboard
 
-/** f52 C8: unit kinds answered from memory with the code hidden (never next up while anything else is open). */
-const ANSWER_FROM_MEMORY_KINDS: ReadonlySet<string> = new Set(['explain-back', 'patch-kata']);
-
-/** The repo slug of a ladder explain-back / kata unit key (`ladder/<family>/<repo>/<hash>`), else null. */
-function ebRepoSlug(key: string): string | null {
-  const m = /^ladder\/[^/]+\/([^/]+)\/[^/]+$/.exec(key);
-  return m ? m[1]! : null;
-}
-
-/**
- * f52 C8: repo slugs whose study quest is passed: a standalone study-pack unit (`ladder/study/<repo>/...`)
- * or a campaign quest's study unit (quest.repo), with a verified pass.
- */
-function studiedRepoSlugs(db: Db, passed: ReadonlySet<number>): Set<string> {
-  const out = new Set<string>();
-  for (const r of db.all<{ id: number; key: string; repo: string | null }>(
-    `SELECT u.id AS id, u.key AS key, q.repo AS repo FROM unit u LEFT JOIN quest q ON q.unit_id = u.id WHERE u.kind = 'study'`,
-  )) {
-    if (!passed.has(r.id)) continue;
-    const own = /^ladder\/study\/([^/]+)\//.exec(r.key);
-    if (own) out.add(own[1]!);
-    if (r.repo) out.add(ladderRepoSlug(r.repo));
-  }
-  return out;
-}
-
 export function getDashboard(deps: ServiceDeps): DashboardResponse {
   const { db, clock } = deps;
   return db.tx(() => {
@@ -809,20 +784,10 @@ export function getDashboard(deps: ServiceDeps): DashboardResponse {
 
     const passed = passedUnitIds(db);
     const prereqs = prerequisiteMap(db);
-    let studied: Set<string> | undefined;
-    const nextUp = listTracks(db)
-      .filter((t) => !t.locked)
-      .map((t) => {
-        // written units have no check (self-assessed carve-out): never "next up"
-        const open = unitsForTrack(db, t.id).filter((u) => u.kind !== 'written' && lockStateFor(u, false, passed, prereqs) === 'available');
-        // f52 C8: an explain-back / patch kata (answered from memory) is never next up while the track has any
-        // other available unit; where those are all there is (agentic), prefer one whose repo's study quest is passed
-        const next =
-          open.find((u) => !ANSWER_FROM_MEMORY_KINDS.has(u.kind)) ??
-          open.find((u) => (studied ??= studiedRepoSlugs(db, passed)).has(ebRepoSlug(u.key) ?? '')) ??
-          open[0];
-        return { trackId: t.id, unit: next ? { id: next.id, key: next.key, title: next.title, kind: next.kind } : null };
-      });
+    // rv wave C (R4-10, R3-08): the Fundamentals step first, then the track's path, never an archived unit
+    // or G3/G4 out of order; explain-backs / katas on a path are offered (api/nextstep-service.ts)
+    const ctx = nextCtx(findCtx(db, passed, prereqs));
+    const nextUp = nextUpList(ctx);
 
     return {
       today,
@@ -837,7 +802,7 @@ export function getDashboard(deps: ServiceDeps): DashboardResponse {
       xp: { total: lp.xp, level: lp.level, intoLevel: lp.intoLevel, levelSpan: lp.levelSpan, nextAt: lp.nextAt },
       competencies: competencyRowsWithPromotion(db, clock),
       // ab S4: each row's link target (response only; the stored slate row never gains it)
-      slate: { day: slate.day, status: slate.status, items: withSlateTargets(findCtx(db, passed, prereqs), slate.items) },
+      slate: { day: slate.day, status: slate.status, items: withSlateTargets(ctx, slate.items) },
       reviewQueue: { due: dueCount(db, clock) },
       nextUp,
     };

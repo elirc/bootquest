@@ -1,6 +1,8 @@
 import type { Db } from '../db/database.ts';
 import { READING_ATTEST_SQL, VERIFIED_PASS_SQL } from './attempts.ts';
+import { isArchivedKey } from '../store/routing.ts';
 import { campaignStepAvailable } from './campaign.ts';
+import { EB_PASS_SQL } from './eb-score.ts';
 import { addDays, dayKey, nowMs, type Clock } from './clock.ts';
 import { fundMissHeldSql } from './fund-review-hold.ts';
 import { xpOnDay } from './xp.ts';
@@ -16,6 +18,24 @@ import { xpOnDay } from './xp.ts';
  * already taken that day; a slot nothing can complete would make the streak
  * impossible again, W1b review), and "clear the review queue" once the learner
  * has review cards (see "Review slot").
+ *
+ * One finishable day (rv wave C; REVIEW Wave 1b row 3, owner decisions D3/D5, R4-05/R4-22/R5-03):
+ * the DEFAULT slate is reviews + the hero's Fundamentals step + one senior rep. Every per-track drill
+ * set is OFF unless a slate_setting row turns it on (one setting away), and the campaign step is off
+ * unless learner_setting campaign_step = 'on' (migration 022).
+ *   fund   — the Fundamentals step on the learner's primary language (learner_setting
+ *            primary_language, no row = 'js'): done by the FIRST-EVER unguided verified pass of any
+ *            unit of that ladder (a topic gate `fund/<t>/...` or a Fundamentals drill `fund-<t>/...`)
+ *            on the day. Shown while the ladder has a unit not passed before the day started; once
+ *            the ladder is finished (or not loaded) it gives way to the primary language's drill set.
+ *   senior — one senior rep (R5 §7 loop), its suggested kind rotating by weekday: Mon/Thu/Sun a
+ *            DESIGN IT set, Tue/Fri a review kata, Wed/Sat a Fundamentals JS 21-33 unit; a kind with
+ *            nothing open at day start falls through (design, kata, fund-senior); none open drops the
+ *            slot. The suggestion is stored in the slot (`rep`) and kept for the day once the row
+ *            exists. The slot is done by ANY senior rep that day, so no day is lost to the rotation:
+ *            the first passing self-score of a sysdesign explain-back (EB_PASS_SQL), the first kata
+ *            self-score of a patch kata, or the first-ever unguided verified pass of a Fundamentals
+ *            JS 21-33 unit; reveal and practice evidence never count. Off when senior_rep = 'off'.
  *
  * Slate settings (ab wave A1, migration 017): the learner's choice of tracks
  * and set size is an append-only ledger (slate_setting). slateShape(db, day)
@@ -114,8 +134,20 @@ export const PARTIAL_DAY_XP = 20;
 export const SLATE_DAYS_PER_TOKEN = 7;
 export const MAX_TOKENS = 2;
 
+/** The senior rep kinds (rv wave C). */
+export const SENIOR_REPS = ['design', 'kata', 'fund-senior'] as const;
+export type SeniorRep = (typeof SENIOR_REPS)[number];
+/** Fundamentals JS topics that count as a senior rep (R5 §7: fund-js 21-33). */
+export const FUND_SENIOR_TOPICS = { track: 'js', from: 21, to: 33 } as const;
+/** The primary-language choices (the Fundamentals ladders). */
+export const PRIMARY_LANGUAGES = ['js', 'csharp', 'java'] as const;
+export type PrimaryLanguage = (typeof PRIMARY_LANGUAGES)[number];
+export const DEFAULT_PRIMARY_LANGUAGE: PrimaryLanguage = 'js';
+
 export type SlateItem =
   | { slot: `drill:${string}`; kind: 'drill-set'; track: string; size: number; done: boolean }
+  | { slot: 'fund'; kind: 'fund-step'; track: string; done: boolean }
+  | { slot: 'senior'; kind: 'senior-rep'; rep: SeniorRep; done: boolean }
   | { slot: 'campaign'; kind: 'campaign-step'; done: boolean }
   | { slot: 'review'; kind: 'review-clear'; done: boolean };
 
@@ -202,7 +234,7 @@ export interface SlateTrackShape {
 
 /**
  * The slate shape as of `day`, one entry per slate-capable track (unlocked, slate_drills = 1) in sort
- * order: the latest slate_setting row with effective_day <= day, else on with the default size.
+ * order: the latest slate_setting row with effective_day <= day, else OFF (rv wave C) with the default size.
  */
 export function slateShape(db: Db, day: string): SlateTrackShape[] {
   return db
@@ -218,10 +250,163 @@ export function slateShape(db: Db, day: string): SlateTrackShape[] {
     .map((r) => ({
       trackId: r.id,
       name: r.name,
-      enabled: r.enabled ?? true, // db/hygiene.ts maps the 0/1 `enabled` column to a boolean
+      // rv wave C (D3): an unconfigured track is OFF; the default day is the Fundamentals step + a senior rep
+      enabled: r.enabled ?? false, // db/hygiene.ts maps the 0/1 `enabled` column to a boolean
       size: r.size ?? DEFAULT_DRILL_SET_SIZE,
       configured: r.enabled !== null,
     }));
+}
+
+/** The learner's day-shape choices as of a day (migration 022, append-only; see the header). */
+export interface LearnerShape {
+  primaryLanguage: PrimaryLanguage;
+  /** a primary_language row is in force (the one-time picker was answered) */
+  primaryChosen: boolean;
+  campaignStep: boolean;
+  seniorRep: boolean;
+}
+
+export function learnerShape(db: Db, day: string): LearnerShape {
+  const latest = (key: string): string | null =>
+    db.get<{ value: string }>(
+      'SELECT value FROM learner_setting WHERE key = ? AND effective_day <= ? ORDER BY effective_day DESC, id DESC LIMIT 1',
+      key,
+      day,
+    )?.value ?? null;
+  const lang = latest('primary_language');
+  return {
+    primaryLanguage: (PRIMARY_LANGUAGES as readonly string[]).includes(lang ?? '') ? (lang as PrimaryLanguage) : DEFAULT_PRIMARY_LANGUAGE,
+    primaryChosen: lang !== null,
+    campaignStep: latest('campaign_step') === 'on',
+    seniorRep: latest('senior_rep') !== 'off',
+  };
+}
+
+/** A Fundamentals ladder unit key -> { track, topic number, gate key }, else null. */
+export function fundKeyParts(key: string): { track: string; topicNo: number; gateKey: string } | null {
+  const m = /^fund(?:\/|-)(js|csharp|java)\/((\d\d)[^/]*)/.exec(key);
+  return m ? { track: m[1]!, topicNo: Number(m[3]), gateKey: `fund/${m[1]}/${m[2]}` } : null;
+}
+
+interface LadderUnit {
+  id: number;
+  key: string;
+  parts: { track: string; topicNo: number; gateKey: string };
+}
+
+/** Ladder units live during `day` (created before it ends, not retired before it ends), optionally of one track. */
+function ladderUnits(db: Db, day: string, track?: string): LadderUnit[] {
+  const [, end] = dayBounds(day);
+  return db
+    .all<{ id: number; key: string }>(
+      `SELECT id, key FROM unit WHERE (key LIKE 'fund/%' OR key LIKE 'fund-%') AND created_at < ? AND (retired_at IS NULL OR retired_at >= ?) ORDER BY id`,
+      end,
+      end,
+    )
+    .flatMap((u) => {
+      const parts = fundKeyParts(u.key);
+      return parts && (track === undefined || parts.track === track) ? [{ ...u, parts }] : [];
+    });
+}
+
+/** Unit ids among `ids` with a verified pass before `t`. */
+function passedBefore(db: Db, ids: readonly number[], t: number): Set<number> {
+  if (ids.length === 0) return new Set();
+  return new Set(
+    db
+      .all<{ u: number }>(`SELECT DISTINCT a.unit_id AS u FROM attempt a WHERE a.unit_id IN (${ids.join(',')}) AND ${VERIFIED_PASS_SQL} AND a.created_at < ?`, t)
+      .map((r) => r.u),
+  );
+}
+
+/** Ladder units of a track with no verified pass before the day started (live during the day). */
+export function fundUnitsRemaining(db: Db, track: string, day: string): number {
+  const units = ladderUnits(db, day, track);
+  const passed = passedBefore(db, units.map((u) => u.id), dayBounds(day)[0]);
+  return units.filter((u) => !passed.has(u.id)).length;
+}
+
+/** Distinct units among `ids` whose FIRST-EVER verified pass is in [from, to) and was not guided. */
+function newFirstPassesIn(db: Db, ids: readonly number[], from: number, to: number): number {
+  if (ids.length === 0) return 0;
+  return (
+    db.get<{ n: number }>(
+      `SELECT COUNT(*) AS n FROM unit u
+        WHERE u.id IN (${ids.join(',')})
+          AND EXISTS (SELECT 1 FROM attempt a WHERE a.unit_id = u.id AND ${VERIFIED_PASS_SQL}
+                        AND a.mode <> 'guided' AND a.created_at >= ? AND a.created_at < ?)
+          AND NOT EXISTS (SELECT 1 FROM attempt a WHERE a.unit_id = u.id AND ${VERIFIED_PASS_SQL} AND a.created_at < ?)`,
+      from,
+      to,
+      from,
+    )?.n ?? 0
+  );
+}
+
+const isFundSenior = (u: LadderUnit): boolean =>
+  u.parts.track === FUND_SENIOR_TOPICS.track && u.parts.topicNo >= FUND_SENIOR_TOPICS.from && u.parts.topicNo <= FUND_SENIOR_TOPICS.to;
+
+/** SQL (alias `e` = evidence): self-scored evidence that may count (never a reveal or a practice retake). */
+const SELF_SCORED_OK = `e.assistance NOT IN ('reveal', 'practice')`;
+/** SQL (aliases `e`, `u`): a passing DESIGN IT self-score or a kata self-score. */
+const SENIOR_EVIDENCE_SQL = `((e.kind = 'explain-back' AND ${EB_PASS_SQL} AND u.track_id = 'sysdesign' AND u.kind = 'explain-back')
+                               OR (e.kind = 'kata' AND u.kind = 'patch-kata'))`;
+
+/** Some senior rep (any kind) was FIRST completed in [from, to): see the header ("senior"). */
+export function seniorRepDone(db: Db, from: number, to: number, day?: string): boolean {
+  const firsts = db.all<{ unit: number; first: number }>(
+    `SELECT e.unit_id AS unit, MIN(e.created_at) AS first FROM evidence e JOIN unit u ON u.id = e.unit_id
+      WHERE ${SENIOR_EVIDENCE_SQL} AND ${SELF_SCORED_OK} AND e.created_at < ?
+      GROUP BY e.unit_id`,
+    to,
+  );
+  if (firsts.some((r) => r.first >= from)) return true;
+  const units = ladderUnits(db, day ?? dayKeyOf(from)).filter(isFundSenior);
+  return newFirstPassesIn(db, units.map((u) => u.id), from, to) > 0;
+}
+
+const dayKeyOf = (t: number): string => {
+  const d = new Date(t);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+/** A senior rep of this kind can still be taken on `day` (judged at day start; archived units never count). */
+export function seniorRepAvailable(db: Db, rep: SeniorRep, day: string): boolean {
+  const [start, end] = dayBounds(day);
+  if (rep === 'fund-senior') {
+    // a Fundamentals JS 21-33 unit not passed before day start whose topic is open (its gate's prerequisites passed)
+    const all = ladderUnits(db, day, FUND_SENIOR_TOPICS.track);
+    const senior = all.filter(isFundSenior);
+    const gateId = new Map(all.filter((u) => u.key === u.parts.gateKey).map((u) => [u.key, u.id]));
+    const prereq = new Map<number, number[]>();
+    for (const r of db.all<{ u: number; p: number }>('SELECT unit_id AS u, prereq_unit_id AS p FROM unit_prerequisite')) prereq.set(r.u, [...(prereq.get(r.u) ?? []), r.p]);
+    const passed = passedBefore(db, all.map((u) => u.id), start);
+    return senior.some((u) => {
+      if (passed.has(u.id)) return false;
+      const g = gateId.get(u.parts.gateKey);
+      return g === undefined || (prereq.get(g) ?? []).every((p) => passed.has(p));
+    });
+  }
+  const where = rep === 'design' ? `u.track_id = 'sysdesign' AND u.kind = 'explain-back'` : `u.kind = 'patch-kata'`;
+  const evidence = rep === 'design' ? `e.kind = 'explain-back' AND ${EB_PASS_SQL}` : `e.kind = 'kata'`;
+  return db
+    .all<{ key: string }>(
+      `SELECT u.key FROM unit u JOIN track t ON t.id = u.track_id
+        WHERE ${where} AND t.locked = 0 AND u.created_at < ? AND (u.retired_at IS NULL OR u.retired_at >= ?)
+          AND NOT EXISTS (SELECT 1 FROM evidence e WHERE e.unit_id = u.id AND ${evidence} AND ${SELF_SCORED_OK} AND e.created_at < ?)`,
+      end,
+      end,
+      start,
+    )
+    .some((r) => !isArchivedKey(r.key));
+}
+
+/** The weekday's preferred senior rep (Mon/Thu/Sun design, Tue/Fri kata, Wed/Sat fund-senior), then the fall-through order. */
+export function seniorRepOrder(day: string): SeniorRep[] {
+  const [y, m, d] = day.split('-').map(Number) as [number, number, number];
+  const wd = new Date(y, m - 1, d).getDay(); // 0 = Sunday
+  const first: SeniorRep = wd === 2 || wd === 5 ? 'kata' : wd === 3 || wd === 6 ? 'fund-senior' : 'design';
+  return [first, ...SENIOR_REPS.filter((r) => r !== first)];
 }
 
 /** The learner had a (non-retest) review card before `dayStart` ms: only then is the review slot on the slate. */
@@ -232,13 +417,22 @@ export function reviewSlotShown(db: Db, dayStart: number): boolean {
 /** The slot list for `day` (done flags unset), from the slate settings, the drill ledger, campaign state and the cards. */
 function slateStructure(db: Db, day: string): SlateItem[] {
   const [start, end] = dayBounds(day);
-  const hasCampaign = campaignStepAvailable(db) || campaignStepDone(db, start, end);
+  const learner = learnerShape(db, day);
+  const hasCampaign = learner.campaignStep && (campaignStepAvailable(db) || campaignStepDone(db, start, end));
   const items: SlateItem[] = [];
+  const fundLeft = fundUnitsRemaining(db, learner.primaryLanguage, day) > 0;
+  if (fundLeft) items.push({ slot: 'fund', kind: 'fund-step', track: learner.primaryLanguage, done: false });
   for (const tr of slateShape(db, day)) {
-    if (!tr.enabled) continue;
+    // a finished (or absent) primary ladder gives way to that language's drill set (default size), unless the
+    // learner switched that set off explicitly
+    if (!tr.enabled && !(tr.trackId === learner.primaryLanguage && !fundLeft && !tr.configured)) continue;
     // an exhausted track drops its slot; a nearly-exhausted one asks only for what is left
     const size = Math.min(tr.size, drillUnitsRemaining(db, tr.trackId, day));
     if (size > 0) items.push({ slot: `drill:${tr.trackId}`, kind: 'drill-set', track: tr.trackId, size, done: false });
+  }
+  if (learner.seniorRep) {
+    const rep = seniorRepOrder(day).find((r) => seniorRepAvailable(db, r, day));
+    if (rep) items.push({ slot: 'senior', kind: 'senior-rep', rep, done: false });
   }
   if (hasCampaign) items.push({ slot: 'campaign', kind: 'campaign-step', done: false });
   if (reviewSlotShown(db, start)) items.push({ slot: 'review', kind: 'review-clear', done: false });
@@ -335,6 +529,8 @@ export function deriveSlate(db: Db, day: string, items: readonly SlateItem[], at
   return items.map((item): SlateItem => {
     if (item.kind === 'review-clear') return { ...item, done: reviewCleared(db, start, at, reviewOnly) };
     if (item.kind === 'campaign-step') return { ...item, done: campaignStepDone(db, start, cutoff) };
+    if (item.kind === 'fund-step') return { ...item, done: newFirstPassesIn(db, ladderUnits(db, day, item.track).map((u) => u.id), start, cutoff) > 0 };
+    if (item.kind === 'senior-rep') return { ...item, done: seniorRepDone(db, start, cutoff, day) };
     return { ...item, done: newDrillPasses(db, item.track, start, cutoff) >= item.size };
   });
 }
@@ -365,6 +561,11 @@ export function composeSlate(db: Db, now: Clock): SlateRow {
     const complete = isSlateComplete(before);
     const had = new Set(existing.items.map((i) => i.slot));
     const refreshed = structure.filter((item) => !complete || had.has(item.slot)).map((item): SlateItem => {
+      // the day's senior rep suggestion is fixed once the row exists
+      if (item.kind === 'senior-rep') {
+        const prev = existing.items.find((b) => b.kind === 'senior-rep');
+        return prev?.kind === 'senior-rep' ? { ...item, rep: prev.rep } : item;
+      }
       if (item.kind !== 'drill-set') return item;
       const prev = before.find((b) => b.slot === item.slot);
       return prev?.kind === 'drill-set' && prev.done && prev.size < item.size ? { ...item, size: prev.size } : item;

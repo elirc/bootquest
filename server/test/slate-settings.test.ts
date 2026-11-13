@@ -39,20 +39,24 @@ function setting(db: Db, track: string, enabled: boolean, size: number | null, e
 const shapeOf = (db: Db, clock: () => Date): string[] =>
   composeSlate(db, clock).items.map((i) => (i.kind === 'drill-set' ? `${i.slot}x${i.size}` : i.slot));
 
-const DEFAULT_SHAPE = ['drill:jsx1', 'drill:csharpx1', 'drill:javax1', 'drill:sysdesignx1'];
+// rv wave C (D3): every drill set is off by default; with no Fundamentals ladder loaded (this fixture) the
+// primary language's (JS) drill set stands in for the Fundamentals step, at the default size
+const DEFAULT_SHAPE = ['drill:jsx1'];
 
 describe('A1 unconfigured first-run slate', () => {
   const ctx = useTempDb();
 
-  it('an empty learner gets 1 drill per slate track and no review slot: 4 actions (5 with a campaign step)', () => {
+  it('an empty learner gets one drill set (the primary language) and no review slot; the campaign step only when switched on', () => {
     stock(ctx.db, ctx.clock);
     expect(DEFAULT_DRILL_SET_SIZE).toBe(1);
     expect(shapeOf(ctx.db, ctx.clock)).toEqual(DEFAULT_SHAPE);
     const unitId = makeUnit(ctx.db, ctx.clock, { kind: 'guided-project' });
     const act = ctx.db.run(`INSERT INTO campaign_act (track_id, act_no, title) VALUES ('js', 1, 'Act 1')`).lastInsertRowid;
     ctx.db.run(`INSERT INTO quest (act_id, unit_id, repo, index_rank, verdict) VALUES (?, ?, 'elirc/x', 1, 'study')`, act, unitId);
+    expect(composeSlate(ctx.db, ctx.clock).items.map((i) => i.slot)).toEqual(['drill:js']); // campaign step off by default
+    ctx.db.run("INSERT INTO learner_setting (key, value, effective_day, created_at) VALUES ('campaign_step', 'on', '2026-10-01', 0)");
     const items = composeSlate(ctx.db, ctx.clock).items;
-    expect(items.map((i) => i.slot)).toEqual(['drill:js', 'drill:csharp', 'drill:java', 'drill:sysdesign', 'campaign']);
+    expect(items.map((i) => i.slot)).toEqual(['drill:js', 'campaign']);
     expect(items.length).toBeLessThanOrEqual(6);
     expect(items.some((i) => i.done)).toBe(false);
   });
@@ -73,7 +77,7 @@ describe('A1 unconfigured first-run slate', () => {
     expect(shapeOf(ctx.db, ctx.clock)).toEqual(DEFAULT_SHAPE);
   });
 
-  it('a day of 1 drill per track completes and counts as a slate day', () => {
+  it('a default day (1 drill) completes and counts as a slate day', () => {
     const ids = stock(ctx.db, ctx.clock);
     for (const t of SLATE_TRACKS) submit(ctx.db, ctx.clock, ids[t]![0]!);
     expect(isSlateComplete(composeSlate(ctx.db, ctx.clock).items)).toBe(true); // the service composes after every submit
@@ -138,10 +142,11 @@ describe('A1 slate settings are read as of the day (append-only, effective tomor
     stock(ctx.db, ctx.clock);
     composeSlate(ctx.db, ctx.clock); // day 1 row
     setting(ctx.db, 'js', false, null, '2026-10-03');
+    setting(ctx.db, 'java', true, null, '2026-10-03');
     ctx.clock.advance(3 * DAY_MS); // days 2 and 3 have no row
     closeElapsedDays(ctx.db, ctx.clock);
-    expect(getSlate(ctx.db, '2026-10-02')!.items.map((i) => i.slot)).toEqual(['drill:js', 'drill:csharp', 'drill:java', 'drill:sysdesign']);
-    expect(getSlate(ctx.db, '2026-10-03')!.items.map((i) => i.slot)).toEqual(['drill:csharp', 'drill:java', 'drill:sysdesign']);
+    expect(getSlate(ctx.db, '2026-10-02')!.items.map((i) => i.slot)).toEqual(['drill:js']);
+    expect(getSlate(ctx.db, '2026-10-03')!.items.map((i) => i.slot)).toEqual(['drill:java']);
   });
 
   it('the latest row of the latest effective day wins; size NULL is the default size', () => {
@@ -151,10 +156,10 @@ describe('A1 slate settings are read as of the day (append-only, effective tomor
     setting(ctx.db, 'csharp', true, null, '2026-09-15');
     setting(ctx.db, 'js', false, 9, '2026-10-02'); // future: not yet
     expect(slateShape(ctx.db, '2026-10-01').map((s) => [s.trackId, s.enabled, s.size, s.configured])).toEqual([
-      ['js', true, 1, false],
+      ['js', false, 1, false],
       ['csharp', true, 1, true],
       ['java', true, 7, true],
-      ['sysdesign', true, 1, false],
+      ['sysdesign', false, 1, false],
     ]);
   });
 

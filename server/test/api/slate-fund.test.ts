@@ -14,6 +14,7 @@ import { fixedClock } from '../../src/engines/clock.ts';
 import { insertUnit } from '../../src/store/content.ts';
 import { localNoon, makeTempDb, submit, type TempDb } from '../helpers.ts';
 import { fakeDrillJs } from './harness.ts';
+import { abSlate } from '../slate-fixtures.ts';
 
 const drillSpec = { type: 'drill-js', language: 'js', tests: [{ name: 't', code: 'assert.ok(true)' }] };
 const drill = (key: string, track = 'js', prerequisites: string[] = []) => ({ key, track, kind: 'drill', title: key, difficulty: 1, prerequisites, checks: [{ spec: drillSpec }] });
@@ -48,6 +49,7 @@ describe('GET /api/dashboard: drill-set target prefers Fundamentals', { timeout:
   beforeEach(() => {
     tmp = makeTempDb();
     db = tmp.db;
+    abSlate(db); // rv wave C: these pin the ab drill-set slots (every track on); the default day is the Fundamentals step
     clock = fixedClock(localNoon(2026, 10, 1));
     for (const u of UNITS) insertUnit(db, u, clock);
     app = createApp({ db, clock, runners: { 'drill-js': fakeDrillJs } });
@@ -108,6 +110,7 @@ describe('GET /api/dashboard: the drill-set fallback skips locked Fundamentals t
   beforeEach(() => {
     tmp = makeTempDb();
     db = tmp.db;
+    abSlate(db); // rv wave C: these pin the ab drill-set slots (every track on); the default day is the Fundamentals step
     clock = fixedClock(localNoon(2026, 10, 1));
     // the locked topic's drill has the LOWEST id: firstOpenDrill (and /drills/next) pick it
     for (const u of [

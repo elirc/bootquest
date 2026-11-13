@@ -35,4 +35,26 @@ export function cardOnFile(db: Db): void {
 export function legacySlate(db: Db): void {
   fullSlateSetting(db);
   cardOnFile(db);
+  preRvLearner(db); // rv wave C: + the campaign step, no senior rep
+}
+
+/**
+ * rv wave C: the pre-rv learner shape (migration 022 rows effective since 2000-01-01): the campaign step
+ * on and the senior rep off. With no primary_language row the Fundamentals step stays on JS.
+ */
+export function preRvLearner(db: Db): void {
+  for (const [key, value] of [
+    ['campaign_step', 'on'],
+    ['senior_rep', 'off'],
+  ] as const) {
+    db.run('INSERT INTO learner_setting (key, value, effective_day, created_at) VALUES (?, ?, ?, ?)', key, value, FIXTURE_EPOCH_DAY, localNoon(2000, 1, 1).getTime());
+  }
+}
+
+/** rv wave C: the ab-wave default slate (every slate track on at the unconfigured size, campaign step on, no senior rep). */
+export function abSlate(db: Db): void {
+  for (const { id } of db.all<{ id: string }>('SELECT id FROM track')) {
+    db.run('INSERT INTO slate_setting (track_id, enabled, size, effective_day, created_at) VALUES (?, 1, NULL, ?, ?)', id, FIXTURE_EPOCH_DAY, localNoon(2000, 1, 1).getTime());
+  }
+  preRvLearner(db);
 }
