@@ -300,7 +300,7 @@ describe('track units: campaign track (collapsed secondary)', () => {
     expect(n).toBeGreaterThan(0);
 
     const { user } = renderApp('/campaign/js');
-    const panel = await screen.findByRole('tabpanel', { name: 'Campaign acts' });
+    const panel = await screen.findByRole('list', { name: 'Campaign acts' });
     expect(panel.querySelectorAll('[data-act]')).toHaveLength(acts.length);
     expect(panel.querySelectorAll('[data-quest]')).toHaveLength(questCount);
     expect(screen.queryByTestId('campaign-empty')).toBeNull();

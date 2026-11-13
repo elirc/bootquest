@@ -20,7 +20,11 @@ import {
   SECTION_LABEL,
   groupTotals,
   groupUnits,
+  pathLabeler,
+  pathOrder,
   sectionCounts,
+  withoutArchived,
+  type PathStep,
   tierGroups,
   tierLabels,
   type GroupTier,
@@ -45,7 +49,14 @@ function TrackUnitsBody({ trackId, variant }: { trackId: TrackId; variant: Varia
   // `#units` (the dashboard's "Browse all" link) arrives with the browser already open
   const deepLinked = useLocation().hash === '#units';
   const [open, setOpen] = useState(deepLinked);
-  const units = res.status === 'ready' ? res.data.units : undefined;
+  // rv wave C: GET /routing — archived units hide behind a toggle; a track's path orders its groups
+  const routing = useAsync(() => api.getRouting(), [api]);
+  const [showArchived, setShowArchived] = useState(false);
+  const archived = useMemo(() => new Set<number>(routing.status === 'ready' ? routing.data.archivedUnitIds : []), [routing.status, routing.data]);
+  const steps: PathStep[] | undefined = routing.status === 'ready' ? routing.data.paths[trackId] : undefined;
+  const all = res.status === 'ready' ? res.data.units : undefined;
+  const archivedCount = all ? all.filter((u) => archived.has(u.id)).length : 0;
+  const units = useMemo(() => (all ? withoutArchived(all, archived, showArchived) : undefined), [all, archived, showArchived]);
   const expanded = variant === 'primary' || open;
   const sectionRef = useRef<HTMLElement>(null);
   const arrived = useRef(false);
@@ -81,7 +92,16 @@ function TrackUnitsBody({ trackId, variant }: { trackId: TrackId; variant: Varia
         (expanded || res.status === 'error') && <LoadState error={res.error} onRetry={res.reload} minHeight={expanded ? 240 : undefined} />
       ) : (
         // f52 U14: a track without acts lists its numbered drill modules first, under headings
-        expanded && <UnitBrowser units={res.data.units} tiers={variant === 'primary' ? tierLabels(trackId) : undefined} />
+        expanded && (
+          <>
+            {archivedCount > 0 && (
+              <label className="check small tu-archived" data-testid="track-units-archived">
+                <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} /> Show archived ({archivedCount})
+              </label>
+            )}
+            <UnitBrowser units={units ?? []} steps={steps} tiers={variant === 'primary' || steps ? tierLabels(trackId) : undefined} />
+          </>
+        )
       )}
     </section>
   );
@@ -98,12 +118,19 @@ const toggled = (set: ReadonlySet<string>, label: string): Set<string> => {
   return next;
 };
 
-function UnitBrowser({ units, tiers }: { units: UnitSummary[]; tiers?: Record<GroupTier, string> }) {
+function UnitBrowser({ units: served, steps, tiers }: { units: UnitSummary[]; steps?: PathStep[]; tiers?: Record<GroupTier, string> }) {
+  // rv wave C: units on the track's path are listed in path order, under their step
+  const labelOf = useMemo(() => pathLabeler(steps), [steps]);
+  const units = useMemo(() => {
+    if (!steps) return served;
+    const order = pathOrder(steps);
+    return [...served].sort((a, b) => order(a) - order(b));
+  }, [served, steps]);
   const [filter, setFilter] = useState<UnitFilter>(NO_FILTER);
   // groups the learner opened (no query), and groups they closed while a query auto-opened them
   const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set());
   const [closedInQuery, setClosedInQuery] = useState<ReadonlySet<string>>(() => new Set());
-  const groups = useMemo(() => groupUnits(units, filter), [units, filter]);
+  const groups = useMemo(() => groupUnits(units, filter, labelOf), [units, filter, labelOf]);
   // the tier sections (tracks without acts) or one untitled section in label order
   const sections = useMemo(
     (): { tier: GroupTier | null; groups: UnitGroup[] }[] => (tiers ? tierGroups(groups) : [{ tier: null, groups }]),
@@ -113,7 +140,7 @@ function UnitBrowser({ units, tiers }: { units: UnitSummary[]; tiers?: Record<Gr
   const counts = useMemo(() => sectionCounts(units), [units]);
   // headers show each group's UNFILTERED done/total (so they agree with the count line below),
   // plus how many of the group are shown when a filter hides some
-  const totals = useMemo(() => groupTotals(units), [units]);
+  const totals = useMemo(() => groupTotals(units, labelOf), [units, labelOf]);
   const done = useMemo(() => units.filter((u) => u.state === 'done').length, [units]);
   const shown = groups.reduce((n, g) => n + g.units.length, 0);
   const countText = `Showing ${shown} of ${units.length} units · ${done} done`;

@@ -36,6 +36,7 @@ import {
   type RefContentResponse,
   type WrittenAnswerResponse,
   type SlateSettingsResponse,
+  type RoutingResponse,
   type DueResponse,
   type WeakSpotsResponse,
   type DrillNextResponse,
@@ -156,6 +157,8 @@ export function createHttpApi(baseUrl = '/api', fetchImpl: typeof fetch = (...a)
             ? { preset: b.preset }
             : { tracks: b.tracks.map((t) => ({ trackId: t.trackId, enabled: t.enabled, ...(t.size !== undefined ? { size: t.size } : {}) })) },
       }),
+    putLearnerSettings: (b) => call<SlateSettingsResponse>('/settings/learner', { method: 'PUT', body: b }),
+    getRouting: () => call<RoutingResponse>('/routing'),
     // ---- ab wave S3
     getWeakSpots: () => call<WeakSpotsResponse>('/stats/weak'),
     getDue: () => call<DueResponse>('/due'),

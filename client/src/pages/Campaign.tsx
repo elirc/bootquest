@@ -1,4 +1,4 @@
-import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useApi } from '../api/context';
 import type { CampaignActDto, CampaignQuestDto, QuestState, TrackId, TrackProgress, TrackSummary } from '../api/types';
@@ -9,7 +9,6 @@ import { hasModifier, isEditableTarget, useKeydown } from '../lib/keys';
 import { useAsync } from '../lib/useAsync';
 import { useTracks } from '../lib/tracks';
 import { TRACK_PLACEHOLDER, isTrackId, progressLabel, progressTitle } from '../lib/view';
-import { SkillTree, ViewToggle, useCampaignView } from './CampaignTree';
 import { TrackUnitsSection } from './TrackUnits';
 import { FundamentalsSection } from './Fundamentals';
 
@@ -32,6 +31,11 @@ function CampaignView({ trackId }: { trackId: TrackId }) {
   const api = useApi();
   const tracks = useTracks();
   const campaign = useAsync(() => api.getCampaign(trackId), [api, trackId]);
+  // rv wave C (Q4): archived quests (content/archive.json) are hidden behind a toggle; they never count as core
+  const routing = useAsync(() => api.getRouting(), [api]);
+  const archived = new Set<number>(routing.status === 'ready' ? routing.data.archivedUnitIds : []);
+  const [showArchived, setShowArchived] = useState(false);
+  const archivedHere = campaign.status === 'ready' ? campaign.data.acts.flatMap((a) => a.quests).filter((q) => q.unitId !== undefined && archived.has(q.unitId)).length : 0;
   const mapRef = useRef<HTMLDivElement>(null);
   const track = campaign.data?.track ?? tracks.data?.tracks.find((t) => t.id === trackId);
   const locked = track?.locked === true;
@@ -41,9 +45,8 @@ function CampaignView({ trackId }: { trackId: TrackId }) {
   useEffect(() => {
     refreshTracks({ join: true });
   }, [refreshTracks]);
-  const [view, setView] = useCampaignView(); // B3: list or skill tree, remembered
   // W11: `?unit=<unitId>` targets one quest (e.g. from a reading unit): it is scrolled to, focused and
-  // marked in either view. Only a quest the campaign payload itself lists can be targeted.
+  // marked. Only a quest the campaign payload itself lists can be targeted.
   const [params] = useSearchParams();
   const targetUnit = Number(params.get('unit'));
   const target =
@@ -52,21 +55,16 @@ function CampaignView({ trackId }: { trackId: TrackId }) {
       : undefined;
   const targetId = target?.id;
   useEffect(() => {
-    if (targetId === undefined || view !== 'list') return;
+    if (targetId === undefined) return;
     const el = mapRef.current?.querySelector<HTMLElement>(`[data-quest="${targetId}"] [data-step]`);
     if (!el) return;
     el.focus({ preventScroll: true });
     el.scrollIntoView?.({ block: 'center' });
-  }, [targetId, view]);
+  }, [targetId]);
 
   // j / k walk the quests (including locked ones, which are focusable but not actionable).
   useKeydown((e) => {
     if (hasModifier(e) || isEditableTarget(e.target)) return;
-    if (e.key === 'v') {
-      e.preventDefault();
-      setView(view === 'tree' ? 'list' : 'tree');
-      return;
-    }
     if (e.key !== 'j' && e.key !== 'k') return;
     const nodes = Array.from(mapRef.current?.querySelectorAll<HTMLElement>('[data-step]') ?? []);
     if (nodes.length === 0) return;
@@ -85,7 +83,17 @@ function CampaignView({ trackId }: { trackId: TrackId }) {
   return (
     // f52 U20: one centred content column, the same width as the dashboard
     <div className="page-col">
-      <PageHeader eyebrow="Campaign" title={track ? track.name : ' '} actions={<ViewToggle view={view} onChange={setView} />} />
+      <PageHeader
+        eyebrow="Campaign"
+        title={track ? track.name : ' '}
+        actions={
+          archivedHere > 0 ? (
+            <label className="check small" data-testid="campaign-archived-toggle">
+              <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} /> Archived ({archivedHere})
+            </label>
+          ) : undefined
+        }
+      />
       <TrackTabs tracks={tracks.data?.tracks ?? []} current={trackId} />
       <TrackProgressLine progress={tracks.data?.tracks.find((t) => t.id === trackId)?.progress} locked={locked} />
       <div className={`campaign${locked ? ' campaign-locked' : ''}`} ref={mapRef}>
@@ -107,19 +115,14 @@ function CampaignView({ trackId }: { trackId: TrackId }) {
             </>
           ) : (
             <>
-              {view === 'tree' ? (
-                <div role="tabpanel" aria-label="Campaign skill tree">
-                  <SkillTree key={trackId} acts={campaign.data.acts} trackLocked={locked} level={campaign.data.level} targetQuestId={targetId} />
-                </div>
-              ) : (
-                <ol className="acts" role="tabpanel" aria-label="Campaign acts">
-                  {[...campaign.data.acts]
-                    .sort((a, b) => a.ordinal - b.ordinal)
-                    .map((act) => (
-                      <ActCard key={act.id} act={act} level={campaign.data.level} targetQuestId={targetId} />
-                    ))}
-                </ol>
-              )}
+              {/* rv wave C (R4-18): the skill-tree view is gone (it rendered this same list payload) */}
+              <ol className="acts" aria-label="Campaign acts">
+                {[...campaign.data.acts]
+                  .sort((a, b) => a.ordinal - b.ordinal)
+                  .map((act) => (
+                    <ActCard key={act.id} act={act} level={campaign.data.level} targetQuestId={targetId} hidden={showArchived ? undefined : archived} />
+                  ))}
+              </ol>
               {!locked && <TrackUnitsSection trackId={trackId} variant="secondary" />}
             </>
           )
@@ -201,8 +204,10 @@ function unlockText(act: CampaignActDto, level: number): string {
   return `Unlocks at ${parts.length ? parts.join(' and ') : 'start'}.`;
 }
 
-function ActCard({ act, level, targetQuestId }: { act: CampaignActDto; level: number; targetQuestId?: number }) {
+function ActCard({ act, level, targetQuestId, hidden }: { act: CampaignActDto; level: number; targetQuestId?: number; hidden?: ReadonlySet<number> }) {
   const { coreDone, coreTotal } = act.progress;
+  // rv wave C: archived quests stay listed only under the Archived toggle (a targeted one always shows)
+  const quests = act.quests.filter((q) => !hidden || q.unitId === undefined || !hidden.has(q.unitId) || q.id === targetQuestId);
   const state = !act.unlocked ? 'locked' : coreTotal > 0 && coreDone >= coreTotal ? 'complete' : 'in-progress';
   return (
     <li className={`act act-${state}`} data-act={act.ordinal} data-unlocked={act.unlocked}>
@@ -229,11 +234,11 @@ function ActCard({ act, level, targetQuestId }: { act: CampaignActDto; level: nu
           <Icon name="lock" size={12} /> {unlockText(act, level)}
         </p>
       )}
-      {act.quests.length === 0 ? (
+      {quests.length === 0 ? (
         <p className="act-gate">No quests in this act yet.</p>
       ) : (
         <ol className="path">
-          {act.quests.map((q) => (
+          {quests.map((q) => (
             <QuestNode key={q.id} quest={q} actUnlocked={act.unlocked} target={q.id === targetQuestId} />
           ))}
         </ol>

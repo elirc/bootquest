@@ -6,7 +6,6 @@ import { App } from './App';
 import './styles/tokens.css';
 import './styles/app.css';
 import './styles/player.css';
-import './styles/skilltree.css';
 import './styles/trackunits.css';
 import './styles/fundamentals.css';
 import './styles/slatefocus.css';

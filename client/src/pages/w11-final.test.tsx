@@ -3,12 +3,11 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { screen, waitFor, within } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createMockApi } from '../api/mock';
 import { ApiError, type BootQuestApi, type CampaignActDto, type UnitDetail } from '../api/types';
 import { fmtStamp, fmtWhen } from '../lib/format';
 import { renderApp } from '../test/render';
-import { CAMPAIGN_VIEW_KEY } from './CampaignTree';
 
 const STYLES = join(dirname(fileURLToPath(import.meta.url)), '..', 'styles');
 const css = (name: string) => readFileSync(join(STYLES, name), 'utf8');
@@ -100,14 +99,6 @@ describe('W11 #3 unlock rule: a level already reached is not shown as an open re
     expect(await screen.findByText(/level 4 \(you are level 3\)\./)).toBeInTheDocument();
   });
 
-  it('tree view (gate label)', async () => {
-    window.localStorage.setItem(CAMPAIGN_VIEW_KEY, 'tree');
-    renderApp('/campaign/js', lockedWithLevel(4, 6));
-    await screen.findByTestId('skilltree');
-    const gate = document.querySelector<HTMLElement>('[data-node^="a:"][aria-label*="locked"]')!;
-    expect(gate.getAttribute('aria-label')).toMatch(/level 4 \(reached\)/);
-    expect(gate.getAttribute('aria-label')).not.toMatch(/you: 6/);
-  });
 });
 
 describe('W11 campaign `?unit=` target (ReadingEmpty / locked panel links)', () => {
@@ -120,7 +111,7 @@ describe('W11 campaign `?unit=` target (ReadingEmpty / locked panel links)', () 
   it('list view: the targeted quest is marked, focused and announced as the current location', async () => {
     const q = await pickQuest(false);
     renderApp(`/campaign/js?unit=${q.unitId}`);
-    await screen.findByRole('tabpanel', { name: 'Campaign acts' });
+    await screen.findByRole('list', { name: 'Campaign acts' });
     const li = document.querySelector<HTMLElement>(`[data-quest="${q.id}"]`)!;
     await waitFor(() => expect(li.querySelector('[data-step]')).toHaveFocus());
     expect(li).toHaveClass('step-target');
@@ -128,62 +119,12 @@ describe('W11 campaign `?unit=` target (ReadingEmpty / locked panel links)', () 
     expect(document.querySelectorAll('.step-target')).toHaveLength(1);
   });
 
-  it('tree view: a quest in a collapsed (locked) act is revealed, focused and marked', async () => {
-    const q = await pickQuest(true);
-    window.localStorage.setItem(CAMPAIGN_VIEW_KEY, 'tree');
-    renderApp(`/campaign/js?unit=${q.unitId}`);
-    await screen.findByTestId('skilltree');
-    const el = await waitFor(() => {
-      const n = document.querySelector<HTMLElement>(`[data-node="q:${q.id}"]`);
-      expect(n).not.toBeNull();
-      return n!;
-    });
-    await waitFor(() => expect(el).toHaveFocus());
-    expect(el).toHaveClass('tree-q-target');
-    expect(el).toHaveAttribute('aria-current', 'location');
-    expect(el.tagName).toBe('DIV'); // still inert: a locked quest never becomes a link
-  });
-
   it('an unknown or junk unit id targets nothing', async () => {
     renderApp('/campaign/js?unit=abc');
-    await screen.findByRole('tabpanel', { name: 'Campaign acts' });
+    await screen.findByRole('list', { name: 'Campaign acts' });
     expect(document.querySelectorAll('.step-target, [aria-current="location"]')).toHaveLength(0);
   });
 
-  it('tree view at phone width: the target is scrolled to on the MEASURED layout, not the fallback one', async () => {
-    // jsdom has no layout: give the tree box a phone width and record, for each scroll, whether
-    // the tree had already been laid out at that width (one column = `skilltree-narrow`). The
-    // fallback-width layout puts the node ~2,000px higher than where it ends up at 400px.
-    const q = await pickQuest(true);
-    const width = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(function (this: HTMLElement) {
-      return this.classList.contains('skilltree') ? 368 : 0;
-    });
-    const scrolls: { node: string | undefined; narrow: boolean }[] = [];
-    const proto = Element.prototype as unknown as { scrollIntoView?: unknown }; // jsdom has none
-    const had = Object.prototype.hasOwnProperty.call(proto, 'scrollIntoView');
-    const prev = proto.scrollIntoView;
-    proto.scrollIntoView = function (this: HTMLElement) {
-      scrolls.push({ node: this.dataset.node, narrow: !!this.closest('.skilltree-narrow') });
-    };
-    try {
-      window.localStorage.setItem(CAMPAIGN_VIEW_KEY, 'tree');
-      renderApp(`/campaign/js?unit=${q.unitId}`);
-      await screen.findByTestId('skilltree');
-      const el = await waitFor(() => {
-        const n = document.querySelector<HTMLElement>(`[data-node="q:${q.id}"]`);
-        expect(n).toHaveFocus();
-        return n!;
-      });
-      expect(el.closest('.skilltree')).toHaveClass('skilltree-narrow');
-      const toTarget = scrolls.filter((s) => s.node === `q:${q.id}`);
-      expect(toTarget.length).toBeGreaterThan(0);
-      expect(toTarget.every((s) => s.narrow)).toBe(true);
-    } finally {
-      width.mockRestore();
-      if (had) proto.scrollIntoView = prev;
-      else delete proto.scrollIntoView;
-    }
-  });
 });
 
 describe('W11 #6/#7 written unit: no immutable store of the untouched template; focus follows the store', () => {

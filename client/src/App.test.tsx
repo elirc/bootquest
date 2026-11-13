@@ -13,28 +13,39 @@ const withOverrides = (o: Partial<BootQuestApi>): BootQuestApi => ({ ...createMo
 describe('routing + global keyboard navigation', () => {
   it('renders the dashboard with all required sections from the server shape', async () => {
     renderApp('/');
-    await screen.findByRole('table');
+    await screen.findByTestId('hero-go', {}, { timeout: 15_000 });
     expect(title()).toHaveTextContent('Dashboard');
-    for (const name of ['Streak', 'Level', 'Review queue', "Today's slate", 'Activity', 'Competencies', 'Next up']) {
+    for (const name of ['Streak', 'Level', 'Review queue', "Today's slate", 'Activity']) {
       expect(screen.getAllByRole('heading', { name: new RegExp(name) }).length).toBeGreaterThan(0);
     }
-    const rows = within(screen.getByRole('table')).getAllByRole('row');
-    expect(rows).toHaveLength(9); // header + 8 competencies
-    // agentic-engineering + the freshly seeded system-design (migration 014) have no evidence yet
-    // f52 U8: "Not started", with no warning icon (there is no "lost a leg" state)
-    expect(screen.getAllByText('Not started')).toHaveLength(2);
-    expect(screen.getByRole('table').querySelector('.evidence-cell svg')).toBeNull();
-    expect(screen.queryByTestId('comp-summary')).toBeNull(); // some competencies have evidence: no collapse
+    // rv wave C: no Next up panel, and the competency table lives on Stats (R4-10, R4-20)
+    expect(screen.queryByRole('heading', { name: 'Next up' })).toBeNull();
+    expect(screen.queryByRole('table')).toBeNull();
     expect(screen.getByLabelText('1 of 2 freeze tokens banked')).toBeInTheDocument();
     expect(screen.getByRole('figure', { name: /Activity over the last 90 days/ })).toBeInTheDocument();
     expect(screen.getByText('+64 today')).toBeInTheDocument(); // today's heatmap row
     expect(screen.getByRole('link', { name: /Clear the review queue/ })).toHaveAttribute('href', '/review');
-    expect(screen.getByRole('link', { name: /signalpost U04/ })).toHaveAttribute('href', '/play/107');
+  });
+
+  it('the competency table renders on Stats', async () => {
+    renderApp('/stats');
+    const comp = await waitFor(() => {
+      const el = document.querySelector<HTMLElement>('table.comp-table');
+      expect(el).not.toBeNull();
+      return el!;
+    }, { timeout: 15_000 });
+    const rows = within(comp).getAllByRole('row');
+    expect(rows).toHaveLength(9); // header + 8 competencies
+    // agentic-engineering + the freshly seeded system-design (migration 014) have no evidence yet
+    // f52 U8: "Not started", with no warning icon (there is no "lost a leg" state)
+    expect(screen.getAllByText('Not started')).toHaveLength(2);
+    expect(comp.querySelector('.evidence-cell svg')).toBeNull();
+    expect(screen.queryByTestId('comp-summary')).toBeNull(); // some competencies have evidence: no collapse
   });
 
   it('g-chords move between screens', async () => {
     const { user, path } = renderApp('/');
-    await screen.findByRole('table');
+    await screen.findByTestId('hero-go', {}, { timeout: 15_000 });
     await user.keyboard('gc');
     await waitFor(() => expect(path()).toBe('/campaign/js'));
     await user.keyboard('gr');
@@ -58,7 +69,7 @@ describe('routing + global keyboard navigation', () => {
 
   it('? toggles the shortcut help and Escape closes it', async () => {
     const { user } = renderApp('/');
-    await screen.findByRole('table');
+    await screen.findByTestId('hero-go', {}, { timeout: 15_000 });
     await user.keyboard('?');
     expect(screen.getByRole('dialog', { name: 'Keyboard shortcuts' })).toBeInTheDocument();
     await user.keyboard('{Escape}');
@@ -90,7 +101,7 @@ describe('campaign map (bound to GET /tracks/:id/campaign)', () => {
   it('renders acts in order with unlock state, core progress and content-pending badges; j/k walk from the first available quest', async () => {
     const { user } = renderApp('/campaign/js');
     await screen.findByRole('heading', { level: 2, name: 'Act 1: Foundations' });
-    const acts = within(screen.getByRole('tabpanel', { name: 'Campaign acts' }))
+    const acts = within(screen.getByRole('list', { name: 'Campaign acts' }))
       .getAllByRole('heading', { level: 2 })
       .map((h) => h.textContent);
     expect(acts).toEqual(['Act 1: Foundations', 'Act 2: APIs and data']);
