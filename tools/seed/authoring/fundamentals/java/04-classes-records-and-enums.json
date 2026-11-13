@@ -8,15 +8,15 @@
   "lesson": "## Classes and encapsulation\n\n```java\npublic class Order {\n    private final long id;                 // final: assigned once, in the constructor\n    private final List<Line> lines = new ArrayList<>();\n    private Status status = Status.DRAFT;\n\n    public Order(long id) { this.id = id; }\n\n    public void addLine(String sku, int qty) {\n        if (status != Status.DRAFT) throw new IllegalStateException(\"order is \" + status);\n        if (qty <= 0) throw new IllegalArgumentException(\"qty must be positive\");\n        lines.add(new Line(sku, qty));\n    }\n    public List<Line> lines() { return List.copyOf(lines); }   // callers cannot modify ours\n}\n```\n\nFields are `private`; behaviour methods protect the invariants. Returning the internal mutable list would let callers bypass `addLine`. `final` on a field means the reference cannot change; the object it points to can.\n\n## static\n\n`static` members belong to the class: constants (`static final`), factory methods, pure helpers. Mutable static state is shared by every thread and request: a cache in a static `HashMap` is a race condition and a memory leak waiting to happen (topic 16).\n\n## Records (Java 16+)\n\n```java\npublic record Money(long cents, String currency) {\n    public Money {                                   // compact canonical constructor: validation\n        if (cents < 0) throw new IllegalArgumentException(\"negative\");\n        Objects.requireNonNull(currency, \"currency\");\n    }\n    public Money plus(Money other) {\n        if (!currency.equals(other.currency)) throw new IllegalArgumentException(\"currency mismatch\");\n        return new Money(cents + other.cents, currency);\n    }\n}\nnew Money(150, \"EUR\")              // toString: Money[cents=150, currency=EUR]\nnew Money(1, \"EUR\").equals(new Money(1, \"EUR\"))   // true\n```\n\nA record declares an immutable data carrier: private final fields, accessor methods named like the components (`cents()`, not `getCents()`), and `equals`, `hashCode` and `toString` based on all components. The **compact constructor** runs validation before the fields are assigned. Records are ideal for DTOs, value objects, events and map keys; they cannot extend other classes, and they are a poor fit for JPA entities (topic 19).\n\n## Enums\n\n```java\npublic enum Status {\n    DRAFT(\"d\"), PAID(\"p\"), SHIPPED(\"s\");\n    private final String code;\n    Status(String code) { this.code = code; }\n    public String code() { return code; }\n}\nStatus.valueOf(\"PAID\")   // PAID\nStatus.valueOf(\"paid\")   // IllegalArgumentException: No enum constant ...\nStatus.PAID.ordinal()    // 1  (never persist ordinals: reordering constants corrupts data)\n```\n\nEnums are full classes: fields, constructors, methods, even per-constant behaviour. Compare them with `==` (each constant is a singleton). `EnumMap` and `EnumSet` are compact and keep the constants' declaration order. Persist enums by **name** (or an explicit code), never by ordinal.\n\n## Choosing\n\n| need | use |\n|---|---|\n| entity with identity and lifecycle | class |\n| immutable value, DTO, event | record |\n| a fixed set of named values with behaviour | enum |",
   "quiz": [
     {
-      "prompt": "What does `new Money(1, \"EUR\").equals(new Money(1, \"EUR\"))` return for a record?",
+      "prompt": "`record Point(int x, int y) {}` What is `new HashSet<>(List.of(new Point(1, 2), new Point(1, 2))).size()`?",
       "choices": [
-        "`false`",
-        "`true`",
-        "It does not compile",
-        "It depends on hashCode"
+        "`2`",
+        "`1`",
+        "`0`",
+        "It does not compile"
       ],
       "answer": 1,
-      "explanation": "Records generate equals and hashCode over all their components."
+      "explanation": "A record generates equals and hashCode over all its components, so the two points are equal and hash alike, and the set keeps one. A plain class without overrides would compare identities and give 2."
     },
     {
       "prompt": "What is the accessor for the `cents` component of `record Money(long cents, String currency)`?",
@@ -27,14 +27,14 @@
         "`cents()`"
       ],
       "answer": 3,
-      "explanation": "Record accessors are named exactly like the components."
+      "explanation": "Record accessors are named exactly like their components, so the component cents is read with `cents()`, not a JavaBean-style `getCents()`. The field itself is private and final, so `money.cents` does not compile from outside the record."
     },
     {
       "prompt": "Where does validation for a record usually go?",
       "choices": [
         "In a compact canonical constructor",
         "In a setter generated for each component",
-        "In an instance initializer block",
+        "In an instance initializer block of the record",
         "In a static factory: records cannot declare constructors"
       ],
       "answer": 0,
@@ -49,7 +49,7 @@
         "Throws NoSuchElementException for the unknown name"
       ],
       "answer": 2,
-      "explanation": "valueOf matches the exact constant name."
+      "explanation": "Enum.valueOf matches the exact, case-sensitive constant name and throws IllegalArgumentException for anything else, so \"paid\" fails against PAID. Normalise first, as in `Status.valueOf(text.toUpperCase(Locale.ROOT))`; it never returns null."
     },
     {
       "prompt": "Why should enums NOT be persisted by ordinal?",
@@ -71,7 +71,7 @@
         "Callers can reassign the private field through the returned reference"
       ],
       "answer": 0,
-      "explanation": "Return List.copyOf or an unmodifiable view to keep invariants intact."
+      "explanation": "Returning the private list hands callers the real object, so they can add or remove elements without going through the class's methods and break its rules. Return `List.copyOf(lines)` or an unmodifiable view. The getter does not copy, and callers cannot reassign the field itself."
     },
     {
       "prompt": "What does `final` on a field holding a List guarantee?",
@@ -82,7 +82,7 @@
         "The field always refers to the same list object once assigned"
       ],
       "answer": 3,
-      "explanation": "final fixes the reference, not the referenced object."
+      "explanation": "final fixes the reference, not the object: the field always points at the same list, but anyone holding that list may still add or remove elements. Use an unmodifiable list for that. final gives no thread safety for later mutations either."
     },
     {
       "prompt": "How should enum constants be compared?",
@@ -104,7 +104,7 @@
         "Only another record whose components it repeats"
       ],
       "answer": 0,
-      "explanation": "Records may implement interfaces but cannot extend classes."
+      "explanation": "Every record implicitly extends java.lang.Record, and Java has single inheritance of classes, so a record cannot extend another class, not even an abstract one. It may implement interfaces, and it is implicitly final, so nothing extends it either."
     },
     {
       "prompt": "Which type fits an immutable DTO returned by an API?",
@@ -112,10 +112,10 @@
         "An enum with one constant per response",
         "A record with one component per field",
         "A class exposing public mutable fields",
-        "A static nested singleton instance"
+        "A static nested singleton instance shared by all calls"
       ],
       "answer": 1,
-      "explanation": "Records are concise, immutable and have value semantics."
+      "explanation": "A record is concise, immutable and has value equality, which is what a returned DTO needs, and Jackson serialises its components. A class with public mutable fields lets any caller change the response, and an enum or a shared singleton cannot carry per-response data."
     }
   ],
   "flashcards": [

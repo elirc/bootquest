@@ -88,9 +88,9 @@
       "prompt": "What makes a retried POST /payments safe?",
       "choices": [
         "A longer client timeout, so the first attempt completes",
-        "A unique request id generated on every retry",
+        "A unique request id generated afresh on every retry",
         "An idempotency key the server deduplicates on",
-        "Limiting the client to at most two retries"
+        "Limiting the client to at most two retries per request"
       ],
       "answer": 2,
       "explanation": "Without idempotency a retry after a lost response can charge the customer twice."
@@ -179,7 +179,7 @@
         },
         {
           "name": "a failure rejects and starts no new calls",
-          "code": "const started = [];\nconst fn = async (x) => { started.push(x); await new Promise((r) => setTimeout(r, 5)); if (x === 2) throw new Error('bad item 2'); return x; };\nawait assert.rejects(mod.mapLimit([1, 2, 3, 4, 5, 6], 2, fn), /bad item 2/);\nawait new Promise((r) => setTimeout(r, 30));\nassert.ok(!started.includes(6), `started after the failure: ${started}`);"
+          "code": "// every call waits on a gate the test opens by hand, so the count does not depend on timer resolution\nconst gates = new Map();\nconst started = [];\nconst fn = (x) => { started.push(x); return new Promise((resolve, reject) => gates.set(x, { resolve, reject })); };\nconst flush = () => new Promise((r) => setImmediate(r));\nconst outcome = mod.mapLimit([1, 2, 3, 4, 5, 6], 2, fn).then(() => null, (err) => err);\nawait flush();\nassert.deepEqual([...started].sort(), [1, 2], 'two calls in flight');\ngates.get(2).reject(new Error('bad item 2'));\nawait flush();\ngates.get(1).resolve(1);\nawait flush();\nconst err = await outcome;\nassert.ok(err instanceof Error && /bad item 2/.test(err.message), 'rejects with the failure: ' + err);\nassert.deepEqual([...started].sort(), [1, 2], 'a call started after the failure: ' + started);"
         },
         {
           "name": "an empty list resolves to [] without calling fn",
@@ -191,6 +191,47 @@
         "Instead of starting one promise per item, start a few worker loops that each keep taking the next item.",
         "Start a fixed number of worker loops that share one next-index counter, have each store its result at the index it claimed, wait for all the workers, and use a shared failure flag so no new work starts after an error.",
         "Run a fixed number of loops in parallel that each claim the next unclaimed position, store their result at that position, and stop claiming as soon as any call has failed."
+      ]
+    },
+    {
+      "slug": "02-bug-hunt-map-with-concurrency-limit",
+      "title": "Bug hunt: mapLimit: async map with bounded concurrency",
+      "difficulty": 3,
+      "skills": [
+        "debugging",
+        "concurrency",
+        "Promise.all"
+      ],
+      "instructions": "**Bug hunt.** The code in the editor is a plausible first attempt at drill 1, \"mapLimit: async map with bounded concurrency\". It passes some of the tests, but it has one real bug, the kind a reviewer should catch before it ships.\n\n**Your task.** Find the bug and fix it, changing as little as you can; the tests are the same as drill 1's. The spec is unchanged: Export `mapLimit(items, limit, fn)`. It returns a promise of an array where element i is the result of `await fn(items[i], i)`, and:\n- at most `limit` calls of `fn` are in flight at any moment\n- results are in INPUT order, whatever order the calls finish in\n- if any call rejects, the returned promise rejects with that reason (calls already started may finish, but no NEW call starts after the failure)\n- an empty `items` array resolves to `[]`\n\n`limit` is a whole number of 1 or more.",
+      "starter": "// TODO: one bug hides in this code. Run the tests, find it and fix it.\nexport async function mapLimit(items, limit, fn) {\n  const results = new Array(items.length);\n  let next = 0;\n  const worker = async () => {\n    while (next < items.length) {\n      const i = next++;\n      results[i] = await fn(items[i], i);\n    }\n  };\n  const workers = Array.from({ length: Math.min(limit, items.length) }, worker);\n  await Promise.all(workers);\n  return results;\n}\n",
+      "solution": "export async function mapLimit(items, limit, fn) {\n  const results = new Array(items.length);\n  let next = 0;\n  let failed = false;\n  const worker = async () => {\n    while (!failed && next < items.length) {\n      const i = next++;\n      try {\n        results[i] = await fn(items[i], i);\n      } catch (err) {\n        failed = true;\n        throw err;\n      }\n    }\n  };\n  const workers = Array.from({ length: Math.min(limit, items.length) }, worker);\n  await Promise.all(workers);\n  return results;\n}\n",
+      "tests": [
+        {
+          "name": "results keep input order",
+          "code": "assert.equal(typeof mod.mapLimit, 'function', 'export mapLimit');\nconst wait = (ms) => new Promise((r) => setTimeout(() => r(ms), ms));\nassert.deepEqual(await mod.mapLimit([30, 10, 20], 2, (ms) => wait(ms)), [30, 10, 20]);"
+        },
+        {
+          "name": "never more than limit calls in flight",
+          "code": "let active = 0;\nlet peak = 0;\nconst fn = async (x) => { active++; peak = Math.max(peak, active); await new Promise((r) => setTimeout(r, 5)); active--; return x * 2; };\nconst out = await mod.mapLimit([1, 2, 3, 4, 5, 6, 7, 8, 9], 3, fn);\nassert.deepEqual(out, [2, 4, 6, 8, 10, 12, 14, 16, 18]);\nassert.equal(peak, 3);"
+        },
+        {
+          "name": "fn receives the item and its index",
+          "code": "assert.deepEqual(await mod.mapLimit(['a', 'b'], 1, async (s, i) => s + i), ['a0', 'b1']);"
+        },
+        {
+          "name": "a failure rejects and starts no new calls",
+          "code": "// every call waits on a gate the test opens by hand, so the count does not depend on timer resolution\nconst gates = new Map();\nconst started = [];\nconst fn = (x) => { started.push(x); return new Promise((resolve, reject) => gates.set(x, { resolve, reject })); };\nconst flush = () => new Promise((r) => setImmediate(r));\nconst outcome = mod.mapLimit([1, 2, 3, 4, 5, 6], 2, fn).then(() => null, (err) => err);\nawait flush();\nassert.deepEqual([...started].sort(), [1, 2], 'two calls in flight');\ngates.get(2).reject(new Error('bad item 2'));\nawait flush();\ngates.get(1).resolve(1);\nawait flush();\nconst err = await outcome;\nassert.ok(err instanceof Error && /bad item 2/.test(err.message), 'rejects with the failure: ' + err);\nassert.deepEqual([...started].sort(), [1, 2], 'a call started after the failure: ' + started);"
+        },
+        {
+          "name": "an empty list resolves to [] without calling fn",
+          "code": "let calls = 0;\nassert.deepEqual(await mod.mapLimit([], 4, async () => { calls++; }), []);\nassert.equal(calls, 0);"
+        }
+      ],
+      "explanation": "When one call rejects, its worker stops and the returned promise rejects, but the other workers keep pulling new items, so calls go on starting after the failure (the test opens the gates by hand and sees item 3 start). A shared `failed` flag, set in a catch and checked in the loop condition, stops new work at once.",
+      "hints": [
+        "Make one call fail and count how many calls start after the failure.",
+        "The failing worker stops, but the other workers keep taking new items.",
+        "Record that a call failed in state the workers share, and have every worker check it before taking the next item."
       ]
     }
   ]

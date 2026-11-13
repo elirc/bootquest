@@ -5,7 +5,7 @@
   "title": "Model binding, validation & ProblemDetails",
   "level": "advanced",
   "summary": "DataAnnotations and automatic 400s with [ApiController] and .NET 10 minimal API validation, ValidationProblemDetails and RFC 9457 problem details, DTOs against over-posting, and where business validation belongs.",
-  "lesson": "## Validate at the edge\n\nEvery request body is untrusted. Validate shape and simple rules where the request enters, before any business logic runs, and answer **400** with field-level errors.\n\n```csharp\npublic class SignupDto\n{\n    [Required, EmailAddress] public string? Email { get; set; }\n    [Required, StringLength(50, MinimumLength = 1)] public string? Name { get; set; }\n    [Range(13, 120)] public int Age { get; set; }\n}\n```\n\n## Automatic validation\n\n- **Controllers** with `[ApiController]`: an invalid model never reaches the action; the framework returns 400 with a **ValidationProblemDetails** body.\n- **Minimal APIs** in .NET 10: call `builder.Services.AddValidation()` and parameters with DataAnnotations are validated the same way. (Earlier versions needed endpoint filters or a library such as FluentValidation.)\n\nThe response body looks like this:\n\n```json\n{\n  \"type\": \"https://tools.ietf.org/html/rfc9110#section-15.5.1\",\n  \"title\": \"One or more validation errors occurred.\",\n  \"status\": 400,\n  \"errors\": { \"Email\": [\"The Email field is required.\"], \"Age\": [\"The field Age must be between 13 and 120.\"] },\n  \"traceId\": \"00-...\"\n}\n```\n\nClients can map `errors` straight onto form fields.\n\n## Problem details (RFC 9457)\n\n`{ type, title, status, detail, instance }` plus extensions is the standard error shape for HTTP APIs. `builder.Services.AddProblemDetails()` makes the framework use it for errors (exceptions, status-code pages), and `Results.Problem(...)` / `Results.ValidationProblem(errors)` produce it from your own code. One consistent error shape for the whole API is worth more than clever per-endpoint messages.\n\n## DTOs against over-posting\n\nNever bind request bodies straight to entities:\n\n```csharp\napp.MapPut(\"/users/{id:int}\", async (int id, UpdateUserDto dto, AppDb db) => {\n    var user = await db.Users.FindAsync(id);\n    if (user is null) return Results.NotFound();\n    user.Name = dto.Name;        // copy ONLY what the client may change\n    user.Bio = dto.Bio;\n    await db.SaveChangesAsync();\n    return Results.NoContent();\n});\n```\n\nBinding to the entity would let a client send `\"isAdmin\": true` or `\"balance\": 1000000` (**over-posting** / mass assignment). Separate input DTOs, output DTOs (no password hashes) and entities.\n\n## Shape validation versus business rules\n\nDataAnnotations check a request in isolation: required, lengths, ranges, formats. Rules that need data (the email is already taken, the product is out of stock, the order is already shipped) belong in the service, and usually map to **409 Conflict** or **422 Unprocessable Content** rather than 400. Keep both kinds returning problem details.\n\n## Normalise as you validate\n\nTrim strings, normalise case for emails and codes, treat empty strings as missing where the field is optional. Doing it once at the boundary keeps the rest of the code simple and the database clean.",
+  "lesson": "## Validate at the edge\n\nEvery request body is untrusted. Validate shape and simple rules where the request enters, before any business logic runs, and answer **400** with field-level errors.\n\n```csharp\npublic class SignupDto\n{\n    [Required, EmailAddress] public string? Email { get; set; }\n    [Required, StringLength(50, MinimumLength = 1)] public string? Name { get; set; }\n    [Range(13, 120)] public int Age { get; set; }\n}\n```\n\n`[Range(min, max)]` is inclusive at both ends: `[Range(1, 5)]` accepts 1 and 5 and rejects 0 and 6.\n\n## Automatic validation\n\n- **Controllers** with `[ApiController]`: an invalid model never reaches the action; the framework returns 400 with a **ValidationProblemDetails** body.\n- **Minimal APIs** in .NET 10: call `builder.Services.AddValidation()` and parameters with DataAnnotations are validated the same way. (Earlier versions needed endpoint filters or a library such as FluentValidation.)\n\nThe response body looks like this:\n\n```json\n{\n  \"type\": \"https://tools.ietf.org/html/rfc9110#section-15.5.1\",\n  \"title\": \"One or more validation errors occurred.\",\n  \"status\": 400,\n  \"errors\": { \"Email\": [\"The Email field is required.\"], \"Age\": [\"The field Age must be between 13 and 120.\"] },\n  \"traceId\": \"00-...\"\n}\n```\n\nClients can map `errors` straight onto form fields.\n\n## Problem details (RFC 9457)\n\n`{ type, title, status, detail, instance }` plus extensions is the standard error shape for HTTP APIs. `builder.Services.AddProblemDetails()` makes the framework use it for errors (exceptions, status-code pages), and `Results.Problem(...)` / `Results.ValidationProblem(errors)` produce it from your own code. One consistent error shape for the whole API is worth more than clever per-endpoint messages.\n\n## DTOs against over-posting\n\nNever bind request bodies straight to entities:\n\n```csharp\napp.MapPut(\"/users/{id:int}\", async (int id, UpdateUserDto dto, AppDb db) => {\n    var user = await db.Users.FindAsync(id);\n    if (user is null) return Results.NotFound();\n    user.Name = dto.Name;        // copy ONLY what the client may change\n    user.Bio = dto.Bio;\n    await db.SaveChangesAsync();\n    return Results.NoContent();\n});\n```\n\nBinding to the entity would let a client send `\"isAdmin\": true` or `\"balance\": 1000000` (**over-posting** / mass assignment). Separate input DTOs, output DTOs (no password hashes) and entities.\n\n## Shape validation versus business rules\n\nDataAnnotations check a request in isolation: required, lengths, ranges, formats. Rules that need data (the email is already taken, the product is out of stock, the order is already shipped) belong in the service, and usually map to **409 Conflict** or **422 Unprocessable Content** rather than 400. Keep both kinds returning problem details.\n\n## Normalise as you validate\n\nTrim strings, normalise case for emails and codes, treat empty strings as missing where the field is optional. Doing it once at the boundary keeps the rest of the code simple and the database clean.",
   "quiz": [
     {
       "prompt": "With `[ApiController]`, what happens when the bound model fails DataAnnotations validation?",
@@ -16,7 +16,7 @@
         "The invalid fields are reset to null and the action runs"
       ],
       "answer": 1,
-      "explanation": "Automatic 400 responses are part of the ApiController conventions."
+      "explanation": "With [ApiController] an invalid model never reaches the action: the framework answers 400 with a ValidationProblemDetails body listing the field errors. Checking ModelState.IsValid by hand is what controllers without the attribute need; validation failures are not turned into exceptions or 500s."
     },
     {
       "prompt": "In .NET 10 minimal APIs, what turns on DataAnnotations validation of parameters?",
@@ -43,8 +43,8 @@
     {
       "prompt": "Why bind request bodies to DTOs instead of EF entities?",
       "choices": [
-        "System.Text.Json cannot deserialise EF entities",
-        "Binding to DTOs skips the slow EF change tracker",
+        "System.Text.Json cannot deserialise EF Core entity types",
+        "Binding to DTOs skips the slow EF Core change tracker",
         "To prevent over-posting of fields such as IsAdmin",
         "EF Core refuses to save entities created by binding"
       ],
@@ -82,7 +82,7 @@
         "Any age below 13 or above 120"
       ],
       "answer": 3,
-      "explanation": "Range validates both bounds inclusively."
+      "explanation": "Range validates both bounds inclusively, so 13 and 120 are accepted, and 12 or 121 is rejected with a validation error. The \"13 or less, 120 or more\" reading inverts and excludes the bounds, and the attribute is enforced on binding, not just documentation."
     },
     {
       "prompt": "Where should trimming and case normalisation of an email happen?",
@@ -100,8 +100,8 @@
       "choices": [
         "Email is required and at most 254 characters",
         "The product is in stock in the main warehouse",
-        "The user may edit this order and its lines",
-        "The coupon code exists and has not expired"
+        "The signed-in user may edit this order and its lines",
+        "The coupon code exists in the database and has not expired"
       ],
       "answer": 0,
       "explanation": "Attributes check a request on its own; rules that need data or state live in services."

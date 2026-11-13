@@ -1,10 +1,11 @@
 // npm run seed:lint:answers [-- --all] [--max-share 0.7] [--min-quizzes 6] [--seed-dir <dir>] [--packs-dir <dir>] [--fund-dir <dir>]
-//   [--length-max-share 0.4] [--length-min-items 10] [--topic-min-items 8] [--length-baseline <file>]
+//   [--length-max-share 0.4] [--length-min-items 10] [--topic-min-items 8] [--length-baseline <file>] [--rank-baseline <file>]
 // ui-audit #24: report quest packs (and code packs) whose choice-quiz answer keys pile up at one
 // index, and (campaign 2 review F5, explanation-lint.ts) quiz explanations that are generator
 // label artifacts, and (f52 C2, answer-length.ts) packs / Fundamentals tracks whose key is usually the single
 // longest or shortest choice, per pack / track and per Fundamentals topic (ratchet answer-length-baseline.json). Read-only (no stamps touched). Exit 0 = clean, 1 = degenerate pack(s), an
-// artifact explanation outside EXPLANATION_LINT_EXEMPT or a stale exemption; 2 = usage error.
+// artifact explanation outside EXPLANATION_LINT_EXEMPT or a stale exemption, or (rv wave, answer-rank.ts) a skewed
+// key length-rank spread (ratchet answer-rank-baseline.json); 2 = usage error.
 import { resolve } from 'node:path';
 import { DEFAULT_SEED_DIR, parseArgs, REPO_ROOT } from '../factory/report.ts';
 import { explanationLintFails, explanationLintReport, formatExplanationLintReport } from './explanation-lint.ts';
@@ -22,6 +23,7 @@ import {
   questLengthRows,
   readAnswerLengthBaseline,
 } from './answer-length.ts';
+import { codePackRankRows, DEFAULT_ANSWER_RANK_BASELINE, formatRankReport, fundamentalsRankRows, fundamentalsTopicRankRows, questRankRows, rankFails, rankReport, readRankBaseline } from './answer-rank.ts';
 
 const { opts, flags } = parseArgs(process.argv.slice(2));
 const num = (name: string, fallback: number): number => {
@@ -66,4 +68,8 @@ const lengthRows = [
 ];
 const lengthReport = answerLengthReport(lengthRows, readAnswerLengthBaseline(resolve(opts.get('length-baseline') ?? DEFAULT_ANSWER_LENGTH_BASELINE)), lengthOptions);
 for (const line of formatAnswerLengthReport(lengthReport, { all: flags.has('all') })) console.log(line);
-process.exit(report.offenders.length || explanationLintFails(expl) || answerLengthFails(lengthReport) ? 1 : 0);
+// rv wave (R1-01): the key's full length-rank spread (answer-rank.ts; ratchet answer-rank-baseline.json)
+const rankRows = [...questRankRows(seedDir), ...codePackRankRows(packsDir), ...fundamentalsRankRows(fundDir), ...fundamentalsTopicRankRows(fundDir)];
+const rankRep = rankReport(rankRows, readRankBaseline(resolve(opts.get('rank-baseline') ?? DEFAULT_ANSWER_RANK_BASELINE)));
+for (const line of formatRankReport(rankRep, { all: flags.has('all') })) console.log(line);
+process.exit(report.offenders.length || explanationLintFails(expl) || answerLengthFails(lengthReport) || rankFails(rankRep) ? 1 : 0);

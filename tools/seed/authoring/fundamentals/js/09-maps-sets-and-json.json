@@ -19,15 +19,15 @@
       "explanation": "Object keys are strings (or symbols), so 1 and \"1\" are the same key. A Map would keep two."
     },
     {
-      "prompt": "What is `[...new Set([3, 1, 3, 2, 1])]`?",
+      "prompt": "What is `[...new Set(['b', 'a', 'b', 'c', 'a'])]`?",
       "choices": [
-        "`[1, 2, 3]`",
-        "`[3, 1, 3, 2, 1]`",
-        "`[3, 1, 2]`",
-        "`[3, 2, 1]`"
+        "`['a', 'b', 'c']`",
+        "`['b', 'a', 'b', 'c', 'a']`",
+        "`['b', 'a', 'c']`",
+        "`['c', 'a', 'b']`"
       ],
       "answer": 2,
-      "explanation": "A Set keeps the first occurrence of each value in insertion order; it does not sort."
+      "explanation": "A Set keeps each value once, in the order it was FIRST inserted, and spreading it yields that order. It does not sort, so `['a', 'b', 'c']` is wrong, and later duplicates do not move a value to the end."
     },
     {
       "prompt": "What is `new Set([{ a: 1 }, { a: 1 }]).size`?",
@@ -38,7 +38,7 @@
         "It throws"
       ],
       "answer": 0,
-      "explanation": "Objects are compared by reference, and these are two different objects."
+      "explanation": "A Set compares objects by reference (SameValueZero), and the two literals are two different objects even though they look alike, so the size is 2. Deduplicate objects by a key instead, for example with a Map keyed on id."
     },
     {
       "prompt": "What does `JSON.stringify({ m: new Map([[1, 2]]) })` produce?",
@@ -52,15 +52,15 @@
       "explanation": "A Map has no enumerable own properties and no toJSON, so it serialises as an empty object. Convert with Object.fromEntries or [...map] first."
     },
     {
-      "prompt": "What is `JSON.parse('{\"id\": 9007199254740993}').id`?",
+      "prompt": "What is `JSON.parse('{\"n\": 9007199254740995}').n`?",
       "choices": [
-        "`9007199254740993`",
-        "`9007199254740992`",
+        "`9007199254740995`",
+        "`9007199254740996`",
         "A BigInt",
         "It throws"
       ],
       "answer": 1,
-      "explanation": "JSON numbers parse to doubles, which cannot represent integers beyond 2^53 exactly. Send big ids as strings."
+      "explanation": "JSON numbers become doubles, and above 2^53 a double cannot hold every integer: 9007199254740995 rounds to the nearest representable value, 9007199254740996. JSON.parse never produces a BigInt and does not throw; it rounds silently, so send big ids as strings."
     },
     {
       "prompt": "Which values are DROPPED when they are object properties in `JSON.stringify`?",
@@ -109,13 +109,13 @@
     {
       "prompt": "How do you control how your own class serialises with JSON.stringify?",
       "choices": [
-        "Override toString",
+        "Override toString on the class",
         "Define a toJSON method",
         "Make every field enumerable",
-        "Use Symbol.toPrimitive"
+        "Implement Symbol.toPrimitive"
       ],
       "answer": 1,
-      "explanation": "JSON.stringify calls toJSON when present and serialises its return value instead."
+      "explanation": "JSON.stringify calls toJSON when an object has one and serialises its return value instead of the object. toString and Symbol.toPrimitive are used for string and number conversion, not by JSON, and enumerability only decides which own fields are included."
     }
   ],
   "flashcards": [
@@ -191,6 +191,47 @@
         "A Map remembers insertion order, and re-inserting a key moves it to the end.",
         "Rely on the map's insertion order: on every read hit and every write, take the key out and put it back so it becomes the newest, and evict from the oldest end while the size is over capacity.",
         "Keep entries in a Map ordered from oldest to newest use, move a key to the newest end whenever it is read or written, and drop entries from the oldest end while there are too many."
+      ]
+    },
+    {
+      "slug": "02-bug-hunt-lru-cache",
+      "title": "Bug hunt: an LRU cache on top of Map",
+      "difficulty": 3,
+      "skills": [
+        "debugging",
+        "Map insertion order",
+        "caching"
+      ],
+      "instructions": "**Bug hunt.** The code in the editor is a plausible first attempt at drill 1, \"An LRU cache on top of Map\". It passes some of the tests, but it has one real bug, the kind a reviewer should catch before it ships.\n\n**Your task.** Find the bug and fix it, changing as little as you can; the tests are the same as drill 1's. The spec is unchanged: Export `createLru(capacity)`. It returns an object with:\n- `get(key)`: the value, or `undefined` when missing; a hit marks the key as most recently used\n- `set(key, value)`: adds or updates the key and marks it most recently used; if the cache now holds more than `capacity` entries, it evicts the least recently used one\n- `has(key)`: membership, WITHOUT changing recency\n- `keys()`: an array of keys from least to most recently used\n- `size`: a getter for the number of entries\n\nKeys may be any value (a Map's rules). With `capacity` 0 nothing is ever kept.",
+      "starter": "// TODO: one bug hides in this code. Run the tests, find it and fix it.\nexport function createLru(capacity) {\n  const map = new Map();\n  const touch = (key, value) => {\n    map.delete(key);\n    map.set(key, value);\n  };\n  return {\n    get(key) {\n      if (!map.has(key)) return undefined;\n      return map.get(key);\n    },\n    set(key, value) {\n      touch(key, value);\n      while (map.size > capacity) map.delete(map.keys().next().value);\n      return this;\n    },\n    has: (key) => map.has(key),\n    keys: () => [...map.keys()],\n    get size() {\n      return map.size;\n    },\n  };\n}\n",
+      "solution": "export function createLru(capacity) {\n  const map = new Map();\n  const touch = (key, value) => {\n    map.delete(key);\n    map.set(key, value);\n  };\n  return {\n    get(key) {\n      if (!map.has(key)) return undefined;\n      const value = map.get(key);\n      touch(key, value);\n      return value;\n    },\n    set(key, value) {\n      touch(key, value);\n      while (map.size > capacity) map.delete(map.keys().next().value);\n      return this;\n    },\n    has: (key) => map.has(key),\n    keys: () => [...map.keys()],\n    get size() {\n      return map.size;\n    },\n  };\n}\n",
+      "tests": [
+        {
+          "name": "evicts the least recently used entry",
+          "code": "assert.equal(typeof mod.createLru, 'function', 'export createLru');\nconst c = mod.createLru(2);\nc.set('a', 1);\nc.set('b', 2);\nassert.equal(c.get('a'), 1);\nc.set('c', 3);\nassert.equal(c.has('b'), false);\nassert.deepEqual(c.keys(), ['a', 'c']);\nassert.equal(c.size, 2);"
+        },
+        {
+          "name": "updating a key refreshes it and keeps one entry",
+          "code": "const c = mod.createLru(2);\nc.set('a', 1);\nc.set('b', 2);\nc.set('a', 10);\nc.set('c', 3);\nassert.deepEqual(c.keys(), ['a', 'c']);\nassert.equal(c.get('a'), 10);"
+        },
+        {
+          "name": "has does not change recency",
+          "code": "const c = mod.createLru(2);\nc.set('a', 1);\nc.set('b', 2);\nassert.equal(c.has('a'), true);\nc.set('c', 3);\nassert.equal(c.has('a'), false);"
+        },
+        {
+          "name": "a miss returns undefined; non-string keys keep their type",
+          "code": "const c = mod.createLru(3);\nc.set(1, 'num');\nc.set('1', 'str');\nassert.equal(c.get(1), 'num');\nassert.equal(c.get('1'), 'str');\nassert.equal(c.get(2), undefined);"
+        },
+        {
+          "name": "capacity 0 keeps nothing",
+          "code": "const c = mod.createLru(0);\nc.set('a', 1);\nassert.equal(c.size, 0);\nassert.equal(c.get('a'), undefined);"
+        }
+      ],
+      "explanation": "`get` returns the value without moving the key, so an entry that is read constantly is still evicted as if it were unused. Delete and re-set the key on a hit, as `set` already does, so the first key of the Map is always the least recently USED one; `has` must still not refresh.",
+      "hints": [
+        "Read a key, add one more entry than the capacity, and see which key was evicted.",
+        "Only set moves a key to the end of the Map, so a key that is read often still looks old.",
+        "Make a successful read move the key to the most recent end, exactly as a write does."
       ]
     }
   ]

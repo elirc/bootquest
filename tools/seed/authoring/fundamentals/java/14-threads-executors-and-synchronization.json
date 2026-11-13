@@ -10,13 +10,13 @@
     {
       "prompt": "Eight threads each run `count++` 100,000 times on a shared int with no synchronisation. The final count is typically...",
       "choices": [
-        "Exactly 800,000, since int writes are atomic",
+        "Exactly 800,000, since writes to an int are always atomic",
         "Less than 800,000: increments are lost to the race",
         "More than 800,000, because some increments run twice",
-        "0, as each thread works on its own copy of the int"
+        "0, as each thread works on its own private copy of the int"
       ],
       "answer": 1,
-      "explanation": "count++ is a read-modify-write sequence; interleavings overwrite each other's updates."
+      "explanation": "count++ is a read, an add and a write; two threads can read the same value and both write value + 1, so increments are lost and the total ends below 800,000. Single int writes are atomic, but the whole sequence is not, and threads do share the field."
     },
     {
       "prompt": "Which makes a shared counter correct under concurrency?",
@@ -27,7 +27,7 @@
         "Using AtomicInteger.incrementAndGet()"
       ],
       "answer": 3,
-      "explanation": "Atomic classes perform the read-modify-write as one indivisible operation."
+      "explanation": "AtomicInteger.incrementAndGet performs the read-modify-write as one indivisible operation (a CAS loop), so no update is lost. volatile only makes writes visible, a per-thread local copy never reaches the shared counter, and yield() changes timing, not atomicity."
     },
     {
       "prompt": "What does `volatile` guarantee?",
@@ -49,18 +49,18 @@
         "It shuts down the executor after logging the failure"
       ],
       "answer": 2,
-      "explanation": "Call get() or handle errors inside the task."
+      "explanation": "submit() captures the exception in the returned Future; nothing is printed and the worker thread survives, so if nobody calls get() the failure is silently lost. Call get(), handle errors inside the task, or use execute(), which does report uncaught exceptions."
     },
     {
       "prompt": "What does `future.get()` throw when the task failed?",
       "choices": [
-        "The task's exception itself, unwrapped",
+        "The task's own exception itself, rethrown unwrapped",
         "ExecutionException wrapping the task's exception",
-        "InterruptedException, with the cause attached",
+        "InterruptedException, with the task's failure as its cause",
         "CompletionException wrapping the task's exception"
       ],
       "answer": 1,
-      "explanation": "Unwrap with getCause() to see what the task threw."
+      "explanation": "Future.get() wraps the task's exception in a checked ExecutionException, so unwrap it with getCause() to see what the task threw. CompletionException is what CompletableFuture.join() uses, and InterruptedException means the waiting thread was interrupted, not that the task failed."
     },
     {
       "prompt": "Why must you call `shutdown()` on an executor you created?",
@@ -82,7 +82,7 @@
         "Deadlock: each thread waits forever for the other"
       ],
       "answer": 3,
-      "explanation": "Acquire locks in one consistent order everywhere."
+      "explanation": "Each thread holds one lock and waits for the other's, so both can wait forever: a deadlock. The JVM does not detect or break lock cycles (a thread dump can show them), so acquire locks in one consistent order everywhere."
     },
     {
       "prompt": "Is `if (!map.containsKey(k)) map.put(k, v);` on a ConcurrentHashMap thread-safe?",
@@ -96,15 +96,15 @@
       "explanation": "Each call is atomic, but the combination is not. Use putIfAbsent or computeIfAbsent instead."
     },
     {
-      "prompt": "Are virtual threads available on Java 17?",
+      "prompt": "Each request blocks a platform thread for 200 ms while it waits on a downstream API. The executor has a fixed pool of 50 threads. What is the throughput ceiling?",
       "choices": [
-        "No: they became a standard feature in Java 21",
-        "Yes: they were finalized in Java 17 with Loom",
-        "Only as a preview feature behind --enable-preview",
-        "Only on Linux, where the kernel supports them"
+        "About 50 requests per second, one per thread",
+        "About 250 requests per second",
+        "About 10,000 requests per second, as waiting uses no CPU",
+        "No ceiling, since blocked threads are parked by the OS"
       ],
-      "answer": 0,
-      "explanation": "On 17 you use platform-thread executors."
+      "answer": 1,
+      "explanation": "Each thread finishes 5 requests per second (1 / 0.2 s), so 50 threads finish about 250; more requests queue. Blocked threads use no CPU, but they still occupy pool slots, so the pool size, not the CPU, sets the limit. Raising it costs memory per platform thread."
     },
     {
       "prompt": "Where do most thread-safety bugs in Spring services come from?",
@@ -115,7 +115,7 @@
         "Final fields assigned through constructor injection"
       ],
       "answer": 1,
-      "explanation": "Singleton beans serve every request at once; keep them stateless."
+      "explanation": "A singleton bean serves every request concurrently, so a mutable field on it is shared state that requests overwrite. Local variables live on each call's own stack, and records and constructor-injected final fields are immutable references, so they are safe by default."
     }
   ],
   "flashcards": [

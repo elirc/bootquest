@@ -77,6 +77,63 @@
      "instanceof"
     ]
    }
+  },
+  {
+   "unit": {
+    "key": "fund-js/10-errors-and-exceptions/02-bug-hunt-errors-to-problem-details",
+    "track": "js",
+    "kind": "drill",
+    "title": "Bug hunt: map errors to safe HTTP problem responses",
+    "phase": "10-errors-and-exceptions",
+    "difficulty": 2,
+    "competencies": [
+     "language-fluency"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-js",
+       "language": "js",
+       "tests": [
+        {
+         "name": "NotFoundError maps to 404 with its message",
+         "code": "assert.equal(typeof mod.toProblem, 'function', 'export toProblem');\nassert.deepEqual(mod.toProblem(new mod.NotFoundError('order 42 not found')), { status: 404, title: 'Not Found', detail: 'order 42 not found' });"
+        },
+        {
+         "name": "ValidationError maps to 400 with the field errors",
+         "code": "const details = [{ field: 'email', message: 'required' }];\nassert.deepEqual(mod.toProblem(new mod.ValidationError(details)), { status: 400, title: 'Validation failed', errors: details });"
+        },
+        {
+         "name": "unexpected errors never leak their message",
+         "code": "const p = mod.toProblem(new Error('SELECT * FROM users failed: syntax error at line 1'));\nassert.deepEqual(p, { status: 500, title: 'Internal Server Error' });\nassert.deepEqual(mod.toProblem('a thrown string'), { status: 500, title: 'Internal Server Error' });\nassert.deepEqual(mod.toProblem(undefined), { status: 500, title: 'Internal Server Error' });"
+        },
+        {
+         "name": "the classes are real, named Errors",
+         "code": "const nf = new mod.NotFoundError('x');\nconst ve = new mod.ValidationError([]);\nassert.ok(nf instanceof Error && ve instanceof Error);\nassert.equal(nf.name, 'NotFoundError');\nassert.equal(ve.name, 'ValidationError');\nassert.equal(ve.message, 'Validation failed');\nassert.equal(String(nf), 'NotFoundError: x');"
+        },
+        {
+         "name": "a ValidationError keeps its cause",
+         "code": "const root = new Error('schema mismatch');\nassert.equal(new mod.ValidationError([], { cause: root }).cause, root);"
+        }
+       ],
+       "timeoutMs": 8000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "10-errors-and-exceptions/02-bug-hunt-errors-to-problem-details",
+    "type": "code",
+    "module": "10-errors-and-exceptions",
+    "lesson": "drills",
+    "position": 1,
+    "skills": [
+     "debugging",
+     "custom errors",
+     "instanceof"
+    ]
+   }
   }
  ],
  "content": {
@@ -89,6 +146,17 @@
     "Each response is decided by which class the error is an instance of; anything unrecognised gets the same generic answer.",
     "Give each error class its own name, have the validation error pass its fixed message and options up to the parent class, and choose the problem shape by checking which class the error belongs to.",
     "Make two named Error subclasses, store the field errors on the validation one, and in the mapper check the not-found class first, then the validation class, and give everything else a bare generic server-error object."
+   ]
+  },
+  "fund-js/10-errors-and-exceptions/02-bug-hunt-errors-to-problem-details": {
+   "instructions": "**Skills:** debugging · custom errors · instanceof  \n**Level:** ★★☆\n\n**Bug hunt.** The code in the editor is a plausible first attempt at drill 1, \"Map errors to safe HTTP problem responses\". It passes some of the tests, but it has one real bug, the kind a reviewer should catch before it ships.\n\n**Your task.** Find the bug and fix it, changing as little as you can; the tests are the same as drill 1's. The spec is unchanged: Export two classes and a function:\n- `class NotFoundError extends Error`: constructed with a message; its `name` is `'NotFoundError'`\n- `class ValidationError extends Error`: constructed with `(details, options)` where `details` is an array of `{ field, message }`; its message is `'Validation failed'`, its `name` is `'ValidationError'`, it exposes `details`, and it passes `options` to Error (so a `cause` is kept)\n- `toProblem(err)` returns a plain object:\n  - NotFoundError: `{ status: 404, title: 'Not Found', detail: <the message> }`\n  - ValidationError: `{ status: 400, title: 'Validation failed', errors: <the details> }`\n  - anything else, including thrown non-Error values: `{ status: 500, title: 'Internal Server Error' }` with NO other keys\n",
+   "starter": "// TODO: one bug hides in this code. Run the tests, find it and fix it.\nexport class NotFoundError extends Error {\n  name = 'NotFoundError';\n}\n\nexport class ValidationError extends Error {\n  name = 'ValidationError';\n  constructor(details, options) {\n    super('Validation failed', options);\n    this.details = details;\n  }\n}\n\nexport function toProblem(err) {\n  if (err instanceof NotFoundError) return { status: 404, title: 'Not Found', detail: err.message };\n  if (err instanceof ValidationError) return { status: 400, title: 'Validation failed', errors: err.details };\n  return { status: 500, title: 'Internal Server Error', detail: err.message };\n}\n",
+   "solution": "export class NotFoundError extends Error {\n  name = 'NotFoundError';\n}\n\nexport class ValidationError extends Error {\n  name = 'ValidationError';\n  constructor(details, options) {\n    super('Validation failed', options);\n    this.details = details;\n  }\n}\n\nexport function toProblem(err) {\n  if (err instanceof NotFoundError) return { status: 404, title: 'Not Found', detail: err.message };\n  if (err instanceof ValidationError) return { status: 400, title: 'Validation failed', errors: err.details };\n  return { status: 500, title: 'Internal Server Error' };\n}\n",
+   "explanation": "The fallback copies `err.message` into `detail`, so an unexpected error's SQL, file path or secret goes to the client. Known errors (404, 400) carry a message written for clients; an unknown error gets only a generic 500 body, and its message is logged server-side.",
+   "hints": [
+    "Throw an Error whose message contains a SQL string and look at the response.",
+    "The 500 branch copies the message of an error you know nothing about.",
+    "For unexpected errors send only a generic title, and leave the details to the server log."
    ]
   }
  }

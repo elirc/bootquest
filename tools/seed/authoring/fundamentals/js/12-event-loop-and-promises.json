@@ -38,7 +38,7 @@
         "A rejected promise"
       ],
       "answer": 3,
-      "explanation": "Throwing inside a then callback rejects the promise that then returned."
+      "explanation": "then returns a new promise, and a throw inside its callback rejects that promise with the error. It is not a synchronous error, because the callback runs later as a microtask, and it is not a fulfilled promise for the Error object; only returning the Error would do that."
     },
     {
       "prompt": "What value does the next `then` receive after `.then(() => Promise.resolve(2))`?",
@@ -60,7 +60,7 @@
         "Neither: timers run first"
       ],
       "answer": 0,
-      "explanation": "Node drains the nextTick queue before the promise microtask queue."
+      "explanation": "Node drains the whole nextTick queue before it runs promise microtasks, so the nextTick callback runs first, whatever the order they were queued in. Timers come later still, after all microtasks. (At the top level of an ES module the order can differ.)"
     },
     {
       "prompt": "A 10 ms timer is set, then the code runs a busy loop for 100 ms. When does the timer callback run?",
@@ -191,6 +191,47 @@
         "You cannot stop the original promise, but you can race it against a second promise that rejects later.",
         "Create a second promise that rejects with a named timeout error after the delay, let it compete with the original, and cancel the timer however the contest ends.",
         "Build a second promise that fails after the given delay, let the two compete, and make sure the delay timer is cancelled whichever side wins."
+      ]
+    },
+    {
+      "slug": "02-bug-hunt-with-timeout",
+      "title": "Bug hunt: withTimeout: race a promise against a timer",
+      "difficulty": 2,
+      "skills": [
+        "debugging",
+        "Promise.race",
+        "timers"
+      ],
+      "instructions": "**Bug hunt.** The code in the editor is a plausible first attempt at drill 1, \"withTimeout: race a promise against a timer\". It passes some of the tests, but it has one real bug, the kind a reviewer should catch before it ships.\n\n**Your task.** Find the bug and fix it, changing as little as you can; the tests are the same as drill 1's. The spec is unchanged: Export `withTimeout(promise, ms)`. It returns a promise that:\n- fulfils with `promise`'s value if `promise` fulfils first\n- rejects with `promise`'s own reason if it rejects first\n- otherwise, after `ms` milliseconds, rejects with an `Error` whose `name` is `'TimeoutError'` and whose message is `'timed out after <ms>ms'`\n- clears its timer as soon as the race is decided either way",
+      "starter": "// TODO: one bug hides in this code. Run the tests, find it and fix it.\nexport function withTimeout(promise, ms) {\n  let timer;\n  const timeout = new Promise((_, reject) => {\n    timer = setTimeout(() => {\n      const err = new Error(`timed out after ${ms}ms`);\n      err.name = 'TimeoutError';\n      reject(err);\n    }, ms);\n  });\n  return Promise.race([promise, timeout]);\n}\n",
+      "solution": "export function withTimeout(promise, ms) {\n  let timer;\n  const timeout = new Promise((_, reject) => {\n    timer = setTimeout(() => {\n      const err = new Error(`timed out after ${ms}ms`);\n      err.name = 'TimeoutError';\n      reject(err);\n    }, ms);\n  });\n  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));\n}\n",
+      "tests": [
+        {
+          "name": "a fast promise wins with its value",
+          "code": "assert.equal(typeof mod.withTimeout, 'function', 'export withTimeout');\nconst fast = new Promise((r) => setTimeout(() => r('ok'), 5));\nassert.equal(await mod.withTimeout(fast, 200), 'ok');"
+        },
+        {
+          "name": "a slow promise loses with a TimeoutError",
+          "code": "const slow = new Promise((r) => setTimeout(() => r('late'), 300));\nawait assert.rejects(mod.withTimeout(slow, 20), (e) => e instanceof Error && e.name === 'TimeoutError' && e.message === 'timed out after 20ms');"
+        },
+        {
+          "name": "a rejection passes through unchanged",
+          "code": "const boom = new Error('provider down');\nawait assert.rejects(mod.withTimeout(Promise.reject(boom), 200), (e) => e === boom);"
+        },
+        {
+          "name": "an already-fulfilled promise beats a 0 ms timer",
+          "code": "assert.equal(await mod.withTimeout(Promise.resolve('ok'), 0), 'ok');"
+        },
+        {
+          "name": "the timer is cleared once the race is decided",
+          "code": "const real = globalThis.clearTimeout;\nlet cleared = 0;\nglobalThis.clearTimeout = (t) => { cleared++; return real(t); };\ntry {\n  await mod.withTimeout(Promise.resolve(1), 1000);\n} finally {\n  globalThis.clearTimeout = real;\n}\nassert.ok(cleared >= 1, 'clearTimeout was never called');"
+        }
+      ],
+      "explanation": "The race settles correctly, but the timer is never cleared, so every fast call leaves a pending `setTimeout` behind: thousands of them on a busy server, and a script that cannot exit until they fire. Add `.finally(() => clearTimeout(timer))`, which runs on either outcome.",
+      "hints": [
+        "After a fast promise wins, is the timeout's setTimeout still pending?",
+        "The race is decided, but the losing timer keeps the event loop busy until it fires.",
+        "Whatever wins, stop the timer once the race has settled."
       ]
     }
   ]

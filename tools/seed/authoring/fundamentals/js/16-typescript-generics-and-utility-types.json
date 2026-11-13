@@ -8,15 +8,15 @@
   "lesson": "## Generics: types as parameters\n\n```ts\nfunction first<T>(xs: T[]): T | undefined { return xs[0]; }\nfirst([1, 2])        // T inferred as number: returns number | undefined\nfirst(['a'])         // string | undefined\n```\n\nA generic keeps the relationship between input and output. Without it you would write `any[] => any` and lose every check downstream.\n\n**Constraints** say what a type parameter must have:\n\n```ts\nfunction byId<T extends { id: string }>(xs: T[], id: string): T | undefined {\n  return xs.find((x) => x.id === id);   // x.id is allowed because of the constraint\n}\nbyId([{ id: 1 }], '1');   // error: number is not assignable to string\n```\n\n## keyof and indexed access\n\n```ts\ntype Keys = keyof { a: 1; b: 2 };           // 'a' | 'b'\nfunction get<T, K extends keyof T>(obj: T, key: K): T[K] { return obj[key]; }\nget({ id: 1, name: 'x' }, 'name')            // string\nget({ id: 1, name: 'x' }, 'nope')            // error\n```\n\n`T[K]` (indexed access) is \"the type of property K of T\".\n\n## The utility types\n\n```ts\ninterface User { id: string; name: string; email: string; passwordHash: string }\n\nPartial<User>                  // every property optional: PATCH bodies\nRequired<T>                    // every property required\nPick<User, 'id' | 'name'>      // only those keys\nOmit<User, 'passwordHash'>     // everything except: public DTOs\nRecord<'draft' | 'live', number>  // an object with exactly those keys\nReadonly<User>                 // assignments to properties are errors\nReturnType<typeof makeUser>    // the return type of a function\nAwaited<Promise<Promise<string>>> // string: unwraps promises, recursively\nNonNullable<string | null | undefined> // string\n```\n\nThese are all compile-time only. `Readonly` does not freeze anything at runtime, and `Omit<User, 'passwordHash'>` does not remove the field from an object you send: you still have to build the DTO without it (`const { passwordHash, ...publicUser } = user`).\n\n## Derive types instead of repeating them\n\nKeep one source of truth and derive the rest:\n\n```ts\nconst ROLES = ['admin', 'editor', 'viewer'] as const;\ntype Role = (typeof ROLES)[number];            // 'admin' | 'editor' | 'viewer'\n\ntype CreateUser = Omit<User, 'id'>;            // POST body\ntype UpdateUser = Partial<CreateUser>;         // PATCH body\ntype UserRow = Awaited<ReturnType<typeof db.users.findFirst>>;\n```\n\nChange `User` once and every derived type follows.\n\n## Mapped and conditional types (reading level)\n\n`Partial` is itself a mapped type: `{ [K in keyof T]?: T[K] }`. Conditional types branch on types: `T extends string ? 'text' : 'other'`. You will read them in library typings more than you write them.\n\n## Where generics show up in CRUD code\n\nA typed API client `get<T>(url): Promise<T>` (remember: the T is a promise, not a validation), repository interfaces `Repo<T extends { id: string }>`, React components `<Select<T> items={T[]} />`, and `Result<T, E>` unions for error handling.",
   "quiz": [
     {
-      "prompt": "What is the return type of `first([1, 2])` for `function first<T>(xs: T[]): T | undefined`?",
+      "prompt": "For `function pair<T>(x: T): [T, T]`, what is the type of `pair(5)`?",
       "choices": [
-        "`number[] | undefined`",
-        "`number | undefined`",
-        "`unknown`",
-        "`number[]`"
+        "`[number, number]`",
+        "`number[]`",
+        "`[5, 5]`",
+        "`[unknown, unknown]`"
       ],
-      "answer": 1,
-      "explanation": "T is inferred from the argument as number, and the signature keeps the relationship."
+      "answer": 0,
+      "explanation": "T is inferred from the argument and the literal 5 widens to number, so the result is the tuple `[number, number]`; the signature keeps both the tuple shape and the link to T. `[5, 5]` would need a `const T` type parameter or an `as const` argument."
     },
     {
       "prompt": "Why does `byId([{ id: 1 }], \"1\")` fail for `byId<T extends { id: string }>`?",
@@ -27,7 +27,7 @@
         "The second argument \"1\" must be a number like the id"
       ],
       "answer": 2,
-      "explanation": "The constraint requires every T to have a string id."
+      "explanation": "The constraint says every T must have a string id, and `{ id: 1 }` has a number id, so the argument does not satisfy `T extends { id: string }`. Inference from object literals works fine, and the \"1\" argument is not what fails: the element type is."
     },
     {
       "prompt": "What is `keyof { a: 1; b: 2 }`?",
@@ -38,7 +38,7 @@
         "`['a', 'b']`"
       ],
       "answer": 0,
-      "explanation": "keyof gives the union of an object type's property names."
+      "explanation": "keyof gives the union of an object type's property NAMES, so it is `'a' | 'b'`. The values 1 | 2 would be `T[keyof T]`, and keyof never produces a tuple; `string` is what keyof gives for a type with a string index signature."
     },
     {
       "prompt": "Which utility type best describes a PATCH body where any field may be sent?",
@@ -49,7 +49,7 @@
         "`Partial<User>`"
       ],
       "answer": 3,
-      "explanation": "Partial makes every property optional."
+      "explanation": "A PATCH body may contain any subset of fields, and `Partial<User>` makes every property optional. Required makes them all mandatory, Pick<User, \"id\"> keeps only the id, and Readonly forbids assignment without making anything optional."
     },
     {
       "prompt": "A `Record<\"a\" | \"b\", number>` is assigned `{ a: 1 }`. Result?",
@@ -74,15 +74,15 @@
       "explanation": "Utility types change what the compiler believes, not the data. Destructure the field out or map to a DTO."
     },
     {
-      "prompt": "What is `Awaited<Promise<Promise<string>>>`?",
+      "prompt": "What is `Awaited<Promise<number> | string>`?",
       "choices": [
-        "`Promise<string>`",
-        "`string`",
-        "`Promise<Promise<string>>`",
-        "`unknown`"
+        "`Promise<number> | string`",
+        "`string | number`",
+        "`Promise<string | number>`",
+        "`number`"
       ],
       "answer": 1,
-      "explanation": "Awaited unwraps promise types recursively, mirroring what await does at runtime."
+      "explanation": "Awaited distributes over a union and unwraps each promise member, while non-promise members pass through: `await` on a string gives the string. So the result is `string | number`, not `number` alone and not still a promise type."
     },
     {
       "prompt": "`const ROLES = [\"admin\", \"viewer\"] as const; type Role = (typeof ROLES)[number];` What is Role?",
@@ -191,6 +191,47 @@
         "Both helpers build a fresh object; the difference is whether you walk the requested keys or the object's own keys.",
         "For pick, walk the requested keys and copy those the object owns itself; for omit, walk the object's own keys and skip those in the excluded set.",
         "For pick, copy a requested key only if the object itself owns it. For omit, copy every key the object owns unless it appears in the exclusion list, and in both cases leave the original object alone."
+      ]
+    },
+    {
+      "slug": "02-bug-hunt-pick-and-omit-at-runtime",
+      "title": "Bug hunt: pick and omit: the runtime half of Pick and Omit",
+      "difficulty": 2,
+      "skills": [
+        "debugging",
+        "own properties",
+        "DTOs"
+      ],
+      "instructions": "**Bug hunt.** The code in the editor is a plausible first attempt at drill 1, \"pick and omit: the runtime half of Pick and Omit\". It passes some of the tests, but it has one real bug, the kind a reviewer should catch before it ships.\n\n**Your task.** Find the bug and fix it, changing as little as you can; the tests are the same as drill 1's. The spec is unchanged: Export two functions; both return a NEW object and never modify `obj`:\n- `pick(obj, keys)`: only the listed keys that are OWN properties of `obj` (a listed key that is missing is simply absent from the result)\n- `omit(obj, keys)`: every own enumerable property of `obj` except the listed keys\n\n`keys` is an array of strings. Inherited properties are never copied by either function.",
+      "starter": "// TODO: one bug hides in this code. Run the tests, find it and fix it.\nexport function pick(obj, keys) {\n  const out = {};\n  for (const k of keys) if (k in obj) out[k] = obj[k];\n  return out;\n}\n\nexport function omit(obj, keys) {\n  const drop = new Set(keys);\n  const out = {};\n  for (const k of Object.keys(obj)) if (!drop.has(k)) out[k] = obj[k];\n  return out;\n}\n",
+      "solution": "export function pick(obj, keys) {\n  const out = {};\n  for (const k of keys) if (Object.hasOwn(obj, k)) out[k] = obj[k];\n  return out;\n}\n\nexport function omit(obj, keys) {\n  const drop = new Set(keys);\n  const out = {};\n  for (const k of Object.keys(obj)) if (!drop.has(k)) out[k] = obj[k];\n  return out;\n}\n",
+      "tests": [
+        {
+          "name": "omit removes the secret",
+          "code": "assert.equal(typeof mod.omit, 'function', 'export omit');\nassert.deepEqual(mod.omit({ id: '1', name: 'Ana', passwordHash: 'x' }, ['passwordHash']), { id: '1', name: 'Ana' });"
+        },
+        {
+          "name": "pick keeps only the listed keys",
+          "code": "assert.equal(typeof mod.pick, 'function', 'export pick');\nassert.deepEqual(mod.pick({ id: '1', name: 'Ana', passwordHash: 'x' }, ['id', 'name']), { id: '1', name: 'Ana' });"
+        },
+        {
+          "name": "a missing key is absent, not undefined (boundary)",
+          "code": "const out = mod.pick({ id: '1' }, ['id', 'email']);\nassert.deepEqual(Object.keys(out), ['id']);"
+        },
+        {
+          "name": "inherited properties are never copied",
+          "code": "const proto = { role: 'admin' };\nconst user = Object.create(proto);\nuser.id = '1';\nassert.deepEqual(mod.pick(user, ['id', 'role']), { id: '1' });\nassert.deepEqual(mod.omit(user, []), { id: '1' });"
+        },
+        {
+          "name": "the input is not modified and a new object is returned",
+          "code": "const u = { id: '1', secret: 's' };\nconst a = mod.omit(u, ['secret']);\nconst b = mod.pick(u, ['id']);\nassert.deepEqual(u, { id: '1', secret: 's' });\nassert.notEqual(a, u);\nassert.notEqual(b, u);"
+        }
+      ],
+      "explanation": "`k in obj` is true for inherited properties too, so `pick` copies a prototype's `role: 'admin'` into a fresh plain object, where it becomes an own, serialisable field. `Object.hasOwn(obj, k)` copies only the object's own data; `omit` was already right because `Object.keys` lists own keys only.",
+      "hints": [
+        "Create the object with Object.create({ role: 'admin' }) and pick role.",
+        "The in operator also finds properties on the prototype chain.",
+        "Copy a listed key only when the object owns it."
       ]
     }
   ]

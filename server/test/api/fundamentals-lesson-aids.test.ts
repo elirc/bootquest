@@ -1,8 +1,8 @@
 /**
  * f52 lesson aids (wave B ruling 7): content/fundamentals/sections.json + GET /units/:id/lesson-aids.
  *   - the committed map: every track / topic exists, every question number is 1..quiz length, every heading
- *     is a `##`/`###` heading of that topic's lesson, every committed topic has a full gate map, and the pilot checks
- *     (js 01-05) cover every heading once without restating a quiz key or a flashcard back;
+ *     is a `##`/`###` heading of that topic's lesson, every committed topic has a full gate map, and the checks
+ *     (js 01-05: every heading once; every other topic: two, rv wave T9) restate no quiz key or flashcard back;
  *   - a bad entry logs one warning and is skipped, the rest loads; a missing / malformed file never throws;
  *   - the endpoint serves { gate, checks } for a Fundamentals topic unit and empty aids for any other unit.
  */
@@ -80,18 +80,20 @@ describe('content/fundamentals/sections.json (committed)', () => {
     expect(topics).toBe(COMMITTED_TOPICS);
   });
 
-  it('pilot checks: js 01-05 only, one per lesson heading in lesson order, no quiz key or flashcard back restated', () => {
-    const js = readTrack('js');
+  // rv wave (T9, pretest): every topic has check-yourself cards. The js 01-05 pilot keeps one per lesson heading;
+  // every other topic has exactly two, on two different headings, in lesson order.
+  it('checks: js 01-05 one per heading, every other topic two, in lesson order, no quiz key or flashcard back restated', () => {
     const problems: string[] = [];
-    for (const [track, byTopic] of Object.entries(raw)) {
-      for (const [id, entry] of Object.entries(byTopic)) {
-        if ((entry.checks?.length ?? 0) > 0 && !(track === 'js' && PILOT.includes(id.slice(0, 2)))) problems.push(`${track}/${id}: checks outside the pilot`);
-      }
-    }
     const norm = (s: string) => s.toLowerCase().replace(/[`*]/g, '').replace(/\s+/g, ' ').trim();
-    for (const topic of js.topics.filter((t) => PILOT.includes(t.id.slice(0, 2)))) {
-      const checks = raw.js?.[topic.id]?.checks ?? [];
-      expect(checks.map((c) => c.heading), topic.id).toEqual(lessonHeadings(topic.lesson));
+    for (const track of TRACKS) for (const topic of readTrack(track).topics) {
+      const checks = raw[track]?.[topic.id]?.checks ?? [];
+      const headings = lessonHeadings(topic.lesson);
+      if (track === 'js' && PILOT.includes(topic.id.slice(0, 2))) expect(checks.map((c) => c.heading), topic.id).toEqual(headings);
+      else {
+        expect(checks, `${track}/${topic.id} checks`).toHaveLength(2);
+        const at = checks.map((c) => headings.indexOf(c.heading));
+        if (!(at[0]! >= 0 && at[1]! > at[0]!)) problems.push(`${track}/${topic.id}: the two checks are not on two headings in lesson order`);
+      }
       const keys = topic.quiz.map((q) => norm(q.choices[q.answer]!)).filter((k) => k.length >= 12);
       const backs = topic.flashcards.map((c) => norm(c.back));
       const prompts = topic.quiz.map((q) => norm(q.prompt));

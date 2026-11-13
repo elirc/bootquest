@@ -1,7 +1,7 @@
 {
   "format": "fundamentals-authoring@1",
   "track": "js",
-  "topic": "21-lost-updates-and-optimistic-concurrency",
+  "topic": "25-lost-updates-and-optimistic-concurrency",
   "title": "Lost updates and optimistic concurrency",
   "level": "advanced",
   "summary": "Check-then-act races across awaits, version columns and conditional writes, 409 and 412 for stale edits, and bounded retries that re-read.",
@@ -23,8 +23,8 @@
       "choices": [
         "Other requests run during each await between the read and the write",
         "Worker threads share every variable that the request handler declares",
-        "The event loop runs two callbacks at once when both are ready",
-        "Promises settle in a random order when the server is under load"
+        "The event loop runs two callbacks at the same time when both are ready",
+        "Promises settle in a random order whenever the server is under heavy load"
       ],
       "answer": 0,
       "explanation": "One callback runs at a time, but a handler is many callbacks. Each await hands control to other requests, which can change the row you read."
@@ -32,9 +32,9 @@
     {
       "prompt": "`UPDATE docs SET body = ?, version = version + 1 WHERE id = ? AND version = ?` reports 0 affected rows. What does that tell the handler?",
       "choices": [
-        "The write was applied, but the body was already identical",
+        "The write was applied, but the new body was already identical to the old one",
         "The statement was rolled back after a deadlock with another writer",
-        "The version column overflowed and wrapped around to zero",
+        "The version column overflowed and wrapped around to zero on that write",
         "Nothing was written: the row is gone or its version has moved on"
       ],
       "answer": 3,
@@ -65,8 +65,8 @@
     {
       "prompt": "A server-side stock decrement hits a version conflict and retries. What must each retry do?",
       "choices": [
-        "Resend the same row with its version number raised by one",
-        "Wait a moment, then repeat the identical write statement",
+        "Resend the same row, with its version number raised by one from before",
+        "Wait a moment, then repeat the identical write statement as it was",
         "Switch to an unconditional write so that the retry cannot fail again",
         "Read the row again and recompute the change from fresh values"
       ],
@@ -94,6 +94,28 @@
       ],
       "answer": 2,
       "explanation": "A second check only narrows the gap. The gap closes when the check and the write are one conditional operation."
+    },
+    {
+      "prompt": "A client sends `PUT /docs/7` with `If-Match: \"v3\"`, but the document is now at ETag `\"v5\"`. What must the server do with the new body?",
+      "choices": [
+        "Apply it, since the client did send a precondition header",
+        "Merge it field by field into version 5 and save that",
+        "Refuse it and leave the document at version 5",
+        "Save it as version 6 and answer 200 OK"
+      ],
+      "answer": 2,
+      "explanation": "A failed If-Match means the client edited an older version, so the write must not be applied: the server answers 412 and the document stays at v5 until the client reloads and retries. A field-by-field merge silently combines two edits that nobody reviewed together."
+    },
+    {
+      "prompt": "Two tabs load `{ value: 10, version: 4 }`. Tab A writes value 11 with `WHERE version = 4`, then tab B writes value 12 with `WHERE version = 4`. What does the row hold afterwards?",
+      "choices": [
+        "value 12, version 5: the last write wins",
+        "value 12, version 6: both writes apply in turn",
+        "value 11, version 5; tab B's write changes no row",
+        "value 11, version 6: B's write bumps only the version"
+      ],
+      "answer": 2,
+      "explanation": "A's write matches version 4, sets value 11 and bumps the version to 5. B's write still says version 4, so it matches no row and reports 0 changes, which the handler turns into a conflict. Last-write-wins is what an unconditional write would do."
     }
   ],
   "flashcards": [

@@ -93,18 +93,18 @@
         "It throws: copies are read-only"
       ],
       "answer": 0,
-      "explanation": "Object.assign copies top-level property values; the nested object reference is shared."
+      "explanation": "Object.assign copies top-level property values, and the value of n is a reference to the same nested object, so writing through o.n changes a.n too. It is a shallow copy, not a deep one, and copies are ordinary writable objects; use structuredClone for a deep copy."
     },
     {
-      "prompt": "A getter `get full() { return this.first + \" \" + this.last; }` is read as...",
+      "prompt": "`const box = { w: 2, h: 3, get area() { return this.w * this.h; } }; box.w = 5;` What is `box.area` now?",
       "choices": [
-        "`person.full()`",
-        "`person.getFull()`",
-        "`person.full`",
-        "`person[\"get full\"]`"
+        "`15`",
+        "`6`",
+        "`undefined`",
+        "A function, to be called as `box.area()`"
       ],
-      "answer": 2,
-      "explanation": "A getter is accessed like a property and runs its body on every read."
+      "answer": 0,
+      "explanation": "A getter is read like a property and runs its body on every read, so it sees the new `w` and returns 5 * 3 = 15. It is not computed once at creation (that would give 6), and it is not called with parentheses."
     },
     {
       "prompt": "Two instances created with `new Person()` call `p.greet()`, defined in the class body. How many greet functions exist?",
@@ -199,6 +199,55 @@
         "Own keys from JSON can include \"__proto__\"; assigning or recursing through that key reaches Object.prototype.",
         "Build a fresh result, copy the base's own keys and then the override's, skip the prototype-related key names entirely, and recurse only when both sides hold plain objects (not arrays, not null).",
         "Start from an empty result, copy both sides in order while ignoring the three prototype-related key names, and only go one level deeper when the existing and incoming values are both ordinary objects."
+      ]
+    },
+    {
+      "slug": "02-bug-hunt-safe-deep-merge",
+      "title": "Bug hunt: a deep merge that cannot pollute prototypes",
+      "difficulty": 3,
+      "skills": [
+        "debugging",
+        "prototype chain",
+        "recursion"
+      ],
+      "instructions": "**Bug hunt.** The code in the editor is a plausible first attempt at drill 1, \"A deep merge that cannot pollute prototypes\". It passes some of the tests, but it has one real bug, the kind a reviewer should catch before it ships.\n\n**Your task.** Find the bug and fix it, changing as little as you can; the tests are the same as drill 1's. The spec is unchanged: Export `deepMerge(base, override)`. It returns a NEW object where:\n- every own enumerable key of `base` and `override` appears; for a key in both, the `override` value wins\n- when BOTH values are plain objects (not arrays, not null), they are merged recursively by the same rules\n- arrays and every other value are taken as-is from whichever side wins (arrays are replaced, not concatenated)\n- the keys `__proto__`, `constructor` and `prototype` are skipped entirely, at every depth\n- neither `base` nor `override` is modified",
+      "starter": "// TODO: one bug hides in this code. Run the tests, find it and fix it.\nconst FORBIDDEN = new Set(['__proto__', 'constructor', 'prototype']);\nconst isPlain = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);\n\nexport function deepMerge(base, override) {\n  const out = {};\n  for (const src of [base, override]) {\n    for (const key of Object.keys(src)) {\n      const value = src[key];\n      out[key] = isPlain(out[key]) && isPlain(value) ? deepMerge(out[key], value) : isPlain(value) ? deepMerge({}, value) : value;\n    }\n  }\n  return out;\n}\n",
+      "solution": "const FORBIDDEN = new Set(['__proto__', 'constructor', 'prototype']);\nconst isPlain = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);\n\nexport function deepMerge(base, override) {\n  const out = {};\n  for (const src of [base, override]) {\n    for (const key of Object.keys(src)) {\n      if (FORBIDDEN.has(key)) continue;\n      const value = src[key];\n      out[key] = isPlain(out[key]) && isPlain(value) ? deepMerge(out[key], value) : isPlain(value) ? deepMerge({}, value) : value;\n    }\n  }\n  return out;\n}\n",
+      "tests": [
+        {
+          "name": "nested objects merge and the override wins",
+          "code": "assert.equal(typeof mod.deepMerge, 'function', 'export deepMerge');\nassert.deepEqual(mod.deepMerge({ db: { host: 'a', port: 1 }, debug: false }, { db: { port: 2 }, debug: true }), { db: { host: 'a', port: 2 }, debug: true });"
+        },
+        {
+          "name": "arrays are replaced, not merged",
+          "code": "assert.deepEqual(mod.deepMerge({ tags: ['a', 'b'] }, { tags: ['c'] }), { tags: ['c'] });"
+        },
+        {
+          "name": "a __proto__ key from JSON pollutes nothing",
+          "code": "const evil = JSON.parse('{\"__proto__\": {\"admin\": true}, \"nested\": {\"__proto__\": {\"admin\": true}}}');\nconst out = mod.deepMerge({ nested: {} }, evil);\nassert.equal(({}).admin, undefined, 'Object.prototype was polluted');\nassert.equal(out.admin, undefined);\nassert.equal(out.nested.admin, undefined);\nassert.equal(Object.getPrototypeOf(out), Object.prototype);"
+        },
+        {
+          "name": "constructor and prototype keys are skipped",
+          "code": "const out = mod.deepMerge({}, JSON.parse('{\"constructor\": {\"prototype\": {\"x\": 1}}, \"ok\": 1}'));\nassert.deepEqual(Object.keys(out), ['ok']);"
+        },
+        {
+          "name": "the inputs are not modified",
+          "code": "const base = { db: { host: 'a' } };\nconst over = { db: { port: 2 } };\nconst out = mod.deepMerge(base, over);\nassert.deepEqual(base, { db: { host: 'a' } });\nassert.deepEqual(over, { db: { port: 2 } });\nout.db.host = 'changed';\nassert.equal(base.db.host, 'a');"
+        },
+        {
+          "name": "empty objects merge to an empty object (boundary)",
+          "code": "const out = mod.deepMerge({}, {});\nassert.deepEqual(out, {});"
+        },
+        {
+          "name": "null in the override replaces a nested object",
+          "code": "assert.deepEqual(mod.deepMerge({ cache: { ttl: 5 } }, { cache: null }), { cache: null });"
+        }
+      ],
+      "explanation": "Without the `FORBIDDEN` check, a parsed `\"__proto__\"` key is copied with `out['__proto__'] = ...`, which sets the result's PROTOTYPE instead of an own property, and `constructor` / `prototype` keys get through as well. Skipping those three names before the copy closes the prototype-pollution hole; everything else in the merge was already right.",
+      "hints": [
+        "Run the __proto__ test: what does the merged object's prototype look like?",
+        "JSON.parse creates an own key named __proto__, and Object.keys returns it like any other key.",
+        "Skip the three dangerous key names before copying anything onto the result."
       ]
     }
   ]

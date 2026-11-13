@@ -1,11 +1,11 @@
 {
   "format": "fundamentals-authoring@1",
   "track": "js",
-  "topic": "22-idempotent-writes",
+  "topic": "26-idempotent-writes",
   "title": "Idempotent writes",
   "level": "advanced",
   "summary": "Why writes get repeated, idempotency keys and replayed responses, 422 for a reused key, concurrent duplicates and in-flight maps, and deduplicating redelivered webhooks.",
-  "lesson": "## Why writes get repeated\n\nA client sends `POST /orders`, the server commits the order, and the response is lost: a timeout, a dropped mobile connection, a proxy restart. The client cannot tell \"never arrived\" from \"done, reply lost\", so it retries. A network can promise at-most-once or at-least-once delivery; exactly-once has to be built on top.\n\n**Story 1: the double charge.** A checkout page times out after 10 seconds and its retry logic resubmits. The first request was only slow. The customer is charged twice and has two orders.\n\n**Story 2: the webhook storm.** A payment provider did not get your 200 within its deadline, so it redelivers `payment.succeeded`. Your handler ships the parcel again.\n\n## Idempotency keys\n\nAn operation is **idempotent** when doing it twice leaves the same state as doing it once. PUT and DELETE are defined that way. POST is not, so you make it so: the client generates a unique key (a UUID) per *logical* operation and sends it on every retry, usually in an `Idempotency-Key` header. The server:\n\n1. looks the key up; if it is stored, it **replays the saved response** and creates nothing\n2. otherwise does the work and saves the key, a fingerprint of the request and the response **in the same transaction** as the order\n3. answers **422** when a stored key arrives with a *different* body: that is a client bug, not a retry\n\nThe key identifies the attempt, not the content. Two requests with identical bodies and different keys are two real orders. A new key on every retry defeats the scheme.\n\n## The concurrent duplicate\n\nLook-up-then-insert is a check-then-act race (topic 21): two copies of the request arrive together, both find no key, both insert. Two fixes:\n\n- a **UNIQUE constraint** on the key, so the database refuses the second insert. This is the real guarantee, and it works across servers.\n- inside one process, an **in-flight map** from key to the running promise, so a second caller awaits the first one's result. Remove the entry when the work settles, or one failed attempt blocks every retry.\n\nNever store a failure as final: if the insert threw, the next retry must be allowed to run.\n\n## Duplicate deliveries: webhooks and queues\n\nSenders retry until you acknowledge, so consumers dedupe on the **event id**: remember each processed id and skip ids already seen. Compare the id only; a redelivery may differ in attempt counters or timestamps. Keep ids for a window longer than the sender's retry schedule, then purge them so the table stays bounded. Measure the window from the first processing: a duplicate must not extend it.\n\nBetter still, make the effect naturally idempotent. `SET status = 'paid'` can run twice; `balance = balance + 10` cannot.",
+  "lesson": "## Why writes get repeated\n\nA client sends `POST /orders`, the server commits the order, and the response is lost: a timeout, a dropped mobile connection, a proxy restart. The client cannot tell \"never arrived\" from \"done, reply lost\", so it retries. A network can promise at-most-once or at-least-once delivery; exactly-once has to be built on top.\n\n**Story 1: the double charge.** A checkout page times out after 10 seconds and its retry logic resubmits. The first request was only slow. The customer is charged twice and has two orders.\n\n**Story 2: the webhook storm.** A payment provider did not get your 200 within its deadline, so it redelivers `payment.succeeded`. Your handler ships the parcel again.\n\n## Idempotency keys\n\nAn operation is **idempotent** when doing it twice leaves the same state as doing it once. PUT and DELETE are defined that way. POST is not, so you make it so: the client generates a unique key (a UUID) per *logical* operation and sends it on every retry, usually in an `Idempotency-Key` header. The server:\n\n1. looks the key up; if it is stored, it **replays the saved response** and creates nothing\n2. otherwise does the work and saves the key, a fingerprint of the request and the response **in the same transaction** as the order\n3. answers **422** when a stored key arrives with a *different* body: that is a client bug, not a retry\n\nThe key identifies the attempt, not the content. Two requests with identical bodies and different keys are two real orders. A new key on every retry defeats the scheme.\n\n## The concurrent duplicate\n\nLook-up-then-insert is a check-then-act race (topic 25): two copies of the request arrive together, both find no key, both insert. Two fixes:\n\n- a **UNIQUE constraint** on the key, so the database refuses the second insert. This is the real guarantee, and it works across servers.\n- inside one process, an **in-flight map** from key to the running promise, so a second caller awaits the first one's result. Remove the entry when the work settles, or one failed attempt blocks every retry.\n\nNever store a failure as final: if the insert threw, the next retry must be allowed to run.\n\n## Duplicate deliveries: webhooks and queues\n\nSenders retry until you acknowledge, so consumers dedupe on the **event id**: remember each processed id and skip ids already seen. Compare the id only; a redelivery may differ in attempt counters or timestamps. Keep ids for a window longer than the sender's retry schedule, then purge them so the table stays bounded. Measure the window from the first processing: a duplicate must not extend it.\n\nBetter still, make the effect naturally idempotent. `SET status = 'paid'` can run twice; `balance = balance + 10` cannot.",
   "quiz": [
     {
       "prompt": "A client's POST /orders times out with no response. What does the client know?",
@@ -54,10 +54,10 @@
     {
       "prompt": "Two copies of one keyed request reach different servers at the same instant. What reliably prevents two orders?",
       "choices": [
-        "An in-memory map of keys inside each server process",
-        "A lookup for the key before every insert statement",
+        "An in-memory map of keys kept inside each server process",
+        "A lookup for the key just before every insert statement",
         "A unique constraint on the key column in the database",
-        "A shorter client timeout, so the copies arrive apart"
+        "A shorter client timeout, so that the copies arrive apart"
       ],
       "answer": 2,
       "explanation": "Each server has its own memory, and a lookup followed by an insert is a check-then-act race. Only the shared database can refuse the second row."
@@ -78,7 +78,7 @@
       "choices": [
         "As a new event, because the payload is not identical",
         "As an error, answering 400 so that the provider stops",
-        "As a newer version that replaces the first delivery",
+        "As a newer version of the event that replaces the first delivery",
         "As a duplicate, because that id was handled already"
       ],
       "answer": 3,
@@ -89,11 +89,33 @@
       "choices": [
         "`UPDATE orders SET status = 'paid' WHERE id = 7`",
         "`UPDATE accounts SET balance = balance + 10 WHERE id = 7`",
-        "`INSERT INTO shipments (order_id) VALUES (7)`",
+        "`INSERT INTO shipments (order_id, status) VALUES (7, 'new')`",
         "`UPDATE stock SET qty = qty - 1 WHERE sku = 'A1'`"
       ],
       "answer": 0,
       "explanation": "Setting a fixed value gives the same row however often it runs. The increments apply twice, and the insert adds a second shipment."
+    },
+    {
+      "prompt": "A queue consumer charges a card, then acknowledges the message, and crashes between the two. What happens next?",
+      "choices": [
+        "The message is lost: brokers drop unacknowledged messages on a crash",
+        "It is redelivered, so the charge must be deduplicated on the message id",
+        "It is redelivered, and the broker guarantees it is processed exactly once",
+        "Nothing: acknowledging after the work is what makes delivery exactly once"
+      ],
+      "answer": 1,
+      "explanation": "An unacknowledged message is delivered again, so the charge runs a second time unless the consumer records the message id (or an idempotency key) and skips repeats. Brokers give at-least-once delivery; exactly-once effects come from the consumer's deduplication."
+    },
+    {
+      "prompt": "A webhook handler records each event id under a UNIQUE constraint and processes the event. A redelivery of an event that was already processed successfully hits that constraint. What should it answer?",
+      "choices": [
+        "500, so that the provider retries the delivery later",
+        "400, since the payload is a duplicate of an old one",
+        "409, so that the provider resends it with a new id",
+        "A 2xx, because the event has already been handled"
+      ],
+      "answer": 3,
+      "explanation": "The event was handled, so the right answer is success; anything else makes the provider retry a delivery that can never succeed again. A 500 or 409 turns harmless duplicates into an endless retry loop, and providers do not issue new ids."
     }
   ],
   "flashcards": [

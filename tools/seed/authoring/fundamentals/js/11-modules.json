@@ -71,7 +71,7 @@
         "It throws"
       ],
       "answer": 0,
-      "explanation": "The default import of a CommonJS module is its module.exports value."
+      "explanation": "When an ES module imports a CommonJS module, the default import is the module.exports value, so pkg is { a: 1 }. The `{ default: ... }` wrapper is what you see with a namespace import (`import * as ns`), not with a default import, and nothing throws."
     },
     {
       "prompt": "Node 22 loads a `.js` file. Which setting states explicitly whether it is ESM or CommonJS?",
@@ -195,6 +195,51 @@
         "Every module object must be findable in the cache before its own factory starts running, or a cycle would recurse forever.",
         "Keep a cache of module records keyed by id; on a miss, find the factory (fail if there is none), store the new record before running the factory, run it with the loader and the record, and answer with the record's exports.",
         "Remember each module the moment you first create it, run its factory once with the loader, the module record and its exports object, and always answer with whatever the exports property holds at the end."
+      ]
+    },
+    {
+      "slug": "02-bug-hunt-commonjs-loader",
+      "title": "Bug hunt: build require: a CommonJS-style module loader",
+      "difficulty": 3,
+      "skills": [
+        "debugging",
+        "module cache",
+        "circular dependencies"
+      ],
+      "instructions": "**Bug hunt.** The code in the editor is a plausible first attempt at drill 1, \"Build require: a CommonJS-style module loader\". It passes some of the tests, but it has one real bug, the kind a reviewer should catch before it ships.\n\n**Your task.** Find the bug and fix it, changing as little as you can; the tests are the same as drill 1's. The spec is unchanged: Export `createLoader(factories)`. `factories` maps a module id to a function `(require, module, exports) => void`. The loader returns a `require(id)` function that:\n- throws an `Error` whose message contains the id when the id is unknown\n- the first time an id is required: creates `module = { exports: {} }`, caches it, then calls the factory with `(require, module, module.exports)` and returns `module.exports`\n- every later time: returns the cached `module.exports` without running the factory again\n\nBecause the module is cached BEFORE its factory runs, a circular require receives the partly filled exports.",
+      "starter": "// TODO: one bug hides in this code. Run the tests, find it and fix it.\nexport function createLoader(factories) {\n  const cache = new Map();\n  const require = (id) => {\n    if (cache.has(id)) return cache.get(id).exports;\n    const factory = factories[id];\n    if (typeof factory !== 'function') throw new Error(`Cannot find module '${id}'`);\n    const module = { exports: {} };\n    factory(require, module, module.exports);\n    cache.set(id, module);\n    return module.exports;\n  };\n  return require;\n}\n",
+      "solution": "export function createLoader(factories) {\n  const cache = new Map();\n  const require = (id) => {\n    if (cache.has(id)) return cache.get(id).exports;\n    const factory = factories[id];\n    if (typeof factory !== 'function') throw new Error(`Cannot find module '${id}'`);\n    const module = { exports: {} };\n    cache.set(id, module);\n    factory(require, module, module.exports);\n    return module.exports;\n  };\n  return require;\n}\n",
+      "tests": [
+        {
+          "name": "exports.x works and a module runs only once",
+          "code": "assert.equal(typeof mod.createLoader, 'function', 'export createLoader');\nlet runs = 0;\nconst req = mod.createLoader({ math: (require, module, exports) => { runs++; exports.add = (a, b) => a + b; } });\nassert.equal(req('math').add(2, 3), 5);\nassert.equal(req('math'), req('math'));\nassert.equal(runs, 1);"
+        },
+        {
+          "name": "module.exports replaces the exports object",
+          "code": "const req = mod.createLoader({ greet: (require, module) => { module.exports = (n) => 'hi ' + n; } });\nassert.equal(req('greet')('ana'), 'hi ana');"
+        },
+        {
+          "name": "reassigning the exports parameter exports nothing",
+          "code": "const req = mod.createLoader({ broken: (require, module, exports) => { exports = { x: 1 }; } });\nassert.deepEqual(req('broken'), {});"
+        },
+        {
+          "name": "modules can require each other through the passed require",
+          "code": "const req = mod.createLoader({\n  a: (require, module, exports) => { exports.value = require('b').value + 1; },\n  b: (require, module, exports) => { exports.value = 41; },\n});\nassert.equal(req('a').value, 42);"
+        },
+        {
+          "name": "a circular require gets the partly filled exports",
+          "code": "const req = mod.createLoader({\n  a: (require, module, exports) => { exports.name = 'a'; const b = require('b'); exports.sawB = b.name; },\n  b: (require, module, exports) => { const a = require('a'); exports.name = 'b'; exports.sawA = a.name; exports.aDone = 'sawB' in a; },\n});\nconst a = req('a');\nassert.equal(a.sawB, 'b');\nassert.equal(req('b').sawA, 'a');\nassert.equal(req('b').aDone, false);"
+        },
+        {
+          "name": "an unknown id throws an Error naming it",
+          "code": "const req = mod.createLoader({});\nassert.throws(() => req('nope'), (e) => e instanceof Error && e.message.includes('nope'));"
+        }
+      ],
+      "explanation": "The module is cached only after its factory returns, so a circular `require('a')` from inside b finds no entry, starts a again, and recurses until the stack overflows. Put the module in the cache BEFORE running the factory: the cycle then gets the partly filled exports, which is exactly how Node behaves.",
+      "hints": [
+        "Run the circular test: what happens when a requires b and b requires a?",
+        "While a's factory is still running, nothing in the cache says that a is already being loaded.",
+        "Register the module in the cache before its factory runs, so a cycle finds the partly filled exports."
       ]
     }
   ]

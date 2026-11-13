@@ -8,26 +8,26 @@
   "lesson": "## fs: use the promise API\n\n```js\nimport { readFile, writeFile } from 'node:fs/promises';\nconst text = await readFile(new URL('./config.json', import.meta.url), 'utf8');\n```\n\nThe `*Sync` functions block the whole process (topic 12): fine in a CLI or at startup, wrong inside a request handler. Relative paths in fs calls resolve against `process.cwd()` (where the process was started), NOT the file's folder; build paths from `import.meta.dirname` (or `__dirname` in CommonJS).\n\n## path\n\n```js\npath.join('a', '../b')        // 'b'         joins and normalises\npath.join('/a/', '/b')        // '/a/b'\npath.resolve('/x', 'y', '../z') // '/x/z'    builds an ABSOLUTE path, right to left\npath.resolve('/x', '/y')      // '/y'        a later absolute segment restarts\npath.extname('a.tar.gz')      // '.gz'\n```\n\nNever concatenate paths with `+ '/'`; and never join untrusted input into a path without checking the result stays inside your base folder (path traversal: `../../etc/passwd`).\n\n## process\n\n- `process.env` values are **always strings** (or undefined). `process.env.PORT = 3000` stores `'3000'`, and `'false'` is truthy. Parse and validate configuration once at startup.\n- `process.argv`: `[nodePath, scriptPath, ...args]`.\n- `process.exitCode = 1` lets the process finish its work and exit non-zero; `process.exit()` kills it immediately, possibly losing buffered output.\n- Signals: listen for `SIGTERM` to shut down gracefully (stop accepting, finish in-flight requests, close the DB pool).\n\n## EventEmitter\n\n```js\nconst e = new EventEmitter();\ne.on('saved', (doc) => log(doc.id));\ne.emit('saved', doc);   // listeners run SYNCHRONOUSLY, in registration order, before emit returns\n```\n\n- `emit` returns `true` if there were listeners.\n- `once` removes the listener after its first call.\n- Emitting `'error'` with **no** `'error'` listener throws the error, which usually crashes the process. Always attach error listeners to streams, sockets and emitters you create.\n- Forgetting to remove listeners in long-lived objects leaks memory (Node warns after 10 listeners for one event).\n\n## Buffer: bytes, not characters\n\n`Buffer.byteLength('é')` is 2 while `'é'.length` is 1. HTTP `Content-Length`, file sizes and database column limits count **bytes** in UTF-8. Splitting a Buffer at an arbitrary byte can cut a multi-byte character in half; decode text with a streaming decoder or by lines.\n\n## Streams and backpressure\n\nStreams process data piece by piece: read a 5 GB file with constant memory. Readable streams are async iterables:\n\n```js\nimport { pipeline } from 'node:stream/promises';\nawait pipeline(createReadStream('in.csv'), transformRows, createWriteStream('out.csv'));\n```\n\n`pipeline` connects streams, forwards errors from any stage and destroys every stream on failure. **Backpressure**: when a writable stream's buffer is full, `write()` returns false and the producer should wait for `'drain'`; `pipeline` and `for await` handle this for you, a manual `on('data')` loop does not. Chunks are arbitrary slices: a line or a JSON record can span two chunks, so keep the incomplete tail between chunks.",
   "quiz": [
     {
-      "prompt": "What is `path.join(\"a\", \"../b\")`?",
+      "prompt": "On Linux or macOS, what is `path.join('/app', 'src', '..', 'lib')`?",
       "choices": [
-        "`'a/../b'`",
-        "`'b'`",
-        "`'/b'`",
-        "`'a/b'`"
+        "`'/app/src/../lib'`",
+        "`'/app/src/lib'`",
+        "`'/app/lib/'`",
+        "`'/app/lib'`"
       ],
-      "answer": 1,
-      "explanation": "join concatenates and normalises, resolving the .. segment."
+      "answer": 3,
+      "explanation": "join concatenates the segments and then normalises the result, so the `..` cancels `src` and no trailing slash is added. Keeping the `..` in the string, as in `'/app/src/../lib'`, is what plain string concatenation would give."
     },
     {
-      "prompt": "On Linux or macOS, what does `path.resolve(\"/x\", \"/y\")` return?",
+      "prompt": "On Linux or macOS, what does `path.resolve('/srv', 'data', '/tmp', 'x')` return?",
       "choices": [
-        "`'/y'`",
-        "`'/x/y'`",
-        "`'/x//y'`",
-        "`'y'`"
+        "`'/tmp/x'`",
+        "`'/srv/data/tmp/x'`",
+        "`'/srv/data//tmp/x'`",
+        "`'/srv/tmp/x'`"
       ],
       "answer": 0,
-      "explanation": "resolve works right to left and stops at the first absolute segment it meets."
+      "explanation": "resolve works from right to left and stops at the first absolute segment it meets, here `/tmp`; everything to its left is ignored. Treating `/tmp` as one more relative piece, as in `'/srv/data/tmp/x'`, is how join would behave, not resolve."
     },
     {
       "prompt": "After `process.env.FEATURE = false`, what is `typeof process.env.FEATURE` and is it truthy?",
@@ -191,6 +191,47 @@
         "The text after the last newline of a chunk is not a line yet; it has to wait for the next chunk.",
         "Keep the unfinished text in a buffer; on each chunk, join buffer and chunk, cut at the newlines, put the last piece back into the buffer, and strip one trailing carriage return from each finished line.",
         "Glue any leftover text to the front of each new chunk, hand back every piece that ended in a newline minus any trailing CR character, and remember the unfinished last piece until more text or the end arrives."
+      ]
+    },
+    {
+      "slug": "02-bug-hunt-line-splitter",
+      "title": "Bug hunt: split streamed chunks into lines",
+      "difficulty": 2,
+      "skills": [
+        "debugging",
+        "streams",
+        "chunk boundaries"
+      ],
+      "instructions": "**Bug hunt.** The code in the editor is a plausible first attempt at drill 1, \"Split streamed chunks into lines\". It passes some of the tests, but it has one real bug, the kind a reviewer should catch before it ships.\n\n**Your task.** Find the bug and fix it, changing as little as you can; the tests are the same as drill 1's. The spec is unchanged: Export `createLineSplitter()`. It returns an object with:\n- `push(chunk)`: takes a string chunk and returns an array of the COMPLETE lines it finished (possibly empty)\n- `end()`: returns an array with the final unterminated line, or an empty array if nothing is pending\n\nLines end with `\\n`; a `\\r` right before the `\\n` is removed (Windows line endings), even when `\\r` and `\\n` arrive in different chunks. Empty lines between two newlines are real lines and are returned as `''`.",
+      "starter": "// TODO: one bug hides in this code. Run the tests, find it and fix it.\nlet tail = '';\nconst strip = (line) => (line.endsWith('\\r') ? line.slice(0, -1) : line);\n\nexport function createLineSplitter() {\n  return {\n    push(chunk) {\n      const parts = (tail + chunk).split('\\n');\n      tail = parts.pop();\n      return parts.map(strip);\n    },\n    end() {\n      const rest = tail;\n      tail = '';\n      return rest === '' ? [] : [strip(rest)];\n    },\n  };\n}\n",
+      "solution": "export function createLineSplitter() {\n  let tail = '';\n  const strip = (line) => (line.endsWith('\\r') ? line.slice(0, -1) : line);\n  return {\n    push(chunk) {\n      const parts = (tail + chunk).split('\\n');\n      tail = parts.pop();\n      return parts.map(strip);\n    },\n    end() {\n      const rest = tail;\n      tail = '';\n      return rest === '' ? [] : [strip(rest)];\n    },\n  };\n}\n",
+      "tests": [
+        {
+          "name": "a line split across chunks is joined",
+          "code": "assert.equal(typeof mod.createLineSplitter, 'function', 'export createLineSplitter');\nconst s = mod.createLineSplitter();\nassert.deepEqual(s.push('ab'), []);\nassert.deepEqual(s.push('c\\nde'), ['abc']);\nassert.deepEqual(s.end(), ['de']);"
+        },
+        {
+          "name": "several lines in one chunk, empty lines kept",
+          "code": "const s = mod.createLineSplitter();\nassert.deepEqual(s.push('one\\n\\ntwo\\n'), ['one', '', 'two']);\nassert.deepEqual(s.end(), []);"
+        },
+        {
+          "name": "CRLF is removed, even split between chunks",
+          "code": "const s = mod.createLineSplitter();\nassert.deepEqual(s.push('a\\r\\nb\\r'), ['a']);\nassert.deepEqual(s.push('\\nc'), ['b']);\nassert.deepEqual(s.end(), ['c']);"
+        },
+        {
+          "name": "nothing pushed means nothing at the end (boundary)",
+          "code": "const s = mod.createLineSplitter();\nassert.deepEqual(s.end(), []);"
+        },
+        {
+          "name": "two splitters do not share state",
+          "code": "const a = mod.createLineSplitter();\nconst b = mod.createLineSplitter();\na.push('left');\nassert.deepEqual(b.push('right\\n'), ['right']);\nassert.deepEqual(a.end(), ['left']);"
+        }
+      ],
+      "explanation": "`tail` sits at module level, so every splitter shares one pending partial line: two concurrent uploads interleave their halves. Declaring `let tail = ''` inside `createLineSplitter` gives each splitter its own state through the closure; the split and CR logic were already right.",
+      "hints": [
+        "Create two splitters, push half a line into the first, then push into the second.",
+        "The pending partial line lives outside the factory, so every splitter reads and writes the same one.",
+        "Keep the leftover partial line inside each splitter, created fresh by every call of the factory."
       ]
     }
   ]

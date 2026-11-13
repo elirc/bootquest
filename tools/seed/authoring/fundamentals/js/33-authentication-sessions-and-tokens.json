@@ -12,8 +12,8 @@
       "choices": [
         "It is reversible, so a password can be computed back from its hash",
         "It is fast, so an attacker can test guesses at an enormous rate",
-        "It is keyed, so every verifying server must share one secret",
-        "It is 256 bits wide, so long passwords collide with short ones"
+        "It is keyed, so every verifying server must share one secret key",
+        "It is 256 bits wide, so long passwords collide with the short ones"
       ],
       "answer": 1,
       "explanation": "A general-purpose hash is designed to be quick. Password hashing wants the opposite: scrypt, bcrypt and Argon2 make every guess expensive."
@@ -88,12 +88,34 @@
       "prompt": "With refresh-token rotation, a refresh token that was already used is presented again. What should the server do?",
       "choices": [
         "Issue a new pair of tokens, as the client is retrying a lost response",
-        "Reject that one token and leave the tokens issued after it valid",
-        "Extend the lifetime of the newest token to make up for the failure",
+        "Reject that one token and leave all of the tokens issued after it valid",
+        "Extend the lifetime of the newest token to make up for the failed refresh",
         "Revoke every token descended from that login and require a new one"
       ],
       "answer": 3,
       "explanation": "A second use proves the token exists in two places, and the server cannot know which holder is the user. Revoking the family locks the thief out too."
+    },
+    {
+      "prompt": "A user changes their password because they suspect someone else is logged in. What should happen to their other server-side sessions?",
+      "choices": [
+        "They stay valid until each one expires on its own",
+        "They are deleted, so a stolen session stops working",
+        "They are kept but linked to the new password hash",
+        "They end only if they are more than a day old"
+      ],
+      "answer": 1,
+      "explanation": "Server-side sessions can be revoked at once by deleting them, and a password change after a suspected break-in is exactly when to do it. Leaving them valid lets the intruder keep using a session cookie they already hold, whatever the new password is."
+    },
+    {
+      "prompt": "Why can a stateless JWT not be revoked before its `exp` without extra server state?",
+      "choices": [
+        "The server checks only the signature and exp, so it has nothing to look up",
+        "The signature changes every minute, so old tokens stop working anyway",
+        "Revoking it would need the user's password, which the server does not keep",
+        "It can: the server sets exp in the past on its copy of the token"
+      ],
+      "answer": 0,
+      "explanation": "Verification needs only the secret and the token itself, so a valid token keeps working until exp unless the server adds state such as a deny-list or a per-user token version. The server holds no copy of the token to change, and signatures do not rotate on their own."
     }
   ],
   "flashcards": [
@@ -169,7 +191,7 @@
           "code": "const { createHmac } = await import('node:crypto');\nconst part = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');\nconst sign = (header, payload, secret, hash = 'sha256') => {\n  const body = part(header) + '.' + part(payload);\n  return body + '.' + createHmac(hash, secret).update(body).digest('base64url');\n};\nconst SECRET = 'correct horse battery staple';\nconst NOW = 1800000000;\nconst HS256 = { alg: 'HS256', typ: 'JWT' };\nconst good = sign(HS256, { sub: 'u1', role: 'member', exp: NOW + 60 }, SECRET);\nassert.equal(typeof mod.verifyJwt, 'function', 'export function verifyJwt');\nconst malformed = { ok: false, reason: 'malformed' };\nfor (const input of ['', 'abc', 'a.b', good + '.extra', null, undefined, 42, 'not-json.' + part({ exp: NOW + 60 }) + '.sig']) {\n  assert.deepEqual(mod.verifyJwt(input, SECRET, NOW), malformed, `input ${String(input).slice(0, 20)}`);\n}\nconst body = part(HS256) + '.' + part('just a string');\nassert.deepEqual(mod.verifyJwt(body + '.' + createHmac('sha256', SECRET).update(body).digest('base64url'), SECRET, NOW), malformed);"
         }
       ],
-      "explanation": "```js\nif (header.alg !== 'HS256') return fail('algorithm');\nconst expected = createHmac('sha256', secret).update(parts[0] + '.' + parts[1]).digest();\nconst given = Buffer.from(parts[2], 'base64url');\nif (given.length !== expected.length || !timingSafeEqual(given, expected)) return fail('signature');\nif (typeof payload.exp !== 'number' || nowSeconds >= payload.exp) return fail('expired');\nreturn { ok: true, payload };\n```\n\nThe order is the lesson: structure, algorithm, signature, and only then the claims.\n\nThe plausible wrong answer is the \"flexible\" verifier that reads `header.alg` to decide how to check, with a branch that skips the signature for `none`. That is the historical bug in several JWT libraries: anyone can write a header saying `none`, leave the signature empty and claim any role. The trap test sends exactly that token. The verifier owns the algorithm; the header is only compared against it.\n\nThree more details the tests pin down. `timingSafeEqual` throws a RangeError when the two buffers differ in length, so compare lengths first (a truncated signature must be a clean `'signature'` result). Expiry uses `>=`: the token is dead in the second its `exp` is reached. And the signature is computed over the encoded parts exactly as received; decoding and re-encoding the JSON would change the bytes.\n\nA real service also checks issuer and audience, tolerates a few seconds of clock skew, and uses a maintained library. Write this once so that you can read what the library does.",
+      "explanation": "```js\nif (header.alg !== 'HS256') return fail('algorithm');\nconst expected = createHmac('sha256', secret).update(parts[0] + '.' + parts[1]).digest();\nconst given = Buffer.from(parts[2], 'base64url');\nif (given.length !== expected.length || !timingSafeEqual(given, expected)) return fail('signature');\nif (typeof payload.exp !== 'number' || nowSeconds >= payload.exp) return fail('expired');\nreturn { ok: true, payload };\n```\n\nThe order is the lesson: structure, algorithm, signature, and only then the claims.\n\nThe plausible wrong answer is the \"flexible\" verifier that reads `header.alg` to decide how to check, with a branch that skips the signature for `none`. That is the historical bug in several JWT libraries: anyone can write a header saying `none`, leave the signature empty and claim any role. The trap test sends exactly that token. The verifier owns the algorithm; the header is only compared against it.\n\nThree more details the tests pin down. `timingSafeEqual` throws a RangeError when the two buffers differ in length, so compare lengths first (a truncated signature must be a clean `'signature'` result). The tests cannot tell `timingSafeEqual` from a plain `===` on the two strings: both give the same answers, and only the time taken differs, so timing safety is on you, not on the grader. Expiry uses `>=`: the token is dead in the second its `exp` is reached. And the signature is computed over the encoded parts exactly as received; decoding and re-encoding the JSON would change the bytes.\n\nA real service also checks issuer and audience, tolerates a few seconds of clock skew, and uses a maintained library. Write this once so that you can read what the library does.",
       "hints": [
         "Nothing inside a token can be trusted until its signature has been verified with an algorithm that you chose.",
         "Work in a fixed order: shape first, then the declared algorithm against the one you expect, then recompute the signature over the first two parts as received and compare without leaking timing, and only then look at the expiry.",
