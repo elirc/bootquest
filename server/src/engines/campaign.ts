@@ -1,5 +1,6 @@
 import type { Db } from '../db/database.ts';
 import { READING_ATTEST_SQL, VERIFIED_PASS_SQL } from './attempts.ts';
+import { isArchivedKey, routing } from '../store/routing.ts';
 import { levelForXp } from './level.ts';
 import { totalXp } from './xp.ts';
 
@@ -20,6 +21,11 @@ import { totalXp } from './xp.ts';
  * percentage leg vacuously. The percentage compare is integer math
  * (done*100 >= round(pct*100)*total) so 79.99% never rounds up to 80%.
  * The level is the GLOBAL level (engines/level.ts) — there is one XP ledger.
+ *
+ * Archive (rv wave C, REVIEW Q4): a study quest whose unit key is in content/archive.json
+ * (store/routing.ts) is NOT core: it leaves both coreDone and coreTotal, so an act never waits on a
+ * quest the slate and next-up no longer offer (R3-round2: hiding quests while still counting them
+ * deadlocks the acts). The quest stays listed (archived: true) and playable; nothing is deleted.
  */
 
 export interface ActGate {
@@ -71,6 +77,8 @@ export interface QuestState {
   core: boolean;
   contentPending: boolean;
   twinRepo: string | null;
+  /** rv wave C: the quest's unit is archived (content/archive.json): listed, playable, never core */
+  archived: boolean;
   /** a learner can complete it now-or-once-unlocked: live reading unit, or a live unit with a check */
   actionable: boolean;
   done: boolean;
@@ -123,6 +131,7 @@ interface QuestRow {
   twinRepo: string | null;
   verdict: string;
   unitKind: string | null;
+  unitKey: string | null;
   unitLive: number;
   checks: number;
 }
@@ -197,7 +206,7 @@ function buildCampaignState(db: Db, trackIds: readonly string[] | undefined, lev
   const quests = db.all<QuestRow>(
     `SELECT q.id, q.act_id AS actId, q.key, q.quest_kind AS questKind, q.title, q.repo, q.index_rank AS rank, q.ordinal,
             q.unit_id AS unitId, q.core, q.content_pending AS contentPending, q.twin_repo AS twinRepo, q.verdict,
-            u.kind AS unitKind, (u.id IS NOT NULL AND u.retired_at IS NULL) AS unitLive,
+            u.kind AS unitKind, u.key AS unitKey, (u.id IS NOT NULL AND u.retired_at IS NULL) AS unitLive,
             (SELECT COUNT(*) FROM "check" c WHERE c.unit_id = q.unit_id AND c.retired_at IS NULL) AS checks
        FROM quest q LEFT JOIN unit u ON u.id = q.unit_id
       ${trackIds === undefined ? '' : `WHERE q.act_id IN (${acts.map(() => '?').join(', ')})`}
@@ -214,24 +223,28 @@ function buildCampaignState(db: Db, trackIds: readonly string[] | undefined, lev
     byAct.set(q.actId, list);
   }
 
+  const titles = routing().campaignTitles;
   const out: ActState[] = [];
   for (const tid of [...new Set(acts.map((a) => a.trackId))]) {
     const trackActs = acts.filter((a) => a.trackId === tid);
     const partial = trackActs.map((a) => {
       const qs = (byAct.get(a.id) ?? []).map((q) => {
         const kind: QuestState['kind'] = q.questKind === 'reading' || (q.questKind === null && q.verdict === 'skim') ? 'reading' : 'study-quest';
+        const archived = isArchivedKey(q.unitKey ?? q.key ?? '');
         const actionable = Boolean(q.unitLive) && q.unitId !== null && (q.unitKind === 'reading' || q.checks > 0);
         return {
           id: q.id,
           key: q.key,
           kind,
-          title: q.title ?? q.repo,
+          // R4-11: a concept title from content/campaign-titles.json when there is one; the repo stays in `repo`
+          title: (q.key !== null ? titles.get(q.key) : undefined) ?? q.title ?? q.repo,
           repo: q.repo,
           rank: q.rank,
           unitId: q.unitId,
-          core: Boolean(q.core) && kind === 'study-quest',
+          core: Boolean(q.core) && kind === 'study-quest' && !archived,
           contentPending: Boolean(q.contentPending) || (kind === 'study-quest' && !actionable),
           twinRepo: q.twinRepo,
+          archived,
           actionable,
           done: q.unitId !== null && Boolean(q.unitLive) && done.has(q.unitId),
           started: q.unitId !== null && Boolean(q.unitLive) && started.has(q.unitId),
@@ -301,5 +314,5 @@ export function questUnitUnlocked(db: Db, unitId: number): boolean | null {
 
 /** Slate: is there a campaign step the learner can actually take today (an actionable, not-done quest in an unlocked act)? */
 export function campaignStepAvailable(db: Db): boolean {
-  return campaignState(db).some((a) => a.unlocked && a.quests.some((q) => q.actionable && !q.done));
+  return campaignState(db).some((a) => a.unlocked && a.quests.some((q) => q.actionable && !q.done && !q.archived));
 }
