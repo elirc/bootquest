@@ -196,6 +196,51 @@
         "Split pattern and path into segments and require the same count, capture colon segments after decoding them (a decoding failure means no match), and compare fixed segments exactly.",
         "Clean the path, line up pattern pieces and path pieces one to one, treat colon pieces as named captures that must be non-empty and decodable, and fail as soon as a fixed piece differs."
       ]
+    },
+    {
+      "slug": "02-bug-hunt-route-matcher",
+      "title": "Bug hunt: match a route pattern and extract params",
+      "difficulty": 2,
+      "skills": [
+        "debugging",
+        "routing",
+        "URL decoding"
+      ],
+      "instructions": "**Bug hunt.** The code in the editor is a plausible first attempt at drill 1, \"Match a route pattern and extract params\". It passes some of the tests, but it has one real bug, the kind a reviewer should catch before it ships.\n\n**Your task.** Find the bug and fix it, changing as little as you can; the tests are the same as drill 1's. The spec is unchanged: Export `matchRoute(pattern, url)`. It returns an object of params, or `null` when the URL does not match:\n- ignore everything from `?` onwards in `url`\n- a single trailing slash on the path is ignored (a path of users, 42 and a final slash still matches a two-segment pattern), except for the root path\n- the pattern and the path must have the same number of segments\n- a static segment must equal the path segment exactly (case-sensitive)\n- a `:name` segment matches any NON-EMPTY segment and captures it, percent-decoded\n- a segment that fails to decode (a malformed `%` sequence) makes the result `null`, never a thrown error",
+      "starter": "// TODO: one bug hides in this code. Run the tests, find it and fix it.\nconst segments = (p) => p.split('/').slice(1);\n\nexport function matchRoute(pattern, url) {\n  let path = url.split('?')[0];\n  if (path.length > 1 && path.endsWith('/')) path = path.slice(0, -1);\n  const want = segments(pattern);\n  const have = segments(path);\n  if (want.length !== have.length) return null;\n  const params = {};\n  for (let i = 0; i < want.length; i++) {\n    const w = want[i];\n    const h = have[i];\n    if (w.startsWith(':')) {\n      if (h === '') return null;\n      params[w.slice(1)] = decodeURIComponent(h);\n    } else if (w !== h) {\n      return null;\n    }\n  }\n  return params;\n}\n",
+      "solution": "const segments = (p) => p.split('/').slice(1);\n\nexport function matchRoute(pattern, url) {\n  let path = url.split('?')[0];\n  if (path.length > 1 && path.endsWith('/')) path = path.slice(0, -1);\n  const want = segments(pattern);\n  const have = segments(path);\n  if (want.length !== have.length) return null;\n  const params = {};\n  for (let i = 0; i < want.length; i++) {\n    const w = want[i];\n    const h = have[i];\n    if (w.startsWith(':')) {\n      if (h === '') return null;\n      try {\n        params[w.slice(1)] = decodeURIComponent(h);\n      } catch {\n        return null;\n      }\n    } else if (w !== h) {\n      return null;\n    }\n  }\n  return params;\n}\n",
+      "tests": [
+        {
+          "name": "captures named params",
+          "code": "assert.equal(typeof mod.matchRoute, 'function', 'export matchRoute');\nassert.deepEqual(mod.matchRoute('/users/:id/orders/:orderId', '/users/42/orders/7'), { id: '42', orderId: '7' });"
+        },
+        {
+          "name": "query string ignored, params decoded",
+          "code": "assert.deepEqual(mod.matchRoute('/users/:id', '/users/caf%C3%A9?x=1'), { id: 'café' });"
+        },
+        {
+          "name": "a trailing slash is tolerated",
+          "code": "assert.deepEqual(mod.matchRoute('/users/:id', '/users/42/'), { id: '42' });\nassert.deepEqual(mod.matchRoute('/', '/'), {});"
+        },
+        {
+          "name": "wrong segment count, static mismatch or an empty param do not match",
+          "code": "assert.equal(mod.matchRoute('/users/:id', '/users'), null);\nassert.equal(mod.matchRoute('/users/:id', '/users/42/orders'), null);\nassert.equal(mod.matchRoute('/users/:id', '/Users/42'), null);\nassert.equal(mod.matchRoute('/users/:id/orders', '/users//orders'), null);"
+        },
+        {
+          "name": "malformed encoding returns null instead of throwing (boundary)",
+          "code": "assert.equal(mod.matchRoute('/files/:name', '/files/%E0%A4%A'), null);"
+        },
+        {
+          "name": "a static route returns an empty params object",
+          "code": "assert.deepEqual(mod.matchRoute('/health', '/health?verbose=1'), {});"
+        }
+      ],
+      "explanation": "decodeURIComponent throws a URIError on malformed percent-encoding such as %E0%A4%A, and here the error escapes the matcher, so one bad URL turns into a 500. Catch it around the per-segment decode and return null (no match), as the spec asks; decoding per segment after the split is already right.",
+      "hints": [
+        "Match a route against a URL whose id is %E0%A4%A. What comes back?",
+        "decodeURIComponent throws a URIError on a malformed escape, and nothing here catches it.",
+        "Treat a segment that cannot be decoded as no match, so the router answers 404 or 400 instead of crashing."
+      ]
     }
   ]
 }

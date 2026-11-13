@@ -78,6 +78,64 @@
      "static methods"
     ]
    }
+  },
+  {
+   "unit": {
+    "key": "fund-js/06-classes/02-bug-hunt-account-with-private-balance",
+    "track": "js",
+    "kind": "drill",
+    "title": "Bug hunt: an account whose balance cannot be forged",
+    "phase": "06-classes",
+    "difficulty": 2,
+    "competencies": [
+     "language-fluency"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-js",
+       "language": "js",
+       "tests": [
+        {
+         "name": "deposits and withdrawals chain",
+         "code": "assert.equal(typeof mod.Account, 'function', 'export class Account');\nassert.equal(new mod.Account('ana').deposit(500).withdraw(200).balance, 300);"
+        },
+        {
+         "name": "bad amounts throw RangeError",
+         "code": "const a = new mod.Account('ana');\nfor (const bad of [0, -5, 2.5, NaN]) assert.throws(() => a.deposit(bad), RangeError, `deposit(${bad})`);\nassert.throws(() => a.withdraw(0), RangeError);\nassert.equal(a.balance, 0);"
+        },
+        {
+         "name": "overdrawing throws and leaves the balance alone (boundary)",
+         "code": "const a = new mod.Account('ana').deposit(100);\nassert.throws(() => a.withdraw(101), RangeError);\nassert.equal(a.balance, 100);\nassert.equal(a.withdraw(100).balance, 0);"
+        },
+        {
+         "name": "the balance is not an own property",
+         "code": "const a = new mod.Account('ana').deposit(50);\nassert.deepEqual(Object.keys(a), ['owner']);\nassert.equal(Object.getOwnPropertyDescriptor(a, 'balance'), undefined);"
+        },
+        {
+         "name": "toJSON / fromJSON round-trip",
+         "code": "const a = new mod.Account('bo').deposit(750);\nconst json = JSON.parse(JSON.stringify(a));\nassert.deepEqual(json, { owner: 'bo', balance: 750 });\nconst b = mod.Account.fromJSON(json);\nassert.ok(b instanceof mod.Account);\nassert.equal(b.balance, 750);\nassert.equal(b.owner, 'bo');"
+        }
+       ],
+       "timeoutMs": 8000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "06-classes/02-bug-hunt-account-with-private-balance",
+    "type": "code",
+    "module": "06-classes",
+    "lesson": "drills",
+    "position": 1,
+    "skills": [
+     "debugging",
+     "private fields",
+     "getters",
+     "static methods"
+    ]
+   }
   }
  ],
  "content": {
@@ -90,6 +148,17 @@
     "A public field would let any caller write the balance; JavaScript has a language-level private field syntax for this.",
     "Store the balance in a language-level private field, validate every amount as a positive whole number before changing it, expose it through a read-only accessor, and write the JSON shape out and back in yourself.",
     "Keep the money in a private field, check every amount, and the available funds for a withdrawal, before touching it, expose it only through a getter, and spell out the JSON shape yourself in both directions."
+   ]
+  },
+  "fund-js/06-classes/02-bug-hunt-account-with-private-balance": {
+   "instructions": "**Skills:** debugging · private fields · getters · static methods  \n**Level:** ★★☆\n\n**Bug hunt.** The code in the editor is a plausible first attempt at drill 1, \"An account whose balance cannot be forged\". It passes some of the tests, but it has one real bug, the kind a reviewer should catch before it ships.\n\n**Your task.** Find the bug and fix it, changing as little as you can; the tests are the same as drill 1's. The spec is unchanged: Export `class Account`:\n- `new Account(owner)` starts with balance 0\n- `deposit(cents)` and `withdraw(cents)` change the balance and return the account (for chaining); both throw a `RangeError` unless `cents` is a positive whole number, and `withdraw` also throws a `RangeError` when the balance would go below zero (leaving the balance unchanged)\n- a read-only `balance` getter\n- `toJSON()` returns `{ owner, balance }`\n- `static fromJSON(data)` builds an account with that owner and balance\n\nThe balance must not be an own property of the instance (`Object.keys` shows only `owner`).\n",
+   "starter": "// TODO: one bug hides in this code. Run the tests, find it and fix it.\nconst amountOk = (c) => Number.isInteger(c) && c > 0;\n\nexport class Account {\n  constructor(owner) {\n    this.owner = owner;\n    this.balance = 0;\n  }\n\n  deposit(cents) {\n    if (!amountOk(cents)) throw new RangeError('deposit must be a positive whole number of cents');\n    this.balance += cents;\n    return this;\n  }\n\n  withdraw(cents) {\n    if (!amountOk(cents)) throw new RangeError('withdrawal must be a positive whole number of cents');\n    if (cents > this.balance) throw new RangeError('insufficient funds');\n    this.balance -= cents;\n    return this;\n  }\n\n  toJSON() {\n    return { owner: this.owner, balance: this.balance };\n  }\n\n  static fromJSON(data) {\n    const a = new Account(data.owner);\n    if (data.balance > 0) a.deposit(data.balance);\n    return a;\n  }\n}\n",
+   "solution": "const amountOk = (c) => Number.isInteger(c) && c > 0;\n\nexport class Account {\n  #balance = 0;\n\n  constructor(owner) {\n    this.owner = owner;\n  }\n\n  deposit(cents) {\n    if (!amountOk(cents)) throw new RangeError('deposit must be a positive whole number of cents');\n    this.#balance += cents;\n    return this;\n  }\n\n  withdraw(cents) {\n    if (!amountOk(cents)) throw new RangeError('withdrawal must be a positive whole number of cents');\n    if (cents > this.#balance) throw new RangeError('insufficient funds');\n    this.#balance -= cents;\n    return this;\n  }\n\n  get balance() {\n    return this.#balance;\n  }\n\n  toJSON() {\n    return { owner: this.owner, balance: this.#balance };\n  }\n\n  static fromJSON(data) {\n    const a = new Account(data.owner);\n    if (data.balance > 0) a.deposit(data.balance);\n    return a;\n  }\n}\n",
+   "explanation": "`this.balance` is a public own property, so any caller can write `acct.balance = 1e9` and skip every check in `deposit` and `withdraw`; the test that the balance is not an own property catches it. Store it in `#balance` and add `get balance()`, so the only way to change it is through the validating methods.",
+   "hints": [
+    "Try account.balance = 1000000 from outside the class. What stops it?",
+    "A public field can be written by anyone, so the validation in deposit and withdraw is optional.",
+    "Keep the balance in a private field and expose it only through a getter."
    ]
   }
  }

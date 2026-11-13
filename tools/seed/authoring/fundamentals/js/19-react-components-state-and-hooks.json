@@ -192,6 +192,47 @@
         "Create new arrays and objects along the changed path instead of modifying any, and detect up front whether the action changes anything at all, so every no-op hands back the original state.",
         "Handle each action type separately, build fresh copies only along the path that really changes, keep untouched lines as they are, and give back the original state whenever the action would not change anything."
       ]
+    },
+    {
+      "slug": "02-bug-hunt-cart-reducer",
+      "title": "Bug hunt: a pure cart reducer for useReducer",
+      "difficulty": 2,
+      "skills": [
+        "debugging",
+        "immutable updates",
+        "reducers"
+      ],
+      "instructions": "**Bug hunt.** The code in the editor is a plausible first attempt at drill 1, \"A pure cart reducer for useReducer\". It passes some of the tests, but it has one real bug, the kind a reviewer should catch before it ships.\n\n**Your task.** Find the bug and fix it, changing as little as you can; the tests are the same as drill 1's. The spec is unchanged: Export `cartReducer(state, action)`. State is `{ items: [{ sku, qty }] }`. Actions:\n- `{ type: 'add', sku }`: increase that sku's qty by 1, or append `{ sku, qty: 1 }` at the end\n- `{ type: 'remove', sku }`: remove that sku's line\n- `{ type: 'setQty', sku, qty }`: set the qty; a qty of 0 or less removes the line\n- `{ type: 'clear' }`: empty the items\n\nRules:\n- never modify `state` or any object inside it\n- when an action changes nothing (removing or setting an unknown sku, clearing an empty cart, setting the same qty, an unknown action type), return the SAME `state` object\n- line order is kept",
+      "starter": "// TODO: one bug hides in this code. Run the tests, find it and fix it.\nexport function cartReducer(state, action) {\n  const has = state.items.some((i) => i.sku === action.sku);\n  switch (action.type) {\n    case 'add':\n      if (has) {\n        state.items.find((i) => i.sku === action.sku).qty += 1;\n        return { ...state };\n      }\n      return has\n        ? state\n        : { ...state, items: [...state.items, { sku: action.sku, qty: 1 }] };\n    case 'remove':\n      return has ? { ...state, items: state.items.filter((i) => i.sku !== action.sku) } : state;\n    case 'setQty': {\n      if (!has) return state;\n      if (action.qty <= 0) return { ...state, items: state.items.filter((i) => i.sku !== action.sku) };\n      const line = state.items.find((i) => i.sku === action.sku);\n      if (line.qty === action.qty) return state;\n      return { ...state, items: state.items.map((i) => (i.sku === action.sku ? { ...i, qty: action.qty } : i)) };\n    }\n    case 'clear':\n      return state.items.length === 0 ? state : { ...state, items: [] };\n    default:\n      return state;\n  }\n}\n",
+      "solution": "export function cartReducer(state, action) {\n  const has = state.items.some((i) => i.sku === action.sku);\n  switch (action.type) {\n    case 'add':\n      return has\n        ? { ...state, items: state.items.map((i) => (i.sku === action.sku ? { ...i, qty: i.qty + 1 } : i)) }\n        : { ...state, items: [...state.items, { sku: action.sku, qty: 1 }] };\n    case 'remove':\n      return has ? { ...state, items: state.items.filter((i) => i.sku !== action.sku) } : state;\n    case 'setQty': {\n      if (!has) return state;\n      if (action.qty <= 0) return { ...state, items: state.items.filter((i) => i.sku !== action.sku) };\n      const line = state.items.find((i) => i.sku === action.sku);\n      if (line.qty === action.qty) return state;\n      return { ...state, items: state.items.map((i) => (i.sku === action.sku ? { ...i, qty: action.qty } : i)) };\n    }\n    case 'clear':\n      return state.items.length === 0 ? state : { ...state, items: [] };\n    default:\n      return state;\n  }\n}\n",
+      "tests": [
+        {
+          "name": "add increments or appends, without mutating",
+          "code": "assert.equal(typeof mod.cartReducer, 'function', 'export cartReducer');\nconst deepFreeze = (o) => { Object.values(o).forEach((v) => typeof v === 'object' && v && deepFreeze(v)); return Object.freeze(o); };\nconst s0 = deepFreeze({ items: [{ sku: 'pen', qty: 1 }] });\nconst s1 = mod.cartReducer(s0, { type: 'add', sku: 'pen' });\nassert.deepEqual(s1, { items: [{ sku: 'pen', qty: 2 }] });\nconst s2 = mod.cartReducer(s1, { type: 'add', sku: 'ink' });\nassert.deepEqual(s2, { items: [{ sku: 'pen', qty: 2 }, { sku: 'ink', qty: 1 }] });\nassert.deepEqual(s0, { items: [{ sku: 'pen', qty: 1 }] });"
+        },
+        {
+          "name": "remove and setQty",
+          "code": "const deepFreeze = (o) => { Object.values(o).forEach((v) => typeof v === 'object' && v && deepFreeze(v)); return Object.freeze(o); };\nconst s = deepFreeze({ items: [{ sku: 'pen', qty: 2 }, { sku: 'ink', qty: 1 }] });\nassert.deepEqual(mod.cartReducer(s, { type: 'remove', sku: 'pen' }), { items: [{ sku: 'ink', qty: 1 }] });\nassert.deepEqual(mod.cartReducer(s, { type: 'setQty', sku: 'ink', qty: 5 }), { items: [{ sku: 'pen', qty: 2 }, { sku: 'ink', qty: 5 }] });\nassert.deepEqual(mod.cartReducer(s, { type: 'setQty', sku: 'pen', qty: 0 }), { items: [{ sku: 'ink', qty: 1 }] });"
+        },
+        {
+          "name": "no-op actions return the same state object",
+          "code": "const s = Object.freeze({ items: Object.freeze([Object.freeze({ sku: 'pen', qty: 2 })]) });\nassert.equal(mod.cartReducer(s, { type: 'remove', sku: 'nope' }), s);\nassert.equal(mod.cartReducer(s, { type: 'setQty', sku: 'nope', qty: 3 }), s);\nassert.equal(mod.cartReducer(s, { type: 'setQty', sku: 'pen', qty: 2 }), s);\nassert.equal(mod.cartReducer(s, { type: 'unknown' }), s);"
+        },
+        {
+          "name": "clear empties, and clearing an empty cart is a no-op (boundary)",
+          "code": "const s = Object.freeze({ items: Object.freeze([Object.freeze({ sku: 'pen', qty: 2 })]) });\nconst cleared = mod.cartReducer(s, { type: 'clear' });\nassert.deepEqual(cleared, { items: [] });\nassert.equal(mod.cartReducer(cleared, { type: 'clear' }), cleared);"
+        },
+        {
+          "name": "unchanged lines keep their identity",
+          "code": "const pen = Object.freeze({ sku: 'pen', qty: 2 });\nconst s = Object.freeze({ items: Object.freeze([pen, Object.freeze({ sku: 'ink', qty: 1 })]) });\nconst next = mod.cartReducer(s, { type: 'add', sku: 'ink' });\nassert.equal(next.items[0], pen);"
+        }
+      ],
+      "explanation": "Adding an existing SKU increments `qty` on the line object that the previous state also holds, so the old state changes too (and frozen state throws). React compares by identity: copy the path that changes (`state`, `items`, that one line) and leave every other line object as it was.",
+      "hints": [
+        "Add a SKU that is already in the cart, with the state frozen as the tests freeze it.",
+        "The add branch changes the existing line object in place before copying the state.",
+        "Return new objects along the changed path, and give the changed line a new object with the new quantity."
+      ]
     }
   ]
 }
