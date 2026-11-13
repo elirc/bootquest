@@ -35,7 +35,7 @@ export class ImportError extends Error {
  * bump this, re-import, re-validate the fund-<track> pack.
  */
 export const FUNDAMENTALS_EXPECTED: Readonly<Record<FundTrack, FundCounts>> = {
-  js: { topics: 33, quiz: 304, flashcards: 238, drills: 62 },
+  js: { topics: 33, quiz: 330, flashcards: 238, drills: 62 },
   csharp: { topics: 20, quiz: 200, flashcards: 160, drills: 27 },
   java: { topics: 20, quiz: 200, flashcards: 160, drills: 27 },
 };
