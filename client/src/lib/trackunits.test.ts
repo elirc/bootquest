@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { UnitKind, UnitSummary } from '../api/types';
-import { NO_FILTER, SECTION_LABEL, groupLabelOf, groupTotals, groupUnits, moduleNumberOf, sectionCounts, sectionOf, tierGroups, tierLabels, type UnitFilter } from './trackunits';
+import { NO_FILTER, SECTION_LABEL, groupLabelOf, groupTotals, groupUnits, moduleNumberOf, pathLabeler, pathOrder, sectionCounts, sectionOf, tierGroups, tierLabels, withoutArchived, type UnitFilter } from './trackunits';
 
 let nextId = 9000;
 function unit(over: Partial<UnitSummary> = {}): UnitSummary {
@@ -256,7 +256,26 @@ describe('f52 U14: core drill modules vs repo practice', () => {
   });
 
   it('tier headings per track', () => {
-    expect(tierLabels('sysdesign')).toEqual({ core: 'Core drills', repo: 'Design a real system' });
-    expect(tierLabels('agentic')).toEqual({ core: 'Core drills', repo: 'Real-repo practice' });
+    expect(tierLabels('sysdesign')).toEqual({ path: 'Path', core: 'Core drills', repo: 'Design a real system' });
+    expect(tierLabels('agentic')).toEqual({ path: 'Path', core: 'Core drills', repo: 'Real-repo practice' });
+  });
+});
+
+describe('rv wave C: paths and the archive (GET /routing)', () => {
+  const u = (id: number, key: string): UnitSummary => ({ id, key, trackId: 'sysdesign', kind: 'drill', title: key, difficulty: 1, state: 'available', revealed: false, prerequisites: [] });
+  it('units on a path group under numbered step labels, listed first in path order; archived units hide unless shown', () => {
+    const units = [u(1, 'sysdrills/01-estimation/a'), u(2, 'ladder/explain-back/r/x'), u(3, 'sysdrills/02-caching/b')];
+    const steps = [{ id: '02', title: '02 caching', unitIds: [3, 2] }];
+    // the browser sorts by path order first (TrackUnits UnitBrowser), then groups
+    const ordered = [...units].sort((a, b) => pathOrder(steps)(a) - pathOrder(steps)(b));
+    const groups = groupUnits(ordered, NO_FILTER, pathLabeler(steps));
+    expect(tierGroups(groups).map((s) => [s.tier, s.groups.map((g) => g.label)])).toEqual([
+      ['path', ['Path 01 · 02 caching']],
+      ['core', ['estimation']],
+    ]);
+    expect(groups.find((g) => g.label.startsWith('Path'))!.units.map((x) => x.id)).toEqual([3, 2]);
+    expect(ordered.map((x) => x.id)).toEqual([3, 2, 1]);
+    expect(withoutArchived(units, new Set([2]), false).map((x) => x.id)).toEqual([1, 3]);
+    expect(withoutArchived(units, new Set([2]), true)).toHaveLength(3);
   });
 });

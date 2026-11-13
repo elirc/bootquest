@@ -380,7 +380,7 @@ describe('evidence deep link', () => {
     proto.scrollIntoView = scroll;
     try {
       renderApp('/stats?competency=language-fluency#evidence-412');
-      const list = await screen.findByTestId('evidence-list');
+      const list = await screen.findByTestId('evidence-list', {}, { timeout: 15_000 });
       const row = within(list).getAllByRole('listitem').find((li) => li.id === 'evidence-412')!;
       await waitFor(() => expect(scroll).toHaveBeenCalled());
       expect(scroll.mock.contexts[0]).toBe(row);

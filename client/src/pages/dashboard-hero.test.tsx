@@ -332,8 +332,8 @@ describe('layout widths (f52 U19 + U20)', () => {
 });
 
 describe('copy (f52 U18): short text, the full rule in a tooltip', () => {
-  it('Competencies says "rated 1–5"; the promotion rule is its tooltip', async () => {
-    renderApp('/');
+  it('Competencies says "rated 1–5"; the promotion rule is its tooltip (on Stats since rv wave C)', async () => {
+    renderApp('/stats');
     const rule = await screen.findByTestId('comp-rule', {}, { timeout: 15_000 });
     expect(rule).toHaveTextContent(/^rated 1–5$/);
     expect(rule).toHaveAttribute('title', expect.stringContaining('an explain-back with at least 80% coverage, and a retest at least 2 days later'));

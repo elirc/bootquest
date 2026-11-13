@@ -29,6 +29,7 @@ import { insertCheck, insertUnit } from '../../src/store/content.ts';
 import { loadSeedDerivedContent } from '../../src/api/serve.ts';
 import { defaultFixtureTracks, quest, writeCampaignFixture, type FixtureTracks } from '../campaign-fixture.ts';
 import { localNoon, makeTempDb, type TempDb } from '../helpers.ts';
+import { preRvLearner } from '../slate-fixtures.ts';
 
 const REPO = resolve(import.meta.dirname, '..', '..', '..');
 const QUESTS = join(REPO, 'content', 'seed', 'quests');
@@ -389,6 +390,7 @@ describe('gradeStudyQuiz: >= 80% in integer math', () => {
 
 describe('study-quest API flow (real packs)', { timeout: 60_000 }, () => {
   const ctx = useStudyApi();
+  beforeEach(() => preRvLearner(ctx.tmp.db)); // rv wave C: the campaign step is off by default; this suite pins it on
 
   it('unit detail: reading steps with repo links + questions with choices; never keys or explanations', async () => {
     const res = await request(ctx.app).get(`/api/units/${unitOf(ctx, 'grok-js')}`);
