@@ -397,14 +397,13 @@ describe('the Fundamentals gate result', () => {
     expect(explanations()).toHaveLength(0);
     expect(document.querySelector('.choice-right')).toBeNull();
     expect(document.body.textContent).not.toContain('Every non-empty string is truthy');
-    expect(screen.getByTestId('miss-cards-notice')).toHaveTextContent('The answers to the 2 missed questions are not shown here');
-    // ...and names the lesson sections of the missed questions (Q1, Q2) from the gate map
-    expect(screen.getByTestId('reread')).toHaveTextContent('Re-read: typeof surprises · The seven primitives');
-    expect(screen.getByTestId('fail-advice')).toHaveTextContent('A failed try costs nothing and is saved.');
-    // question order is untouched
-    expect([...document.querySelectorAll('fieldset[data-testid^="question-"]')].map((f) => f.getAttribute('data-testid'))).toEqual(
-      [1, 2, 3, 4, 5].map((n) => `question-${n}`),
-    );
+    expect(screen.getByTestId('miss-cards-notice')).toHaveTextContent('2 questions missed. Which ones is not shown');
+    // ...and names the lesson sections of the missed questions (Q1, Q2): rv B, computed by the server (gate-status)
+    expect(await screen.findByTestId('reread')).toHaveTextContent('Re-read: typeof surprises · The seven primitives');
+    expect(screen.getByTestId('fail-advice')).toHaveTextContent('A failed try is saved and costs no XP.');
+    // rv B (R4-02): the question list (and the learner's picks) leave the screen after a failed graded try
+    expect(document.querySelectorAll('fieldset[data-testid^="question-"]')).toHaveLength(0);
+    expect(screen.queryByRole('radio')).toBeNull();
   });
 
   it('a campaign study quest shows its released explanations under their questions after a pass (same path), in question order', async () => {

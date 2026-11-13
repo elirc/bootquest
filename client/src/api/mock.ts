@@ -95,6 +95,9 @@ import {
   NO_LESSON_AIDS,
   type HintsResponse,
   type HintTakenResponse,
+  type GateStatusResponse,
+  type PracticeResponse,
+  type UnitSourceResponse,
 } from './types';
 import type { XpByTrack } from '@bootquest/shared/api';
 import { G1_MIN_DEFECTS, G1_TARGET_RATE, PROMOTION_MIN_COVERAGE } from '@bootquest/shared/thresholds';
@@ -292,6 +295,41 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
   const soloPassedUnits = new Set<number>();
   const graded = new Set<number>();
   const awarded = new Set<number>();
+  // rv B (as the server: api/practice-service.ts): graded try times per unit (try numbers + the quiz-gate retry
+  // budget), practice times per unit (the 2-day practice lock), quick checks whose first graded try failed, and
+  // the latest graded study-quiz try (what gate-status re-reads)
+  const gradedTries = new Map<number, number[]>();
+  const practiceTimes = new Map<number, number[]>();
+  const firstTryMissed = new Set<number>();
+  const lastStudyTry = new Map<number, { passed: boolean; reread: string[] }>();
+  const GATE_BUDGET = 2;
+  const PRACTICE_LOCK = 2 * DAY_MS;
+  function gradedGate(unitId: number, type: string | undefined): { opensAt: number | null; reason: 'budget' | 'practice' | null; triesInWindow: number; budget: number | null } {
+    let opensAt: number | null = null;
+    let reason: 'budget' | 'practice' | null = null;
+    const p = practiceTimes.get(unitId) ?? [];
+    const lastP = p.length ? p[p.length - 1]! : null;
+    if (lastP !== null && lastP + PRACTICE_LOCK > NOW) {
+      opensAt = lastP + PRACTICE_LOCK;
+      reason = 'practice';
+    }
+    if (type !== 'study-quiz') return { opensAt, reason, triesInWindow: 0, budget: null };
+    const recent = (gradedTries.get(unitId) ?? []).filter((t) => t > NOW - DAY_MS);
+    if (recent.length >= GATE_BUDGET) {
+      const at = recent[recent.length - GATE_BUDGET]! + DAY_MS;
+      if (opensAt === null || at > opensAt) {
+        opensAt = at;
+        reason = 'budget';
+      }
+    }
+    return { opensAt, reason, triesInWindow: recent.length, budget: GATE_BUDGET };
+  }
+  function assertGradedOpen(unitId: number, type: string | undefined): void {
+    const g = gradedGate(unitId, type);
+    if (g.opensAt === null) return;
+    if (g.reason === 'practice') throw err(409, 'NOT_DUE', `you practised unit ${unitId} recently: its graded try opens at ${new Date(g.opensAt).toISOString()}`);
+    throw err(409, 'NOT_DUE', `unit ${unitId}: 2 graded tries per 24 hours. Your next graded try opens at ${new Date(g.opensAt).toISOString()}`);
+  }
   // f52 S hints: unitId -> hints taken (count); units with a failed graded submit
   const hintsTaken = new Map<number, number>();
   const failedUnits = new Set<number>();
@@ -661,10 +699,18 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
       }
     }
     const missed = items.map((x, n) => (x.correct ? null : n + 1)).filter((n): n is number => n !== null);
+    // rv B: a retake once a key was released (here: after a pass) is prior-key, so assisted
+    const priorKey = studyPassed.has(u.id);
+    const mode = body.selfAssisted || priorKey ? ('assisted' as const) : ('solo' as const);
     const firstPass = passed && !studyPassed.has(u.id);
+    // rv B (as the server): the lesson headings (Fundamentals gate map) of the missed questions, once each
+    const gateMap = fundLessonAidFixtures[String(u.id)]?.gate ?? {};
+    const reread = passed ? [] : [...new Set(missed.flatMap((n) => (gateMap[String(n)] ? [gateMap[String(n)]!] : [])))];
+    lastStudyTry.set(u.id, { passed, reread });
     let xp: SubmitResponse['xp'] = null;
     if (passed) {
-      xp = firstPass ? { id: nextId++, amount: 50, reason: null } : { id: nextId++, amount: 0, reason: 'already-awarded' };
+      // rv B (R4-08): an assisted first pass pays half
+      xp = firstPass ? { id: nextId++, amount: mode === 'assisted' ? 25 : 50, reason: null } : { id: nextId++, amount: 0, reason: 'already-awarded' };
       studyPassed.add(u.id);
       u.state = 'done';
       // the server's lock rule (lockStateFor): a locked unit opens once every prerequisite is done (fund wave ladder)
@@ -672,14 +718,14 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
       const done = new Set(track.filter((x) => x.state === 'done').map((x) => x.id));
       for (const x of track) if (x.state === 'locked' && x.prerequisites.length > 0 && x.prerequisites.every((p) => done.has(p))) x.state = 'available';
     }
-    const mode = body.selfAssisted ? ('assisted' as const) : ('solo' as const);
     const attemptId = nextId++;
     studyAnswered.add(u.id);
     recordGraded(u, 'study-quiz', attemptId, mode, passed);
     return {
       result: passed
         ? { pass: true, output: `${correct}/${items.length} correct`, failures: [], durationMs: 0 }
-        : { pass: false, output: `${correct}/${items.length} correct`, failures: missed.map((n) => ({ name: `Q${n}`, message: 'incorrect' })), durationMs: 0 },
+        : // rv B (R4-01): a failed gate names no question
+          { pass: false, output: `${correct}/${items.length} correct${reread.length ? `; re-read: ${reread.join(' · ')}` : ''}`, failures: [{ name: 'quiz gate', message: 'below the pass mark: no question is marked until you pass' }], durationMs: 0 },
       verdict: passed ? 'pass' : 'fail',
       attempt: { id: attemptId, mode, outcome: passed ? 'pass' : 'fail' },
       runId: nextId++,
@@ -691,7 +737,7 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
         score: correct / items.length,
         passPct: 80,
         passed,
-        items,
+        items: passed ? items : [],
         reviewCards: { created, alreadyQueued, dueAt: missed.length ? NOW + DAY_MS : null },
         flashcardsEnrolled: firstPass ? sq.public.flashcards : 0,
       },
@@ -906,6 +952,7 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
         const body = validateSubmission(submission);
         // like the server: the attempt row keeps the learner's own submission, served back by GET /attempts/:id
         const keep = (r: SubmitResponse): SubmitResponse => {
+          gradedTries.set(u.id, [...(gradedTries.get(u.id) ?? []), NOW]);
           attempts.set(r.attempt.id, {
             id: r.attempt.id,
             unitId: u.id,
@@ -920,6 +967,8 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
           });
           return r;
         };
+        // rv B: the practice lock and the quiz-gate retry budget come first; a refusal records nothing
+        assertGradedOpen(u.id, spec!.type);
         if (spec!.type === 'study-quiz') return keep(studySubmit(u, body));
         if (body.answers !== undefined) throw err(400, 'VALIDATION', '`answers` is for study-quiz units');
         const result = grade(d, spec!, body);
@@ -929,6 +978,8 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
         if (result.pass) {
           if (wasRevealed) xp = { id: nextId++, amount: 0, reason: 'revealed' };
           else if (awarded.has(id)) xp = { id: nextId++, amount: 0, reason: 'already-awarded' };
+          // rv B (R4-09): a quick check / predict-output passed after a failed first try pays 0 XP (no zero reason)
+          else if (firstTryMissed.has(id)) xp = { id: nextId++, amount: 0, reason: null };
           else {
             // f52 S: each hint taken before the pass cuts its XP by 25% (floor 50%), like server/src/engines/xp.ts
             xp = { id: nextId++, amount: Math.floor((xpFor(u, spec!) * hintXpPct(hintsTaken.get(id) ?? 0)) / 100), reason: null };
@@ -937,7 +988,10 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
           u.state = 'done';
           passedUnits.add(id);
           if (mode === 'solo') soloPassedUnits.add(id);
-        } else failedUnits.add(id);
+        } else {
+          if (!failedUnits.has(id) && !passedUnits.has(id) && (spec!.type === 'quiz' || spec!.type === 'predict-output') && (gradedTries.get(id)?.length ?? 0) === 0) firstTryMissed.add(id);
+          failedUnits.add(id);
+        }
         const attemptId = nextId++;
         recordGraded(u, spec!.type, attemptId, mode, result.pass);
         return keep({
@@ -1434,10 +1488,11 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
           let withheld = 0;
           let nextAt: number | null = null;
           for (const n of after) {
-            if (answered && (studyPassed.has(id) || !studyMissCards.has(n.target))) released.push(dto(n));
+            // rv B (R4-01): as the server, a right answer on a gate not passed yet stays withheld until the pass
+            if (answered && studyPassed.has(id)) released.push(dto(n));
             else {
               withheld++;
-              if (answered) nextAt = NOW + DAY_MS; // a missed question's card is due tomorrow
+              if (answered && studyMissCards.has(n.target)) nextAt = NOW + DAY_MS; // a missed question's card is due tomorrow
             }
           }
           const state = after.length === 0 ? 'none' : withheld === 0 ? 'released' : released.length === 0 ? 'locked' : 'partial';
@@ -1536,6 +1591,67 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
     // stays inside its 2-day gap).
     getWeakSpots: () => wrap((): WeakSpotsResponse => ({ today: fx.dashboard.today, totalGroups: 0, groups: [] })),
     getDue: () => wrap((): DueResponse => ({ retests: [], altSets: [], nextAltSetAt: null })),
+
+    // ---- rv B: practice vs evidence, mirrors server/src/api/practice-service.ts (the mock clock is fixed)
+    getGateStatus: (id) =>
+      wrap((): GateStatusResponse | null => {
+        const u = findUnit(id);
+        if (!u) return null;
+        const spec = detail(u).check?.spec;
+        const tries = gradedTries.get(id)?.length ?? 0;
+        const g = gradedGate(id, spec?.type);
+        const last = lastStudyTry.get(id);
+        const passed = passedUnits.has(id) || studyPassed.has(id);
+        return {
+          unitId: id,
+          practiceable: spec?.type === 'study-quiz' || spec?.type === 'quiz',
+          tries,
+          triesInWindow: g.triesInWindow,
+          budget: g.budget,
+          opensAt: g.opensAt,
+          reason: g.reason,
+          lastPracticeAt: practiceTimes.get(id)?.at(-1) ?? null,
+          passed,
+          lastTry: tries === 0 ? null : spec?.type === 'study-quiz' && last ? { number: tries, passed: last.passed, reread: last.reread } : { number: tries, passed, reread: [] },
+        };
+      }),
+    practiceUnit: (id, body) =>
+      wrap((): PracticeResponse => {
+        const { u, d, spec } = guard(id, { needCheck: true });
+        const b = (body ?? {}) as { answers?: number[]; answer?: number | string };
+        let items: PracticeResponse['items'];
+        let passPct = 100;
+        if (spec!.type === 'study-quiz') {
+          const sq = allStudyFixtures[String(u.id)]!;
+          if (!Array.isArray(b.answers) || b.answers.length !== sq.keys.length) throw err(400, 'VALIDATION', `send exactly ${sq.keys.length} answers`);
+          items = sq.public.questions.map((q, i) => ({
+            itemKey: q.itemKey,
+            correct: b.answers![i] === sq.keys[i],
+            answer: q.choices[sq.keys[i]!] ?? null,
+            explanation: fundExplanationFixtures[q.itemKey] ?? null,
+          }));
+          passPct = 80;
+        } else if (spec!.type === 'quiz') {
+          if (b.answer === undefined) throw err(400, 'VALIDATION', 'a quick check is practised with `answer`');
+          const result = grade(d, spec!, { answer: b.answer });
+          const key = d.private.answerKey;
+          const choice = spec!.choices && typeof key === 'number' ? (spec!.choices[key] ?? String(key)) : key === undefined ? null : String(key);
+          items = [{ itemKey: null, correct: result.pass, answer: choice, explanation: d.private.explanation ?? null }];
+        } else throw err(409, 'WRONG_UNIT_KIND', `unit ${id} has no practice mode (quiz gates and quick checks only)`);
+        practiceTimes.set(id, [...(practiceTimes.get(id) ?? []), NOW]);
+        const correct = items.filter((i) => i.correct).length;
+        return { unitId: id, correct, total: items.length, score: correct / items.length, passPct, wouldPass: correct * 100 >= passPct * items.length, items, gradedOpensAt: NOW + PRACTICE_LOCK };
+      }),
+    getUnitSource: (id) =>
+      wrap((): UnitSourceResponse | null => {
+        const u = findUnit(id);
+        const spec = u ? detail(u).check?.spec : undefined;
+        if (!u || (spec?.type !== 'explain-back' && spec?.type !== 'patch-kata')) return null;
+        const repo = 'mock-repo';
+        const sha = '0123456789abcdef0123456789abcdef01234567';
+        const g2 = spec.type === 'explain-back' && (explainBackFixtures[String(id)]?.questions[0]?.prompt ?? '').startsWith('G2 BRIEF');
+        return { unitId: id, repo, sha, url: `https://github.com/elirc/${repo}/tree/${sha}`, openBook: g2 };
+      }),
   };
 }
 
@@ -1544,7 +1660,7 @@ function notesMessage(state: UnitNotesResponse['explanations']['state'], unanswe
   if (state === 'none') return 'No written explanations for this quest yet.';
   if (state === 'released') return 'Explanations for every question.';
   if (unanswered) return 'Explanations unlock after you answer: submit the quiz first.';
-  return `Explanations for the questions you missed unlock when their review cards are due${state === 'partial' ? '; the ones you answered right are below' : ''}.`;
+  return `Explanations unlock when you pass the quiz gate; a missed question's also unlocks when its review card is due${state === 'partial' ? ' (those are below)' : ''}.`;
 }
 
 const ghLink = (repo: string, sha: string, path: string, a: number | null, b: number | null): string =>

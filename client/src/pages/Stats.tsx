@@ -569,6 +569,8 @@ function EvidenceItem({ e, hit }: { e: EvidenceRowDto; hit: boolean }) {
         <span>{e.competency}</span>
         <Chip tone={e.assessor === 'pipeline' ? 'info' : 'neutral'}>{e.assessor}</Chip>
         {e.assistance !== 'none' && <Chip tone="warning">assisted ({e.assistance})</Chip>}
+        {/* rv B (R4-21): a hinted pass is stored assistance 'none'; the server says it was hinted (api-ext) */}
+        {(e as { hinted?: boolean }).hinted === true && <Chip tone="warning">hinted</Chip>}
         {e.verified && <Chip tone="success">verified</Chip>}
         {value && <span className="muted">{value}</span>}
         <span className="muted small">{fmtStamp(e.createdAt)}</span>

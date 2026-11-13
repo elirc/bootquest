@@ -13,7 +13,7 @@ async function answerAll(user: ReturnType<typeof renderApp>['user'], picks: numb
 }
 
 describe('W8 study-quest pane', () => {
-  it('serves the reading list with repo links, then the quiz gate all at once; a miss shows right/wrong only and becomes a review card', async () => {
+  it('serves the reading list with repo links, then the quiz gate all at once; a failed try shows the score only (rv B: no marks) and misses become review cards', async () => {
     const { user } = renderApp(`/play/${SQ}`);
     const list = await screen.findByTestId('reading-list');
     const links = within(list).getAllByRole('link');
@@ -33,8 +33,10 @@ describe('W8 study-quest pane', () => {
     const result = await screen.findByTestId('study-result');
     expect(result).toHaveTextContent('Below the pass mark');
     expect(result).toHaveTextContent('3/5 correct (60%) · pass mark 80%');
-    expect(screen.getByTestId('mark-1')).toHaveTextContent('correct');
-    expect(screen.getByTestId('mark-4')).toHaveTextContent('incorrect');
+    // rv B (R4-02): no question list, no picks and no marks after a failed graded try
+    expect(screen.queryByTestId('mark-1')).toBeNull();
+    expect(screen.queryByRole('radio')).toBeNull();
+    expect(screen.getByTestId('study-try')).toHaveTextContent('try 1');
     expect(screen.getByTestId('miss-cards-notice')).toHaveTextContent('each one is now a review card');
     expect(screen.getByTestId('miss-cards-notice')).toHaveTextContent('arrives in your review queue tomorrow');
     // the keyed choice of a missed question is never marked or named

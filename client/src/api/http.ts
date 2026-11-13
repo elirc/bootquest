@@ -42,6 +42,9 @@ import {
   type UnitSearchResponse,
   type HintsResponse,
   type HintTakenResponse,
+  type GateStatusResponse,
+  type PracticeResponse,
+  type UnitSourceResponse,
   type LessonAids,
   NO_LESSON_AIDS,
 } from './types';
@@ -178,5 +181,9 @@ export function createHttpApi(baseUrl = '/api', fetchImpl: typeof fetch = (...a)
         }),
         (): LessonAids => NO_LESSON_AIDS,
       ),
+    // rv B: practice vs evidence + the pinned source (the two reads never reject: an older server is null)
+    getGateStatus: (id) => call<GateStatusResponse>(`${unit(id)}/gate-status`).catch(() => null),
+    practiceUnit: (id, body) => post<PracticeResponse>(`${unit(id)}/practice`, body),
+    getUnitSource: (id) => call<UnitSourceResponse>(`${unit(id)}/source`).catch(() => null),
   };
 }

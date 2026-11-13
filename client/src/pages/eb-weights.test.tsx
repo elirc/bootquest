@@ -68,19 +68,22 @@ describe('ebTally / ebMeetsGate (client mirror of the server predicate)', () => 
     expect(ebMeetsGate(t, 80)).toBe(true);
     expect(ebMeetsGate(t, 90)).toBe(false);
   });
-  it('weighted: a missed [w3] fails even above the mark; a mixed set is legacy', () => {
+  it('weighted (rv B, D4): one missed [w3] is allowed, a second fails even above the mark; a mixed set is legacy', () => {
     const set = kps(['[w3] a', ...Array.from({ length: 11 }, (_, i) => `[w3] k${i}`)]);
     const marks = Object.fromEntries(set.map((k) => [k.id, k.id === 'q1k1' ? 'missed' : 'covered'])) as Record<string, 'covered' | 'missed'>;
     const t = ebTally(set, marks);
     expect(t.coverage).toBeCloseTo(11 / 12); // 92%
     expect(t.w3Missed).toEqual(['q1k1']);
-    expect(ebMeetsGate(t, 80)).toBe(false);
+    expect(ebMeetsGate(t, 80)).toBe(true);
+    const two = ebTally(set, { ...marks, q1k2: 'missed' });
+    expect(two.coverage).toBeCloseTo(10 / 12); // 83%
+    expect(ebMeetsGate(two, 80)).toBe(false);
     expect(ebTally(kps(['[w3] a', 'b']), { q1k1: 'missed' })).toMatchObject({ weighted: false, w3Missed: [] });
   });
 });
 
 describe('weighted explain-back set in the player', () => {
-  it('renders each weight as a chip with the prefix stripped; the preview is weighted and needs every [w3]', async () => {
+  it('renders each weight as a chip with the prefix stripped; the preview is weighted and allows one [w3] miss (rv B, D4)', async () => {
     const { user } = renderApp(`/play/${EB}`, weightedApi());
     await answerEb(user);
     const chips = screen.getAllByTestId('kp-weight');
@@ -88,10 +91,10 @@ describe('weighted explain-back set in the player', () => {
     for (const t of document.querySelectorAll('.checklist-text')) expect(t.textContent).not.toMatch(/\[w[123]\]/);
 
     const preview = screen.getByTestId('score-preview');
-    expect(preview).toHaveTextContent('weighted 0/9 = 0% (0/5 key points) — below the 80% promotion gate; every [w3] needed (1 [w3] still unmarked)');
-    // plain 80% (4/5) but the [w3] is missed: weighted 6/9, and it fails on the w3 rule
+    expect(preview).toHaveTextContent('weighted 0/9 = 0% (0/5 key points) — below the 80% promotion gate; at most 1 [w3] may be missed (1 [w3] still unmarked)');
+    // plain 80% (4/5) but the [w3] is missed: weighted 6/9, below the floor (one [w3] miss alone is allowed)
     await mark(user, { q1k1: 'missed', q1k2: 'covered', q2k1: 'covered', q2k2: 'covered', q3k1: 'covered' });
-    expect(preview).toHaveTextContent('weighted 6/9 = 66.7% (4/5 key points) — below the 80% promotion gate; [w3] missed: q1k1 (every [w3] is needed to pass)');
+    expect(preview).toHaveTextContent('weighted 6/9 = 66.7% (4/5 key points) — below the 80% promotion gate; [w3] missed: q1k1 (1 miss allowed)');
     expect(preview).toHaveClass('is-fail');
     // plain 60% but weighted 7/9 = 77.8%: still below
     await mark(user, { q1k1: 'covered', q2k2: 'missed', q3k1: 'missed' });
@@ -112,21 +115,21 @@ describe('weighted explain-back set in the player', () => {
     expect(screen.queryByTestId('w3-missed')).not.toBeInTheDocument();
   });
 
-  it('a missed [w3]: the confirm says so and the result names the missed [w3] key point (no prefix)', async () => {
+  it('a missed [w3]: the confirm says so and the result names the missed [w3] key point (no prefix); the fail is the coverage floor', async () => {
     const { user } = renderApp(`/play/${EB}`, weightedApi());
     await answerEb(user);
     await mark(user, { q1k1: 'missed', q1k2: 'covered', q2k1: 'covered', q2k2: 'covered', q3k1: 'covered' });
     await user.click(screen.getByRole('button', { name: /Submit self-score/ }));
     const dialog = screen.getByRole('alertdialog', { name: 'File this self-score?' });
-    expect(dialog).toHaveTextContent('[w3] missed: q1k1 (every [w3] is needed)');
+    expect(dialog).toHaveTextContent('[w3] missed: q1k1 (at most 1 may be missed)');
     await user.click(within(dialog).getByRole('button', { name: 'File self-score' }));
     const result = await screen.findByTestId('coverage-result');
     expect(result).toHaveClass('verdict-fail');
-    expect(result).toHaveTextContent('not a pass: every [w3] key point is needed');
+    expect(result).toHaveTextContent('below the 80% promotion threshold');
     const w3 = screen.getByTestId('w3-missed');
     expect(w3).toHaveTextContent(`Missed [w3] key point: q1k1 ${KEY_POINT_TEXT}`);
     expect(w3.textContent).not.toContain('[w3] A closure');
-    expect(screen.getByTestId('retest-notice')).toHaveTextContent('a [w3] key point was missed');
+    expect(screen.getByTestId('retest-notice')).toHaveTextContent('coverage is below the promotion threshold');
   });
 
   it('a legacy (unweighted) set shows no chips and the plain preview', async () => {
@@ -144,24 +147,23 @@ describe('blind mode for [senior] prompts (client-only, until the answer is stor
     expect(blindSplit('Write your design before you look: 1) scope')).toBeNull();
   });
 
-  it('the toggle hides the section list after the marker; prompts without it show no toggle', async () => {
+  it('rv B (R3-07): blind mode is ON by default; "Show sections (assisted)" reveals the list and marks the answer assisted', async () => {
     const { user } = renderApp(`/play/${EB}`, weightedApi({ seniorPrompt: true }));
     const prompt = await screen.findByTestId('eb-prompt-1');
-    expect(prompt).toHaveTextContent('1) scope 2) eviction 3) tests.');
-    const toggle = screen.getByRole('checkbox', { name: 'Blind mode' });
-    expect(toggle).not.toBeChecked(); // off by default
-    await user.click(toggle);
     expect(prompt).not.toHaveTextContent('1) scope');
     expect(prompt).toHaveTextContent('Write your design before you look:');
     expect(prompt).toHaveTextContent('sections hidden: blind mode');
     expect(screen.getByTestId('eb-prompt-2')).toHaveTextContent('Why does a var loop counter surprise callbacks?');
-    await user.click(toggle);
+    expect(screen.getByRole('checkbox', { name: 'I had help' })).not.toBeChecked();
+    await user.click(screen.getByRole('button', { name: 'Show sections (assisted)' }));
     expect(prompt).toHaveTextContent('1) scope 2) eviction 3) tests.');
+    expect(screen.getByRole('checkbox', { name: 'I had help' })).toBeChecked();
+    expect(screen.getByTestId('blind-mode')).toHaveTextContent('Sections shown');
   });
 
   it('no [senior] marker prompt: no toggle', async () => {
     renderApp(`/play/${EB}`, createMockApi());
     await screen.findByRole('textbox', { name: 'Answer 1' });
-    expect(screen.queryByRole('checkbox', { name: 'Blind mode' })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('blind-mode')).not.toBeInTheDocument();
   });
 });
