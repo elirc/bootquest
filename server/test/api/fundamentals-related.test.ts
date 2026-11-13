@@ -1,7 +1,7 @@
 /**
  * f52 C3 (W2.4): the Fundamentals "More practice" map, content/fundamentals/related.json.
  *   - every key in the committed map resolves against the REAL packs (a live, non-quarantined drill of the
- *     topic's track), every topic of the three tracks has an entry, and no list is longer than 8;
+ *     topic's track), every topic of the three tracks is listed (an explicit [] is allowed, R1-09), and no list is longer than 8;
  *   - GET /tracks/:id/fundamentals serves `related` per topic (UnitSummary, lock state included); a key that
  *     is not a live drill of the track is skipped; a topic without one has no `related` field;
  *   - a missing or malformed map never refuses startup (warnings only).
@@ -39,16 +39,20 @@ function realPackUnits(): Map<string, { kind: string; track: string }> {
 }
 
 describe('content/fundamentals/related.json (committed)', () => {
-  it('every key is a live drill of the topic track in the real packs; every topic is covered; at most 8 per topic', () => {
+  // rv wave (R1-09): an off-topic stand-in is worse than none, so a topic may list [] explicitly ("no matching
+  // practice yet"), but every topic must still appear in the map so that a missing entry stays a visible mistake
+  it('every key is a live drill of the topic track in the real packs; every topic is listed; at most 8 per topic', () => {
     const units = realPackUnits();
     const store = loadFundStore(defaultFundamentalsDirs(FUND), { warn: (m) => expect.fail(m) });
     const bad: string[] = [];
     let topics = 0;
+    const listed = JSON.parse(readFileSync(join(FUND, 'related.json'), 'utf8')) as Record<string, Record<string, unknown>>;
     for (const track of ['js', 'csharp', 'java'] as const) {
       for (const topic of store.topics(track)) {
         topics++;
         const keys = store.related(track, topic.id);
-        if (keys.length < 1 || keys.length > 8) bad.push(`${track}/${topic.id}: ${keys.length} keys`);
+        if (!Array.isArray(listed[track]?.[topic.id])) bad.push(`${track}/${topic.id}: not listed in related.json`);
+        if (keys.length > 8) bad.push(`${track}/${topic.id}: ${keys.length} keys`);
         for (const k of keys) {
           const u = units.get(k);
           if (!u) bad.push(`${track}/${topic.id}: ${k} is not a live pack unit`);
