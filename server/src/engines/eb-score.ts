@@ -1,5 +1,5 @@
 import { PROMOTION_MIN_COVERAGE } from '@bootquest/shared';
-import { isWeightedSet, kpWeight } from '@bootquest/shared/eb-weight';
+import { EB_MAX_W3_MISSED, isWeightedSet, kpWeight } from '@bootquest/shared/eb-weight';
 import type { Db } from '../db/database.ts';
 import { HonestyRuleError } from './attempts.ts';
 import { nowMs, type Clock } from './clock.ts';
@@ -9,7 +9,7 @@ import { nowMs, type Clock } from './clock.ts';
  * `[w1]`/`[w2]`/`[w3]` prefix (derived at runtime by `kpWeight`; seed text is never rewritten).
  *  - WEIGHTED set (every key point of the set carries a prefix, `isWeightedSet`): the score of
  *    record is Σ weight(covered) / Σ weight(all), and the set passes only when that score reaches
- *    the floor AND no `[w3]` key point is marked missed.
+ *    the floor AND at most EB_MAX_W3_MISSED (1) `[w3]` key point is marked missed (rv B, D4: was 0).
  *  - LEGACY set (no prefix, or a mixed set): plain covered / total, exactly as before A5.
  * `evidence.score` stores the score of record; `eb_score_detail` (migration 018) stores how it was
  * computed, one row per explain-back evidence row. Evidence written before A5 has no detail row and
@@ -67,17 +67,19 @@ export function ebScore(keyPoints: readonly EbKeyPoint[], marks: Readonly<Record
 
 /**
  * THE explain-back pass predicate: the score of record reaches the mark (the promotion floor unless a
- * stricter unit mark is passed) and no `[w3]` key point was missed. A null score never passes.
+ * stricter unit mark is passed) and at most EB_MAX_W3_MISSED `[w3]` key point was missed. A null score never
+ * passes. rv B (D4): the rule changed from "no [w3] missed" while the owner DB held zero explain-back evidence,
+ * so no stored fail turned into a pass; `w3_missed` is stored per detail row, so the SQL form reads the same rule.
  */
 export function ebPasses(score: number | null, w3Missed: number, minCoverage: number = PROMOTION_MIN_COVERAGE): boolean {
-  return (score ?? 0) >= Math.max(minCoverage, PROMOTION_MIN_COVERAGE) && w3Missed === 0;
+  return (score ?? 0) >= Math.max(minCoverage, PROMOTION_MIN_COVERAGE) && w3Missed <= EB_MAX_W3_MISSED;
 }
 
 /**
  * SQL form of `ebPasses` at the promotion floor, for an `evidence` row aliased `e` (the alias is
  * part of the contract). Pre-A5 evidence has no detail row, so only its score decides.
  */
-export const EB_PASS_SQL = `(e.score >= ${PROMOTION_MIN_COVERAGE} AND NOT EXISTS (SELECT 1 FROM eb_score_detail d WHERE d.evidence_id = e.id AND d.w3_missed > 0))`;
+export const EB_PASS_SQL = `(e.score >= ${PROMOTION_MIN_COVERAGE} AND NOT EXISTS (SELECT 1 FROM eb_score_detail d WHERE d.evidence_id = e.id AND d.w3_missed > ${EB_MAX_W3_MISSED}))`;
 
 /** One `eb_score_detail` row for an explain-back evidence row (append-only; written in the self-score tx). */
 export function recordEbScoreDetail(db: Db, evidenceId: number, s: EbScore, now: Clock): void {

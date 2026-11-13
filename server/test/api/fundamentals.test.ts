@@ -21,6 +21,7 @@ import { ReviewQueueResponse, ReviewStatsResponse, SubmitResponse, UnitDetailRes
 import { FundamentalsResponse } from '@bootquest/shared/api-ext';
 import { FundamentalsFile, fundTopicUnitKey, type FundTopic } from '@bootquest/shared/fundamentals';
 import { createApp } from '../../src/api/app.ts';
+import { withChoices } from '../../src/api/study-service.ts';
 import { entriesContentStore } from '../../src/api/content-store.ts';
 import { defaultRunners } from '../../src/api/runners.ts';
 import { DAY_MS, fixedClock, nowMs } from '../../src/engines/clock.ts';
@@ -272,7 +273,7 @@ describe('Fundamentals over HTTP', () => {
     }
     const miss = fund.find((it) => it.cardKey === `quiz-miss:${ladder.topics[0]!.quiz[0]!.key}`)!;
     const q0 = ladder.topics[0]!.quiz[0]!;
-    expect(miss.card).toMatchObject({ front: q0.prompt, back: `${q0.choices[q0.answer]}\n\n${q0.explanation}` });
+    expect(miss.card).toMatchObject({ front: withChoices(q0.prompt, q0.choices), back: `${q0.choices[q0.answer]}\n\n${q0.explanation}` });
   });
 
   // f52 fix: a failed gate's miss cards (back = keyed choice) are HELD until the gate is passed
@@ -307,7 +308,7 @@ describe('Fundamentals over HTTP', () => {
     expect(open.items.map((it) => it.id)).toEqual(cards.map((c) => c.id));
     expect(open.count).toBe(3);
     const q0 = quiz[0]!;
-    expect(open.items[0]!.card).toMatchObject({ front: q0.prompt, back: `${q0.choices[q0.answer]}\n\n${q0.explanation}` });
+    expect(open.items[0]!.card).toMatchObject({ front: withChoices(q0.prompt, q0.choices), back: `${q0.choices[q0.answer]}\n\n${q0.explanation}` });
     expect(dueAsOf(tmp.db, passAt - 1)).toBe(0); // as of before the pass they were still held
     expect(dueAsOf(tmp.db, nowMs(clock))).toBe(3);
     expect((await request(app).post(`/api/reviews/${cards[0]!.id}/grade`).send({ grade: 'good' })).status).toBe(200);

@@ -48,7 +48,8 @@ function setItem(origin: string, set?: string): SeedExplainBackItem {
 const A = setItem('draft');
 const B = setItem('draft-b', 'b');
 const IDS = A.questions.flatMap((q, qi) => q.keyPoints.map((_, ki) => `q${qi + 1}k${ki + 1}`));
-const ANSWERS = ['one', 'two', 'three'];
+// rv B (R4-07): an answer of record carries >= 15 words per question
+const ANSWERS = ['one', 'two', 'three'].map((n) => `answer ${n}: the rule holds because every caller goes through one guard that checks the role first`);
 const GOOD_PORT = 4000;
 const fakeHttp: Runner = async (_spec, sub) =>
   sub.port === GOOD_PORT

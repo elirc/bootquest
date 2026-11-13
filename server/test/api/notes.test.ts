@@ -136,27 +136,27 @@ describe('GET /api/units/:id/notes — study quests (storefront)', { timeout: 60
     expect(body.explanations.released.every((n) => n.phase === 'after' && n.targetKind === 'quiz')).toBe(true);
   });
 
-  it('after a FAILED submit: the questions answered right are explained now; a missed one waits for its review card (due tomorrow)', async () => {
+  it('rv B (R4-01): after a FAILED submit nothing tells right from wrong: every explanation waits (a missed one for its review card, due tomorrow; the rest for a pass)', async () => {
     const id = unitOf(ctx, 'storefront');
     const missed = new Set(quizzes.slice(0, 3).map((q) => q.key)); // 9/12 = 75% < 80%: a fail
     const sub = await request(ctx.app).post(`/api/units/${id}/submit`).send({ answers: await answers(ctx, id, missed) });
     expect(sub.body.verdict).toBe('fail');
     const now = ctx.clock().getTime();
     const day0 = UnitNotesResponse.parse((await getNotes(ctx, id)).body);
-    expect(day0.explanations.state).toBe('partial');
-    expect(day0.explanations.withheld).toBe(3);
+    expect(day0.explanations.state).toBe('locked');
+    expect(day0.explanations.withheld).toBe(12);
     expect(day0.explanations.nextAt).toBe(now + DAY_MS);
-    const released = new Set(day0.explanations.released.map((n) => n.target));
-    for (const k of missed) expect(released.has(k)).toBe(false);
-    expect(released.size).toBe(9);
+    expect(day0.explanations.released).toEqual([]);
     // no missed question's keyed answer leaks the day it was missed (a retry with the key in hand)
     const text = JSON.stringify(day0);
     for (const n of notes.filter((x) => missed.has(x.target))) expect(text).not.toContain(n.title);
     // the review card for a miss is due tomorrow: the same moment its explanation is released
     ctx.clock.advance(DAY_MS);
     const day1 = UnitNotesResponse.parse((await getNotes(ctx, id)).body);
-    expect(day1.explanations.state).toBe('released');
-    expect(day1.explanations.released).toHaveLength(12);
+    // the missed questions' cards are due (they show the key anyway); the right answers still wait for a pass
+    expect(day1.explanations.state).toBe('partial');
+    expect(day1.explanations.released.map((n) => n.target).sort()).toEqual([...missed].sort());
+    expect(day1.explanations.withheld).toBe(9);
     const queue = (await request(ctx.app).get('/api/reviews/queue')).body as { items: { cardKey: string; unitId: number }[] };
     expect(queue.items.filter((i) => i.cardKey.startsWith('quiz-miss:')).map((i) => i.cardKey.slice('quiz-miss:'.length)).sort()).toEqual([...missed].sort());
   });

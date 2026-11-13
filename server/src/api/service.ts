@@ -15,7 +15,7 @@ import {
 import type { Db } from '../db/database.ts';
 import { HonestyRuleError, isRevealed, recordAttempt, recordSubmission, revealSolution, selfAttestReading } from '../engines/attempts.ts';
 import { campaignState, currentLevel, questUnitUnlocked } from '../engines/campaign.ts';
-import { addDays, type Clock } from '../engines/clock.ts';
+import { addDays, nowMs, type Clock } from '../engines/clock.ts';
 import { promoteIfEligible, recordEvidence } from '../engines/evidence.ts';
 import { retestGate, type RetestGateView } from '../engines/ladder.ts';
 import { dueCount, review } from '../engines/fsrs.ts';
@@ -59,6 +59,7 @@ import { NetworkUnavailableError } from '../sync/github.ts';
 import type { RefContentResponse, RefLink } from '@bootquest/shared/sync';
 import type { DashboardResponseExt as DashboardResponse } from '@bootquest/shared/api-ext';
 import { findCtx, withSlateTargets } from './find-service.ts';
+import { assertGradedTryAllowed, studyKeyReleased } from './practice-service.ts';
 
 /**
  * API service layer: orchestrates the W1a engines. No XP / streak / FSRS /
@@ -95,7 +96,7 @@ function servedQuizSpec(db: Db, unitId: number, spec: CheckSpec): CheckSpec {
 }
 
 /** ui-audit #24: a quiz submission's served choice index -> the stored index the key is in. */
-function storedQuizSubmission<S extends { answer?: unknown }>(db: Db, unitId: number, spec: CheckSpec, submission: S): S {
+export function storedQuizSubmission<S extends { answer?: unknown }>(db: Db, unitId: number, spec: CheckSpec, submission: S): S {
   if (spec.type !== 'quiz' || spec.grading !== 'choice' || !spec.choices || submission.answer === undefined) return submission;
   return { ...submission, answer: toStoredAnswer(submission.answer, choiceOrdererFor(db, unitId)(spec.itemKey, spec.choices.length)) };
 }
@@ -349,7 +350,8 @@ export function getCampaign(deps: ServiceDeps, trackId: string): CampaignRespons
 
 // ---------------------------------------------------------------- grading
 
-async function grade(deps: ServiceDeps, spec: CheckSpec, submission: LearnerSubmission): Promise<CanonicalRunResult> {
+/** Grade a submission (free run, graded submit, rv B practice): nothing here writes. */
+export async function grade(deps: ServiceDeps, spec: CheckSpec, submission: LearnerSubmission): Promise<CanonicalRunResult> {
   // F3: a learner directive that switches the graded type check off is refused before anything runs
   const suppressed = submission.code === undefined ? null : findTypeCheckSuppression(spec, submission.code);
   if (suppressed) {
@@ -505,6 +507,9 @@ export async function submitUnit(
   // practice after a reveal); before that nothing is graded or recorded (the engine's 48h rule
   // on attempt time stays the truth either way)
   assertRetestGate(deps, unit);
+  // rv B (Q3, R4-01): the practice lock (2 days after a practice try) and a quiz gate's retry budget (2 graded
+  // tries per 24 h) are read from the ledger before anything is graded; a refusal records nothing (409 NOT_DUE)
+  assertGradedTryAllowed(deps, unit, check);
   // W8: a study-quiz gate is graded HERE from the stamped quest pack (full answer set, >= 80%);
   // a registered 'study-quiz' runner (test stand-in) still takes precedence for `answer` bodies
   let study: StudyGradeResult | null = null;
@@ -520,6 +525,9 @@ export async function submitUnit(
 
   return db.tx(() => {
     closeElapsedDays(db, clock);
+    // rv B (R4-01b): a study-quiz retake after one of its keys was released (a pass, or a shown miss card) is
+    // not blind: recorded prior-key (assisted), a server-side fact like the explain-back F2 rule
+    const priorKey = check.spec.type === 'study-quiz' && studyKeyReleased(db, unit.id, check.spec.itemKeys, nowMs(clock));
     // attempt outcome is derived from the verdict; the submit run is written with it
     const { attempt, runId, verdict } = recordSubmission(
       db,
@@ -532,6 +540,7 @@ export async function submitUnit(
         ...(study ? { score: study.grade.score } : {}),
       },
       clock,
+      { priorKey },
     );
 
     // W8: misses become FSRS cards (due tomorrow, deduped); the first pass enrolls the quest's flashcards
@@ -545,7 +554,9 @@ export async function submitUnit(
         score: study.grade.score,
         passPct: Math.round(check.spec.passPct * 100),
         passed: verdict === 'pass',
-        items: study.grade.items,
+        // rv B (R4-01): a FAILED gate returns no per-question marks (an empty list is schema-legal); the
+        // sections to re-read are in result.output and GET /units/:id/gate-status
+        items: verdict === 'pass' ? study.grade.items : [],
         reviewCards: cards,
         flashcardsEnrolled,
       };

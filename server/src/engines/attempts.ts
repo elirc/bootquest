@@ -179,13 +179,15 @@ export function recordSubmission(
   db: Db,
   input: SubmissionInput,
   now: Clock,
+  /** rv B (R4-01b): priorKey is a server-side ledger fact (a study-quiz retake after one of its keys was released) */
+  opts: { priorKey?: boolean } = {},
 ): { attempt: AttemptRow; runId: number; verdict: RunVerdict } {
   const { result, verdict } = runVerdict(input.result);
   const t = nowMs(now);
   return db.tx(() => {
     requireUnitKind(db, input.unitId);
     assertCheckOfUnit(db, input.checkId, input.unitId);
-    const { mode, source } = deriveMode(db, input.unitId, input.selfAssisted ?? false);
+    const { mode, source } = deriveMode(db, input.unitId, input.selfAssisted ?? false, opts.priorKey ?? false);
     const attemptId = insertAttempt(
       db,
       {
@@ -215,6 +217,14 @@ export function recordSubmission(
     ).lastInsertRowid;
     return { attempt: getAttempt(db, attemptId), runId, verdict };
   });
+}
+
+/** SQL predicate (alias `a` = attempt): a GRADED attempt, i.e. one with a recorded submit run (never /run, never an answer-first row). */
+export const GRADED_SQL = `EXISTS (SELECT 1 FROM run rg WHERE rg.attempt_id = a.id AND rg.kind = 'submit')`;
+
+/** rv B: the creation times of a unit's graded attempts, oldest first (its try history). */
+export function gradedTryTimes(db: Db, unitId: number): number[] {
+  return db.all<{ t: number }>(`SELECT a.created_at AS t FROM attempt a WHERE a.unit_id = ? AND ${GRADED_SQL} ORDER BY a.id`, unitId).map((r) => r.t);
 }
 
 /** True when the attempt is a verified pass (outcome pass + passing submit run). */

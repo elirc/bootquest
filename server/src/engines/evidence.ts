@@ -22,7 +22,7 @@ import { UNASSISTED_PASS_SQL } from './hints.ts';
  *       unit that declares the competency, with no hint taken on that unit at/before the attempt
  *       (f52 U13: a hinted pass is verified but not unassisted; engines/hints.ts UNASSISTED_PASS_SQL);
  *   (b) ITS explain-back — 'explain-back' evidence that PASSES (EB_PASS_SQL:
- *       >= 80% self-scored coverage, weighted for a [wN] set, and no [w3] missed)
+ *       >= 80% self-scored coverage, weighted for a [wN] set, and at most one [w3] missed)
  *       on an unassisted 'submitted' answer attempt made at/after the artifact attempt, on the artifact's unit itself or on an
  *       explain-back-kind unit that lists the artifact unit as a prerequisite;
  *   (c) changed-example retest — 'retest' evidence on a DIFFERENT, verified,
@@ -349,7 +349,7 @@ export function evaluatePromotion(db: Db, competency: CompetencyId, now: Clock):
   const missing: string[] = [];
   if (best.artifact === null) missing.push('artifact: no unassisted, run-verified project artifact since the last rating change');
   if (best.explainBack === null) {
-    missing.push(`explain-back: none of the artifact's explain-backs reaches ${PROMOTION_MIN_COVERAGE * 100}% unassisted coverage (a weighted set also needs every [w3] key point)`);
+    missing.push(`explain-back: none of the artifact's explain-backs reaches ${PROMOTION_MIN_COVERAGE * 100}% unassisted coverage (a weighted set may miss at most one [w3] key point)`);
   }
   if (best.retest === null) {
     missing.push("retest: no unassisted, run-verified changed-example retest of the artifact's unit >= 2 days after artifact + explain-back");

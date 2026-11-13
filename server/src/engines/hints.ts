@@ -6,8 +6,9 @@ import { nowMs, type Clock } from './clock.ts';
  * f52 U13 (council ruling 6): progressive hints, the cheaper step before "Reveal solution".
  * The ledger is hint_taken (migration 019, append-only). The rules:
  *   - hints are served on drill / code-check units only (never quiz, study, retest, explain-back, kata);
- *   - the servable hints are the authored ones EXCEPT the last (some banks author the full solution as the
- *     last hint): 1 authored hint serves none, 3 serve 2;
+ *   - the servable hints depend on the bank (rv B, HINT_POLICY_BY_BANK): all of them (bootforge), all but
+ *     the last (some banks author the full solution as the last hint; the default), or every hint except
+ *     the formula-level one (sysdrills);
  *   - hint N+1 is available only after >= 1 recorded failed graded submit on the unit, and never after a
  *     verified pass;
  *   - each hint taken at/before a passing attempt cuts that pass's XP by 25% (floor 50%; xp.ts). Reveal
@@ -36,9 +37,72 @@ export const HINT_FREE_SQL = `NOT EXISTS (SELECT 1 FROM hint_taken h WHERE h.uni
  */
 export const UNASSISTED_PASS_SQL = `(a.mode = 'solo' AND ${VERIFIED_PASS_SQL} AND ${HINT_FREE_SQL})`;
 
-/** The authored hints a unit may serve: all but the last one. */
-export function servableHints(authored: readonly string[] | undefined): string[] {
-  return authored && authored.length > 1 ? authored.slice(0, -1) : [];
+/**
+ * rv B (R2-03, R4-03, R3-09): which authored hints a bank may serve. The bank is the unit key's first
+ * segment (`sysdrills/01-estimation/...`).
+ *   all          every authored hint: bootforge's (mostly single) hints are nudges, never a solution
+ *   all-but-last the last hint is approach-level or the solution itself (csdrills, javadrills, fund-*, and
+ *                every bank not listed)
+ *   no-formula   sysdrills: every hint EXCEPT the formula-level one(s). The formula hint is found by its
+ *                text (formulaScore), not by its position, so the policy holds whichever order the hints
+ *                are authored in (ab S6 put the formula at hint 2; a content swap may move it to hint 3)
+ */
+export type HintPolicy = 'all' | 'all-but-last' | 'no-formula';
+export const HINT_POLICY_BY_BANK: Readonly<Record<string, HintPolicy>> = {
+  bootforge: 'all',
+  sysdrills: 'no-formula',
+};
+
+export function hintPolicyFor(unitKey: string | undefined): HintPolicy {
+  const bank = unitKey?.split('/')[0] ?? '';
+  return HINT_POLICY_BY_BANK[bank] ?? 'all-but-last';
+}
+
+/** A hint scoring at least this reads as a formula and is never served under the no-formula policy. */
+export const FORMULA_HINT_MIN_SCORE = 8;
+
+/**
+ * How formula-like a hint reads: math symbols (× ÷ ⌊ ⌈ Σ ⇔ ≤ ...), `Math.*` calls, powers, camelCase
+ * identifiers, `name = ...` assignments and binary operators between operands. A prose nudge scores 0-4;
+ * a stated formula ("avgQps = dau × requestsPerUser ÷ 86,400") scores 8 or more.
+ */
+export function formulaScore(hint: string): number {
+  const n = (re: RegExp): number => (hint.match(re) ?? []).length;
+  return (
+    n(/[×÷⌊⌋⌈⌉Σ⇔≤≥√∑]/g) * 2 +
+    n(/\bMath\.\w+/g) * 3 +
+    n(/\*\*|\^/g) * 2 +
+    n(/\b[a-z]+[A-Z][A-Za-z0-9]*\b/g) +
+    n(/(^|[\s(;])[A-Za-z_‰µ][\w‰µ\s]{0,20}?\s?=\s?[^=]/g) * 2 +
+    n(/[\w)]\s[−\-+*/]\s[\w(]/g)
+  );
+}
+
+/**
+ * The no-formula policy: drop the MOST formula-like hint (on a tie: hint 2 if it is tied, else the last tied
+ * one, so an undetected formula still costs one hint, never the first nudge) plus every other hint scoring
+ * >= FORMULA_HINT_MIN_SCORE. A lone hint is served only when it reads as prose.
+ */
+function withoutFormula(authored: readonly string[]): string[] {
+  const scores = authored.map(formulaScore);
+  if (authored.length === 1) return scores[0]! < FORMULA_HINT_MIN_SCORE ? [...authored] : [];
+  const max = Math.max(...scores);
+  const tied = scores.flatMap((s, i) => (s === max ? [i] : []));
+  const drop = tied.includes(1) ? 1 : tied[tied.length - 1]!;
+  return authored.filter((_, i) => i !== drop && scores[i]! < FORMULA_HINT_MIN_SCORE);
+}
+
+/** The authored hints a unit may serve under its bank's policy (HINT_POLICY_BY_BANK), in authored order. */
+export function servableHints(authored: readonly string[] | undefined, unitKey?: string): string[] {
+  if (!authored || authored.length === 0) return [];
+  switch (hintPolicyFor(unitKey)) {
+    case 'all':
+      return [...authored];
+    case 'no-formula':
+      return withoutFormula(authored);
+    default:
+      return authored.length > 1 ? authored.slice(0, -1) : [];
+  }
 }
 
 /** Hints taken on a unit, in the order they were taken (1-based idx). */
