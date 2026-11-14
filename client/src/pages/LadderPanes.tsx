@@ -40,6 +40,7 @@ import { fmtWhen } from '../lib/format';
 import { InlineProse } from '../lib/prose';
 import { useTracksRefresh } from '../lib/tracks';
 import { competencyLabel } from '../lib/view';
+import { NotebookLine } from './Player/NotebookLine';
 
 const fmtPct = (x: number) => `${Math.round(x * 1000) / 10}%`;
 
@@ -864,6 +865,8 @@ function ExplainBackKeyView({
       <div className="results" aria-live="polite" data-testid="results">
         <ErrorLine error={error} />
         {result && <ExplainBackResult r={result} keyResp={keyResp} hasAltSets={altSets !== null && altSets.siblings.length > 1} />}
+        {/* rv2 S3 (PLAN F6): after a self-score with a missed key point, the optional notebook line (0 XP, never blocks) */}
+        {result && result.missed.length > 0 && <NotebookLine key={result.attemptId} unitId={unitId} attemptId={result.attemptId} />}
         {!result && scoredBefore && (
           <div className="verdict verdict-todo">
             <Icon name="check" /> Already self-scored: {fmtPct(scoredBefore.score)} {tally.weighted ? 'weighted ' : ''}coverage (evidence #{scoredBefore.evidenceIds.join(', #')}).

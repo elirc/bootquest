@@ -16,6 +16,7 @@ import { MorePractice } from '../components/MorePractice';
 import { Chip, LoadState, ProgressBar } from '../components/ui';
 import { FUND_LEVEL_LABEL, fundProgress, fundProgressText, topicComplete } from '../lib/fundamentals';
 import { useAsync } from '../lib/useAsync';
+import { KeyIdeasForUnit } from './KeyIdeas';
 
 export function FundamentalsSection({ trackId }: { trackId: TrackId }): JSX.Element | null {
   // keyed by track: switching tracks starts from a fresh fetch
@@ -106,6 +107,9 @@ function FundamentalsBody({ trackId }: { trackId: TrackId }): JSX.Element | null
       <button type="button" className="link-btn fund-toggle small" aria-expanded={all} aria-controls={listId} onClick={toggle} data-testid="fund-toggle">
         {all ? 'Show less' : `Show all ${topics.length}`}
       </button>
+      {/* rv2 S3 (PLAN §2.1 "where it shows"): the key-ideas fold of the section the current topic is in
+          (the last topic once all are passed); closed by default, answers only once their sources pass */}
+      <KeyIdeasForUnit unitKey={(topics[at] ?? topics[topics.length - 1]!).unit.key} />
     </section>
   );
 }

@@ -34,6 +34,7 @@ import {
 } from '../lib/trackunits';
 import { useAsync } from '../lib/useAsync';
 import { useDebouncedValue } from '../lib/useDebouncedValue';
+import { KeyIdeasForUnit } from './KeyIdeas';
 
 type Variant = 'primary' | 'secondary';
 
@@ -230,6 +231,9 @@ function UnitBrowser({ units: served, steps, tiers }: { units: UnitSummary[]; st
                       <span className="muted">{`${t.done}/${t.total} done${g.units.length < t.total ? ` · ${g.units.length} shown` : ''}`}</span>
                     </button>
                   </GroupHead>
+                  {/* rv2 S3: an OPEN group shows the key-ideas fold of the section(s) its first unit belongs to
+                      (one read per open group; nothing renders when the unit is in no section) */}
+                  {open && g.units[0] && <KeyIdeasForUnit unitKey={g.units[0].key} />}
                   {/* rows exist only while the group is open (a 4,000-unit track renders headers only) */}
                   <ul className="tu-list" id={listId} hidden={!open}>
                     {open &&
