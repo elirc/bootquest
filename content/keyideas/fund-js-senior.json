@@ -1,0 +1,267 @@
+{
+ "format": "bootquest-keyideas@1",
+ "section": "fund-js-senior",
+ "title": "JS: senior CRUD (topics 21-33)",
+ "track": "js",
+ "_note": "rv2 S2 (PLAN §2.2 fund-js-senior row). Scope = Fundamentals JS topic gates 21-33. The binding list has 13 rows; the 12-idea cap merges 'keep transactions short' (topic 24) with 'lost update' (topic 25), both about read-modify-write in application code. Sources = topic gates plus first drills; siblings = other topic drills and related.json drills. Server-local side file, never stamped.",
+ "scope": [
+  "fund/js/21-sql-queries-nulls-and-joins",
+  "fund/js/22-sql-schema-design-and-constraints",
+  "fund/js/23-sql-indexes-and-query-plans",
+  "fund/js/24-sql-transactions-and-app-code",
+  "fund/js/25-lost-updates-and-optimistic-concurrency",
+  "fund/js/26-idempotent-writes",
+  "fund/js/27-pagination-that-does-not-drift",
+  "fund/js/28-authorization-and-tenant-scoping",
+  "fund/js/29-schema-changes-under-live-traffic",
+  "fund/js/30-cache-correctness",
+  "fund/js/31-n-plus-one-and-query-budgets",
+  "fund/js/32-seams-fakes-and-answerable-logs",
+  "fund/js/33-authentication-sessions-and-tokens"
+ ],
+ "recapAfter": 0.8,
+ "ideas": [
+  {
+   "id": "null-logic-and-join-fanout",
+   "idea": "SQL comparisons with NULL are unknown, not false, so they drop rows silently; a join to a one-to-many table repeats the parent row once per match.",
+   "why": "'WHERE x <> 5' quietly skips NULL rows, and summing a parent amount after joining its line items multiplies the total.",
+   "prompt": "A finance query sums invoices.total after joining payments to find 'paid invoices', and the number is far higher than the ledger. Another query using `status <> 'void'` misses some invoices. Explain both.",
+   "answer": "Each invoice row repeats once per payment, so its total is added several times; aggregate payments per invoice first or test existence with EXISTS. The second query loses rows whose status is NULL, because NULL <> 'void' is unknown and WHERE keeps only true; add an explicit IS NULL branch or make the column NOT NULL.",
+   "tags": [
+    "sql",
+    "nulls"
+   ],
+   "sources": [
+    "fund/js/21-sql-queries-nulls-and-joins",
+    "fund-js/21-sql-queries-nulls-and-joins/01-overdue-invoices"
+   ],
+   "siblings": [
+    "fund-js/21-sql-queries-nulls-and-joins/02-customers-with-zero-orders",
+    "fund-js/21-sql-queries-nulls-and-joins/03-fix-the-inflated-total",
+    "bootforge/sql-data/queries/filtering-and-functions/is-null"
+   ]
+  },
+  {
+   "id": "constraints-last-line",
+   "idea": "Put the invariants in the schema (NOT NULL, CHECK, UNIQUE, foreign keys): application checks race, constraints do not.",
+   "why": "Two requests that both 'check first' can both pass, and code paths you forgot (scripts, a second service) skip the application's validation entirely.",
+   "prompt": "Each customer may have only one primary address. The service checks for an existing primary before inserting, yet production has customers with two. How did it happen, and how do you make it impossible?",
+   "answer": "Two concurrent requests both read 'no primary yet' and both insert; a check in code cannot stop that race. Enforce it in the database: a unique index over customer id limited to primary rows, so the second insert fails, and map that violation to a clear conflict response. Clean up the existing duplicates before adding the index.",
+   "tags": [
+    "sql",
+    "data-integrity"
+   ],
+   "sources": [
+    "fund/js/22-sql-schema-design-and-constraints",
+    "fund-js/22-sql-schema-design-and-constraints/01-constraints-in-ddl"
+   ],
+   "siblings": [
+    "fund-js/22-sql-schema-design-and-constraints/02-unique-among-live-rows",
+    "fund-js/22-sql-schema-design-and-constraints/03-one-primary-address",
+    "bootforge/sql-data/mutations-and-modeling/schema-design/unique-email"
+   ]
+  },
+  {
+   "id": "index-matches-query",
+   "idea": "An index helps only when it matches the predicate and the sort: equality columns first, then the range or order column; confirm with the query plan, never by hope.",
+   "why": "An index on the wrong column order, or a function wrapped around the column, leaves the query scanning the table while everyone believes it is indexed.",
+   "prompt": "The orders page runs `WHERE customer_id = ? AND date(created_at) = ? ORDER BY created_at DESC`. There is an index on (created_at, customer_id) and the page is slow. What do you change?",
+   "answer": "Make the predicate sargable: compare created_at to a half-open range for the day instead of wrapping it in date(). Then index (customer_id, created_at), equality column first, so one index both finds the customer's rows and returns them in order. Read the plan before and after to confirm the index is used and no sort step remains.",
+   "tags": [
+    "indexing",
+    "sql"
+   ],
+   "sources": [
+    "fund/js/23-sql-indexes-and-query-plans",
+    "fund-js/23-sql-indexes-and-query-plans/01-index-for-the-orders-page"
+   ],
+   "siblings": [
+    "fund-js/23-sql-indexes-and-query-plans/02-sargable-day-filter",
+    "fund-js/23-sql-indexes-and-query-plans/03-one-index-three-queries",
+    "jstrain/19-node-persistence/17-sqlite-queries"
+   ]
+  },
+  {
+   "id": "short-transactions-versioned-writes",
+   "idea": "Keep transactions short with no network call inside; protect read-modify-write with a version column or a conditional UPDATE, and check the affected row count.",
+   "why": "A transaction held open across an HTTP call holds locks for seconds, and two read-then-write requests overwrite each other's change without any error.",
+   "prompt": "An edit endpoint loads a document, calls a spell-check API, then saves, all inside one transaction. Users report lost edits and lock timeouts. Restructure it.",
+   "answer": "Call the external API before the transaction, then open a short one only for the write. Save with UPDATE ... SET body = ?, version = version + 1 WHERE id = ? AND version = ?; if zero rows changed, someone else saved first, so answer a conflict or reload and retry. Locks are now held for milliseconds.",
+   "tags": [
+    "transactions",
+    "concurrency"
+   ],
+   "sources": [
+    "fund/js/24-sql-transactions-and-app-code",
+    "fund-js/24-sql-transactions-and-app-code/01-atomic-transfer",
+    "fund/js/25-lost-updates-and-optimistic-concurrency",
+    "fund-js/25-lost-updates-and-optimistic-concurrency/01-reserve-the-last-seat"
+   ],
+   "siblings": [
+    "fund-js/24-sql-transactions-and-app-code/02-versioned-update",
+    "fund-js/24-sql-transactions-and-app-code/03-parameterised-search",
+    "fund-js/25-lost-updates-and-optimistic-concurrency/02-update-if-version"
+   ]
+  },
+  {
+   "id": "idempotency-key-with-result",
+   "idea": "Store the idempotency key together with the result in the same transaction as the write, so a retry returns the first answer instead of doing the work again.",
+   "why": "A key saved separately, or checked before the work and written after it, still lets a timed-out retry create a second order.",
+   "prompt": "Clients send an Idempotency-Key header on POST /orders. The server checks a cache for the key, creates the order, then caches the key. Under retries during a slow database, duplicates still appear. Why?",
+   "answer": "Check and record are separate steps, so two attempts arriving together both find no key and both create an order, and a crash before the cache write forgets the key entirely. Insert the key row with a unique constraint in the same transaction as the order, keeping the response in that row; a retry then gets that response back.",
+   "tags": [
+    "idempotency",
+    "transactions"
+   ],
+   "sources": [
+    "fund/js/26-idempotent-writes",
+    "fund-js/26-idempotent-writes/01-create-order-with-idempotency-key"
+   ],
+   "siblings": [
+    "fund-js/26-idempotent-writes/02-single-flight-per-key",
+    "fund-js/26-idempotent-writes/03-dedupe-webhook-deliveries",
+    "bootforge/http-rest/http/methods-and-semantics/is-idempotent"
+   ]
+  },
+  {
+   "id": "keyset-pagination",
+   "idea": "Page with a keyset cursor (the last row's sort values plus a unique tie-breaker), not OFFSET: pages stay stable under inserts and cost the same at any depth.",
+   "why": "OFFSET re-reads every skipped row and shifts when rows are inserted, so users see duplicates or miss items, and deep pages get slower.",
+   "prompt": "A feed sorted by created_at skips rows with OFFSET, 20 per page. Users scrolling during busy hours see the same post twice, and page 500 times out. Redesign the paging.",
+   "answer": "Return a cursor holding the last row's timestamp and id, and fetch the next 20 rows that sort strictly after it in the same descending order. The id breaks ties between equal timestamps, new posts no longer shift later pages, and an index on the timestamp then the id makes every page equally cheap.",
+   "tags": [
+    "pagination",
+    "sql"
+   ],
+   "sources": [
+    "fund/js/27-pagination-that-does-not-drift",
+    "fund-js/27-pagination-that-does-not-drift/01-keyset-page"
+   ],
+   "siblings": [
+    "fund-js/27-pagination-that-does-not-drift/02-opaque-cursor",
+    "fund-js/27-pagination-that-does-not-drift/03-limit-clamp-and-has-more",
+    "bootforge/fullstack-crud/api-patterns/pagination/clamp-limit"
+   ]
+  },
+  {
+   "id": "tenant-scoped-queries",
+   "idea": "Scope every query by tenant inside the data layer, and choose 404 or 403 on purpose: 404 hides that another tenant's record exists.",
+   "why": "One handler that loads by id alone and checks the tenant afterwards, or forgets to, leaks data or confirms that ids exist across customers.",
+   "prompt": "GET /projects/:id loads the project by id, then returns 403 if project.tenantId differs from the caller's. A security review flags it. What is wrong, and what is the safer shape?",
+   "answer": "The record was already loaded across tenants, and 403 confirms the id exists elsewhere, which helps enumeration. Query with both id and tenant id in the WHERE clause through a tenant-scoped repository, so other tenants' rows are never read, and answer 404 when nothing matches. Keep 403 for a resource the caller can see but may not change.",
+   "tags": [
+    "authz-tenancy",
+    "security"
+   ],
+   "sources": [
+    "fund/js/28-authorization-and-tenant-scoping",
+    "fund-js/28-authorization-and-tenant-scoping/01-tenant-scoped-repository"
+   ],
+   "siblings": [
+    "fund-js/28-authorization-and-tenant-scoping/02-pick-allowed-fields",
+    "fund-js/28-authorization-and-tenant-scoping/03-can-user-do-action",
+    "bootforge/engineering-practice/practice/testing/test-tenant-list"
+   ]
+  },
+  {
+   "id": "expand-migrate-contract",
+   "idea": "Change a live schema in three phases: expand (add, write both), migrate (backfill in batches, switch reads), contract (remove the old) once no running version needs it.",
+   "why": "During a rolling deploy old and new code run together, so a rename or drop in one step breaks whichever version did not expect it.",
+   "prompt": "You must rename users.fullname to display_name in a service deployed by rolling restart, with 50 million rows. Write the release plan.",
+   "answer": "Release 1 adds display_name and writes both columns. A resumable batched backfill copies old rows. Release 2 reads display_name, still writing both. Release 3 stops writing fullname, and a later migration drops it. Each step runs safely while the previous version is still serving.",
+   "tags": [
+    "migrations-rollout",
+    "sql"
+   ],
+   "sources": [
+    "fund/js/29-schema-changes-under-live-traffic",
+    "fund-js/29-schema-changes-under-live-traffic/01-migration-plan-lint"
+   ],
+   "siblings": [
+    "fund-js/29-schema-changes-under-live-traffic/02-resumable-backfill",
+    "fund-js/29-schema-changes-under-live-traffic/03-dual-write-repository",
+    "bootforge/sql-data/mutations-and-modeling/schema-design/not-null-plus-default"
+   ]
+  },
+  {
+   "id": "cache-correctness",
+   "idea": "A cache needs three rules: invalidate (or update) on every write, bound staleness with a TTL, and let one caller rebuild a missing key while the others wait (no stampede).",
+   "why": "Without them users read data they just changed, and a popular key expiring sends every request to the database at once.",
+   "prompt": "A product cache has a 10-minute TTL and no other rules. After a price change, customers see the old price; at the top of each hour the database CPU spikes. Fix both problems.",
+   "answer": "Delete or rewrite the cached entry in the same code path that changes the price, so readers stop seeing old data; the TTL is only a safety bound. For the spike, let one request rebuild an expired key while the others wait for that result, and add random jitter to TTLs so entries written together do not expire together.",
+   "tags": [
+    "caching",
+    "data-integrity"
+   ],
+   "sources": [
+    "fund/js/30-cache-correctness",
+    "fund-js/30-cache-correctness/01-single-flight-ttl-cache"
+   ],
+   "siblings": [
+    "fund-js/30-cache-correctness/02-invalidate-on-write",
+    "fund-js/30-cache-correctness/03-collision-free-cache-key",
+    "jstrain/19-node-persistence/02-stable-stringify"
+   ]
+  },
+  {
+   "id": "n-plus-one-budget",
+   "idea": "A list that runs one query per row is N+1: batch the lookups (one IN query or a join), and pin a query budget in tests so it cannot return.",
+   "why": "N+1 is invisible with ten rows in development and takes the database down with a thousand rows in production.",
+   "prompt": "An orders page loads 50 orders, then each order's customer, then each order's items: 101 queries. It passed review. How do you fix it and keep it fixed?",
+   "answer": "Load the 50 orders, then all their customers in one WHERE id IN (...) query and all items in one more, and assemble in memory: three queries whatever the page size. Then add a test that counts the queries the endpoint runs and fails above the budget, so a later change that reintroduces per-row loading breaks the build.",
+   "tags": [
+    "sql",
+    "performance"
+   ],
+   "sources": [
+    "fund/js/31-n-plus-one-and-query-budgets",
+    "fund-js/31-n-plus-one-and-query-budgets/01-fix-the-order-list"
+   ],
+   "siblings": [
+    "fund-js/31-n-plus-one-and-query-budgets/02-per-tick-loader",
+    "fund-js/31-n-plus-one-and-query-budgets/03-query-budget-assertion",
+    "bootforge/arrays-objects/data-shaping/lookup-tables/index-by-id"
+   ]
+  },
+  {
+   "id": "seams-fakes-request-logs",
+   "idea": "Inject the clock, ids and external clients as seams so tests use small fakes, not mocks of internals; every log line carries the request id.",
+   "why": "Mock-heavy tests pin implementation details and break on every refactor, and logs without a request id cannot reconstruct a single failing request.",
+   "prompt": "A test for 'invoice due in 30 days' is flaky around midnight, and support cannot tell which log lines belong to the customer's failed payment. One change to the design fixes both kinds of pain. What is it?",
+   "answer": "Make dependencies explicit inputs. Pass a clock (and id generator) into the service, so the test uses a fixed fake time instead of the real one. Create a request id at the edge and pass it to the logger context, so every line of that request carries it and support can filter one payment end to end.",
+   "tags": [
+    "testing",
+    "observability"
+   ],
+   "sources": [
+    "fund/js/32-seams-fakes-and-answerable-logs",
+    "fund-js/32-seams-fakes-and-answerable-logs/01-inject-clock-and-ids"
+   ],
+   "siblings": [
+    "fund-js/32-seams-fakes-and-answerable-logs/02-characterization-cases",
+    "fund-js/32-seams-fakes-and-answerable-logs/03-answerable-request-log",
+    "jstrain/18-node-http-apis/06-request-logger"
+   ]
+  },
+  {
+   "id": "sessions-vs-tokens",
+   "idea": "Choose sessions or tokens by revocation: a server session dies when deleted, a signed token lives until it expires; keep either in an HttpOnly, Secure, SameSite cookie.",
+   "why": "Tokens in localStorage are readable by any injected script, and long-lived tokens cannot be withdrawn when an account is compromised.",
+   "prompt": "A web app stores a 30-day JWT in localStorage. A user reports a stolen laptop and support wants to log them out everywhere now. What can you do, and what would you change in the design?",
+   "answer": "With a self-contained 30-day token you cannot revoke it short of rotating the signing key for everyone. Switch to a server-side session, or a short-lived access token plus a rotating refresh token stored server side, held in an HttpOnly, Secure, SameSite cookie. Revocation is then deleting the session or refresh record.",
+   "tags": [
+    "authentication",
+    "security"
+   ],
+   "sources": [
+    "fund/js/33-authentication-sessions-and-tokens",
+    "fund-js/33-authentication-sessions-and-tokens/01-verify-hs256-jwt"
+   ],
+   "siblings": [
+    "fund-js/33-authentication-sessions-and-tokens/02-session-rotation-on-login",
+    "fund-js/33-authentication-sessions-and-tokens/03-refresh-token-rotation",
+    "jstrain/12-node-fundamentals/29-timing-safe"
+   ]
+  }
+ ]
+}
