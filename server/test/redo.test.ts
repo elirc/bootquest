@@ -135,6 +135,23 @@ describe('redo cards (spaced production)', () => {
     submit(tmp.db, clock, ids['kr/s1']!);
     expect((await request(app).get(`/api/keyideas/cards/${id}`)).body.redo).toMatchObject({ key: 'kr/s2' });
   });
+  it('rv3 W10c: a released redo card is first in the reviews queue, ahead of 100 older due flashcards', async () => {
+    submit(tmp.db, clock, ids['kr/d1']!);
+    await request(app).get('/api/keyideas');
+    // 100 flashcard-style cards, all due before the redo card is released
+    for (let k = 0; k < 100; k++) addReviewItem(tmp.db, { cardKey: `flashcard:fx/w10c-${k}`, kind: 'card', dueAt: nowMs(clock) + DAY_MS + k }, clock);
+    clock.advance(3 * DAY_MS + 1);
+    const page = (await request(app).get('/api/reviews/queue').query({ limit: '10' })).body as { count: number; items: { cardKey: string }[] };
+    expect(page.count).toBe(102); // + idea one's own key-idea card (due the day after the pass)
+    expect(page.items).toHaveLength(10);
+    expect(page.items[0]!.cardKey).toBe('redo:fx-redo/one');
+    // the rest keep their due order, and no card is listed twice
+    expect(page.items.slice(1).map((i) => i.cardKey)).toEqual(['keyidea:fx-redo/one', ...Array.from({ length: 8 }, (_, k) => `flashcard:fx/w10c-${k}`)]);
+    const all = (await request(app).get('/api/reviews/queue')).body.items as { cardKey: string }[];
+    expect(new Set(all.map((i) => i.cardKey)).size).toBe(all.length);
+    expect(all).toHaveLength(102);
+  });
+
   it('rv3 MF-3: a redo card whose idea lost every live sibling is skipped, never blocks the others, retires at startup and returns with a sibling', async () => {
     const base = keyIdeas();
     const withSiblings = (one: string[]) =>

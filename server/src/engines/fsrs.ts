@@ -147,6 +147,38 @@ export function getReviewItem(db: Db, id: number): ReviewItemRow {
  */
 export const REVIEWABLE_SQL = `kind <> 'retest' AND retired_at IS NULL AND NOT ${fundMissHeldSql('review_item')}`;
 
+/**
+ * rv3 W10c (FABLE-REVIEW L1): the queue's first cards. A released redo card and a due re-check are one-a-day
+ * production prompts, so they come before every other due card (which keep their due_at order). Before this a
+ * released redo got due_at = now and sat behind 160 older flashcards, past the first page and the 20-card cap.
+ */
+export const PRIORITY_CARD_PREFIXES: readonly string[] = ['redo:', 'recheck:'];
+
+export interface QueueRowShape {
+  id: number;
+  cardKey: string;
+  kind: 'card' | 'finding' | 'quiz-miss' | 'concept';
+  unitId: number | null;
+  competencyId: CompetencyId | null;
+  dueAt: number;
+}
+
+/** The due priority cards (redo, re-check), in due_at order: the same reviewable rule as every queue. */
+export function priorityDueRows(db: Db, atMs: number): QueueRowShape[] {
+  const prefix = PRIORITY_CARD_PREFIXES.map((p) => `substr(card_key, 1, ${p.length}) = '${p}'`).join(' OR ');
+  return db.all<QueueRowShape>(
+    `SELECT id, card_key AS cardKey, kind, unit_id AS unitId, competency_id AS competencyId, due_at AS dueAt
+       FROM review_item WHERE due_at <= ? AND ${REVIEWABLE_SQL} AND (${prefix}) ORDER BY due_at, id`,
+    atMs,
+  );
+}
+
+/** The priority cards first, then the rest in their own order (no card twice), capped at `limit`. */
+export function priorityFirst<T extends { id: number }>(first: readonly T[], rest: readonly T[], limit: number): T[] {
+  const ids = new Set(first.map((r) => r.id));
+  return [...first, ...rest.filter((r) => !ids.has(r.id))].slice(0, limit);
+}
+
 export function dueItems(db: Db, now: Clock): ReviewItemRow[] {
   return db.all<ReviewItemRow>(`SELECT * FROM review_item WHERE due_at <= ? AND ${REVIEWABLE_SQL} ORDER BY due_at, id`, nowMs(now));
 }

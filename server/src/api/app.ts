@@ -45,7 +45,7 @@ import type { Db } from '../db/database.ts';
 import { seedQueue, SyncConfigError } from '../sync/job.ts';
 import type { SyncService } from '../sync/service.ts';
 import { nowMs, type Clock } from '../engines/clock.ts';
-import { dueCount } from '../engines/fsrs.ts';
+import { dueCount, priorityDueRows, priorityFirst } from '../engines/fsrs.ts';
 import { contentCounts, reviewQueue } from '../store/queries.ts';
 import { emptyContentStore, type UnitContentStore } from './content-store.ts';
 import { asyncRoute, errorBody, HttpError, sendJson, validate } from './http.ts';
@@ -453,7 +453,11 @@ export function createApp(opts: AppOptions): Express {
     // rv3 MF-6: the key-idea sections are resolved at most once for the whole page (never per concept card)
     let sections: ResolvedSection[] | undefined;
     const resolved = (): ResolvedSection[] => (sections ??= resolveSections(deps.db));
-    const items = reviewQueue(deps.db, nowMs(deps.clock), q.limit ?? DEFAULT_QUEUE_LIMIT).map((it) => {
+    // rv3 W10c: a released redo card and a due re-check come first (engines/fsrs.ts priorityFirst)
+    const t = nowMs(deps.clock);
+    const limit = q.limit ?? DEFAULT_QUEUE_LIMIT;
+    const first = priorityDueRows(deps.db, t);
+    const items = priorityFirst(first, reviewQueue(deps.db, t, limit + first.length), limit).map((it) => {
       const card = reviewCardText(deps.seedItems, it.cardKey) ?? (it.kind === 'concept' ? conceptCardText(deps.db, deps.seedItems, it.cardKey, resolved()) : undefined);
       return card ? { ...it, card } : it;
     });
