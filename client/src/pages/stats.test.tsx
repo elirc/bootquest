@@ -300,3 +300,31 @@ describe('release (UI-FINAL leftover): rate-chart row labels do not overhang x=0
     for (const l of labels) expect(Number(l.getAttribute('x'))).toBe(RATE_LABEL_INSET);
   });
 });
+
+describe('rv3 W10b: the competency table on Stats gets the real due-retest set', () => {
+  const retestLeg = async (): Promise<HTMLElement> => {
+    const table = await waitFor(() => {
+      const el = document.querySelector<HTMLElement>('table.comp-table');
+      expect(el).not.toBeNull();
+      return el!;
+    }, { timeout: 15_000 });
+    return table.querySelector<HTMLElement>('[data-competency="language-fluency"] [data-leg="retest"]')!;
+  };
+  const withRetest = (due: boolean): BootQuestApi => {
+    const base = createMockApi();
+    const retests = [{ reviewItemId: 8, unitId: 102, title: 'Changed example', dueAt: Date.now() - 3_600_000, artifactUnitId: 106, due }];
+    return { ...base, getDue: async () => ({ ...(await base.getDue()), retests }) };
+  };
+
+  it('a due retest reads "open now" on its leg (it read nothing before: the set was always empty)', async () => {
+    renderApp('/stats', withRetest(true));
+    const leg = await retestLeg();
+    await waitFor(() => expect(leg).toHaveTextContent('open now'), { timeout: 15_000 });
+  });
+
+  it('a retest that is not due yet does not', async () => {
+    renderApp('/stats', withRetest(false));
+    const leg = await retestLeg();
+    expect(leg).not.toHaveTextContent('open now');
+  });
+});
