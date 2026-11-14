@@ -31,8 +31,8 @@ import { ID_RE, ImportError, readModules, SYSDRILLS_EXPECTED, type SysdrillsExer
  * Import-time refusals (throw ImportError, write nothing): ids not NN-kebab,
  * duplicate slug, empty instructions / starter / solution / tests, duplicate test
  * names, solution === starter, a starter without TODO, a test whose code never
- * touches `mod.`, difficulty outside 1..3, a hint 3 that reads as code (see
- * hintThreeCode), a "Your task" section that hands over the formula in backticks
+ * touches `mod.`, difficulty outside 1..3, a hint 2 that reads as code (see
+ * hintProseCode), a "Your task" section that hands over the formula in backticks
  * (see taskFormulaSpans), and a census that differs from the expected counts.
  * Output is deterministic: same authoring bytes → same pack bytes (the
  * manifest's importedFrom.path / gitHead / dirty record where it came from).
@@ -72,10 +72,11 @@ export const ARITHMETIC_RE = /[×÷⌈⌉⌊⌋]|\s[-−+*/%]\s|[\w)]\s*[+−]\s
 const HINT_CODE_RE = /;|=>|\breturn\b|[()]/;
 
 /**
- * Why hint 3 reads as code, or null. Hint 3 is the approach in words (SEEDING §3
- * sysdrills): no `;`, `=>`, `return`, parentheses, or arithmetic inside backticks.
+ * Why a hint reads as code, or null. Hint 2 of a three-hint ladder is the approach in words
+ * (SEEDING §3 sysdrills; hint 3 was until the rv wave, R3-09): no `;`, `=>`, `return`,
+ * parentheses, or arithmetic inside backticks.
  */
-export function hintThreeCode(hint: string): string | null {
+export function hintProseCode(hint: string): string | null {
   const tok = HINT_CODE_RE.exec(hint);
   if (tok) return `contains ${JSON.stringify(tok[0])}`;
   const span = (hint.match(/`[^`]*`/g) ?? []).find((s) => ARITHMETIC_RE.test(s));
@@ -97,7 +98,7 @@ export function taskSection(instructions: string): string {
 
 /**
  * Backtick spans in the "Your task" section that hold arithmetic or a formula.
- * The task states semantics, units and rounding; the formula belongs in hint 2.
+ * The task states semantics, units and rounding; the formula belongs in hint 3.
  */
 export function taskFormulaSpans(instructions: string): string[] {
   return (taskSection(instructions).match(/`[^`]*`/g) ?? []).filter((s) => ARITHMETIC_RE.test(s));
@@ -130,11 +131,13 @@ export function mapExercise(module: string, ex: SysdrillsExercise, position: num
   }
   const formula = taskFormulaSpans(ex.instructions);
   if (formula.length > 0) {
-    fail(`"Your task" hands over the formula in backticks (${formula.slice(0, 3).join(', ')}): state semantics, units and rounding there and move the formula to hint 2`);
+    fail(`"Your task" hands over the formula in backticks (${formula.slice(0, 3).join(', ')}): state semantics, units and rounding there and move the formula to hint 3`);
   }
-  const h3 = ex.hints?.[2];
-  const code = h3 === undefined ? null : hintThreeCode(h3);
-  if (code !== null) fail(`hint 3 must be the approach in words, never pasteable code (no \`;\`, \`=>\`, \`return\`, parentheses or arithmetic in backticks): it ${code}`);
+  // rv wave (R3-09): in a three-hint ladder hint 2 is the approach in words and hint 3 the formula;
+  // the server serves every hint but the last, so the served ladder never hands over the formula
+  const h2 = ex.hints !== undefined && ex.hints.length >= 3 ? ex.hints[1] : undefined;
+  const code = h2 === undefined ? null : hintProseCode(h2);
+  if (code !== null) fail(`hint 2 must be the approach in words, never pasteable code (no \`;\`, \`=>\`, \`return\`, parentheses or arithmetic in backticks; the formula is hint 3): it ${code}`);
 
   const key = stableKey(module, ex.slug);
   const spec = CheckSpec.parse({ type: 'drill-js', language: 'js', tests: ex.tests, timeoutMs: DRILL_TIMEOUT_MS });

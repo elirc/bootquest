@@ -8,7 +8,7 @@ import { readPack } from '@bootquest/server/packs';
 import {
   DEFAULT_AUTHORING_DIR,
   DEFAULT_OUT_DIR,
-  hintThreeCode,
+  hintProseCode,
   ImportError,
   importSysdrills,
   mapExercise,
@@ -235,7 +235,7 @@ describe('import-time refusals (write nothing)', () => {
   });
 });
 
-describe('seed:import:sysdrills shape gates (task line and hint 3)', () => {
+describe('seed:import:sysdrills shape gates (task line and hint 2)', () => {
   const task = (yourTask: string) =>
     [
       '**Interview prompt.** "How many requests are in flight?"',
@@ -243,7 +243,7 @@ describe('seed:import:sysdrills shape gates (task line and hint 3)', () => {
       `**Your task.** ${yourTask}`,
       '**Worked example.** 200 QPS × 50 ms → `200 × 50 / 1000` = **10**.',
     ].join('\n\n');
-  const hinted = (h3: string) => exercise({ hints: ['Rate times time.', 'inFlight = qps × latencyMs ÷ 1000.', h3] });
+  const hinted = (h2: string) => exercise({ hints: ['Rate times time.', h2, 'inFlight = qps × latencyMs ÷ 1000.'] });
 
   it('taskSection runs from the Your task marker to the next bold paragraph header', () => {
     const t = taskSection(task('Export `inFlight(qps, latencyMs)` → requests in flight.'));
@@ -255,7 +255,7 @@ describe('seed:import:sysdrills shape gates (task line and hint 3)', () => {
   });
 
   it('refuses a "Your task" that hands over the formula in backticks, and writes nothing', () => {
-    refuse([exercise({ instructions: task('Export `inFlight(qps, latencyMs)` → `qps × latencyMs / 1000`.') })], /"Your task" hands over the formula in backticks .*move the formula to hint 2/);
+    refuse([exercise({ instructions: task('Export `inFlight(qps, latencyMs)` → `qps × latencyMs / 1000`.') })], /"Your task" hands over the formula in backticks .*move the formula to hint 3/);
     const formulas = [
       '`qps × latencyMs ÷ 1000`',
       '`Math.ceil(items / batchSize)`',
@@ -285,8 +285,8 @@ describe('seed:import:sysdrills shape gates (task line and hint 3)', () => {
     expect(taskFormulaSpans('No task section, only `a × b` in prose.')).toEqual([]);
   });
 
-  it('refuses a hint 3 that reads as code, and writes nothing', () => {
-    refuse([hinted('return (qps * latencyMs) / 1000;')], /hint 3 must be the approach in words, never pasteable code.*contains/);
+  it('refuses a hint 2 that reads as code, and writes nothing (rv R3-09: hint 2 is served, the formula is hint 3)', () => {
+    refuse([hinted('return (qps * latencyMs) / 1000;')], /hint 2 must be the approach in words, never pasteable code.*contains/);
     const code: [string, RegExp][] = [
       ['Multiply the rate by the time; then divide by 1,000', /contains ";"/],
       ['parts.reduce of acc => acc times p', /contains "=>"/],
@@ -294,28 +294,31 @@ describe('seed:import:sysdrills shape gates (task line and hint 3)', () => {
       ['Multiply the rate by the time (in seconds)', /contains "\("/],
       ['Use `qps × latencyMs ÷ 1000` and you are done', /has arithmetic in backticks/],
     ];
-    for (const [h3, re] of code) {
-      expect(hintThreeCode(h3), h3).not.toBeNull();
-      expect(() => mapExercise('01-alpha', hinted(h3), 0), h3).toThrow(re);
+    for (const [h2, re] of code) {
+      expect(hintProseCode(h2), h2).not.toBeNull();
+      expect(() => mapExercise('01-alpha', hinted(h2), 0), h2).toThrow(re);
     }
   });
 
-  it('accepts a prose hint 3, a hint 2 with the formula, and drills with fewer than three hints', () => {
+  it('accepts a prose hint 2, a hint 3 with the formula, and drills with fewer than three hints', () => {
     const prose = 'Convert the latency from milliseconds to seconds, then multiply it by the arrival rate for the in-flight count, rounding any fraction up.';
-    expect(hintThreeCode(prose)).toBeNull();
-    expect(hintThreeCode('Reuse the `latencyMs` input and the 03/04 `exponential-backoff` rule.')).toBeNull();
+    expect(hintProseCode(prose)).toBeNull();
+    expect(hintProseCode('Reuse the `latencyMs` input and the 03/04 `exponential-backoff` rule.')).toBeNull();
     expect(() => mapExercise('01-alpha', hinted(prose), 0)).not.toThrow();
     expect(() => mapExercise('01-alpha', exercise({ hints: ['a', 'x = (a + b) × 2;'] }), 0)).not.toThrow();
     expect(() => mapExercise('01-alpha', exercise({ hints: undefined }), 0)).not.toThrow();
   });
 
-  it('every committed sysdrill passes both gates (no task formula, hint 3 in words)', () => {
+  it('every committed sysdrill passes both gates (no task formula, hint 2 in words) and keeps its formula in hint 3', () => {
     const flagged: string[] = [];
     for (const m of readModules(DEFAULT_AUTHORING_DIR)) {
       for (const ex of m.exercises) {
         if (taskFormulaSpans(ex.instructions).length > 0) flagged.push(`${m.module}/${ex.slug}: task formula`);
-        const h3 = ex.hints?.[2];
-        if (h3 !== undefined && hintThreeCode(h3) !== null) flagged.push(`${m.module}/${ex.slug}: hint 3 code`);
+        const h2 = ex.hints?.[1];
+        if (h2 !== undefined && hintProseCode(h2) !== null) flagged.push(`${m.module}/${ex.slug}: hint 2 code`);
+        if ((ex.hints?.length ?? 0) !== 3) flagged.push(`${m.module}/${ex.slug}: ${ex.hints?.length ?? 0} hints`);
+        // the starter's TODOs say what to write, never how (R2-08)
+        if (ex.starter.includes('// TODO:')) flagged.push(`${m.module}/${ex.slug}: starter TODO states the model`);
       }
     }
     expect(flagged).toEqual([]);
