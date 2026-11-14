@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { useApi } from '../api/context';
 import { errorText } from '../api/errors';
 import {
@@ -37,6 +37,9 @@ import { CodeEditor } from './Player/Editor';
 import { HintBar, hintedXpNote } from './Player/HintBar';
 import { LessonProse } from './Player/LessonAids';
 import { NextStep } from './Player/NextStep';
+import { NotebookLine } from './Player/NotebookLine';
+import { RedoBar } from './Player/RedoBar';
+import { SectionRecapLinks } from './KeyIdeas';
 import { RevealPanel, promotionLeg, type Solution } from './Player/RevealFlow';
 import { rememberWhyOpen, whyOpenStored, WhyItWorksProse } from './Player/WhyItWorks';
 import { fmtWhen } from '../lib/format';
@@ -491,6 +494,7 @@ function SubmitFollowUp({ submit, unit }: { submit: SubmitResponse; unit: UnitDe
     <>
       {promotions.length > 0 && <Promotions promotions={promotions} />}
       {submit.verdict === 'pass' && <NextStep unit={unit} submit={submit} />}
+      {submit.verdict === 'pass' && <SectionRecapLinks unitKey={unit.key} />}
     </>
   );
 }
@@ -525,6 +529,10 @@ const attemptCode = (answer: unknown): string | null =>
 function CodePane({ detail, spec, onSubmitted }: { detail: UnitDetail; spec: PublicCheck; onSubmitted?: () => void }) {
   const api = useApi();
   const id = detail.unit.id;
+  // rv2 S1: opened from a redo card (/play/:unitId?redo=<itemId>): the redo bar grades only that card
+  const [params] = useSearchParams();
+  const redoRaw = params.get('redo');
+  const redoId = redoRaw !== null && /^[1-9]\d{0,14}$/.test(redoRaw) ? Number(redoRaw) : null;
   const starter = detail.starter ?? '';
   // Drafts are keyed by unit + content hash: a re-seed (new check row or starter) starts clean.
   const family = `code:${id}:`;
@@ -736,6 +744,7 @@ function CodePane({ detail, spec, onSubmitted }: { detail: UnitDetail; spec: Pub
           <Kbd>Enter</Kbd>
         </button>
       </div>
+      {redoId !== null && <RedoBar itemId={redoId} code={code} />}
       <HintBar unitId={id} refreshKey={hintRefresh} onState={(h) => (hintState.current = h)} />
       <Results outcome={outcome} error={error} busy={busy !== null} unit={detail.unit} />
     </section>
@@ -770,6 +779,7 @@ function Results({ outcome, error, busy, unit }: { outcome: Outcome | null; erro
             {outcome?.kind === 'submit' && <XpLine submit={outcome.submit} hintNote={outcome.hintNote} />}
           </div>
           {outcome?.kind === 'submit' && <SubmitFollowUp submit={outcome.submit} unit={unit} />}
+          {outcome?.kind === 'submit' && outcome.submit.verdict !== 'pass' && <NotebookLine key={outcome.submit.attempt.id} unitId={unit.id} attemptId={outcome.submit.attempt.id} />}
           {result.failures.length > 0 && (
             <ol className="tests">
               {result.failures.map((f, i) => (

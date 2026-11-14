@@ -98,6 +98,16 @@ import {
   type GateStatusResponse,
   type PracticeResponse,
   type UnitSourceResponse,
+  type ConceptCardResponse,
+  type ErrorNoteDto,
+  type ErrorNoteResponse,
+  type KeyIdeaQueueResponse,
+  type KeyIdeasResponse,
+  type NotebookResponse,
+  type RecapPromptsResponse,
+  type RecapRevealResponse,
+  type RecapSubmitResponse,
+  type RedoRunResponse,
 } from './types';
 import type { XpByTrack } from '@bootquest/shared/api';
 import { G1_MIN_DEFECTS, G1_TARGET_RATE, PROMOTION_MIN_COVERAGE } from '@bootquest/shared/thresholds';
@@ -289,6 +299,8 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
   // B4: the written-unit fixtures (answer first, then the model answer)
   for (const w of Object.values(writtenFixtures)) units[w.unit.trackId] = [...(units[w.unit.trackId] ?? []), clone(w.unit)];
   const writtenAnswers = new Map<number, { attemptId: number; answer: string; at: number }>();
+  // rv2 S1: the error notebook, newest first
+  const notebook: ErrorNoteDto[] = [];
   const studyMissCards = new Set<string>();
   const studyPassed = new Set<number>();
   // "Learn more": units with a graded study-quiz submit, and code units with a verified pass
@@ -1656,6 +1668,53 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
         const sha = '0123456789abcdef0123456789abcdef01234567';
         const g2 = spec.type === 'explain-back' && (explainBackFixtures[String(id)]?.questions[0]?.prompt ?? '').startsWith('G2 BRIEF');
         return { unitId: id, repo, sha, url: `https://github.com/elirc/${repo}/tree/${sha}`, openBook: g2 };
+      }),
+
+    // ---- rv2 S1: key ideas (the mock has no side files: no sections, nothing due) + the error notebook
+    getKeyIdeas: () => wrap((): KeyIdeasResponse => ({ sections: [], tiles: [], recapsOpen: [], dueCards: 0 })),
+    getKeyIdeaQueue: () => wrap((): KeyIdeaQueueResponse => ({ count: 0, items: [], tags: [] })),
+    getConceptCard: (itemId) =>
+      wrap((): ConceptCardResponse => {
+        throw err(404, 'NOT_FOUND', `review item ${itemId} is not a concept card in the mock`);
+      }),
+    getRecap: (section) =>
+      wrap((): RecapPromptsResponse => {
+        throw err(404, 'NOT_FOUND', `no key-ideas section ${section}`);
+      }),
+    getRecheck: (itemId) =>
+      wrap((): RecapPromptsResponse => {
+        throw err(409, 'WRONG_UNIT_KIND', `review item ${itemId} is not a re-check`);
+      }),
+    revealIdea: (section) =>
+      wrap((): RecapRevealResponse => {
+        throw err(404, 'NOT_FOUND', `no key-ideas section ${section}`);
+      }),
+    submitRecap: (section) =>
+      wrap((): RecapSubmitResponse => {
+        throw err(404, 'NOT_FOUND', `no key-ideas section ${section}`);
+      }),
+    submitRecheck: (itemId) =>
+      wrap((): RecapSubmitResponse => {
+        throw err(409, 'WRONG_UNIT_KIND', `review item ${itemId} is not a re-check`);
+      }),
+    runRedo: (itemId) =>
+      wrap((): RedoRunResponse => {
+        throw err(409, 'WRONG_UNIT_KIND', `review item ${itemId} is not a redo card`);
+      }),
+    addNote: (b) =>
+      wrap((): ErrorNoteResponse => {
+        const u = findUnit(b.unitId);
+        if (!u) throw err(404, 'NOT_FOUND', `unit ${b.unitId} not found`);
+        const id = nextId++;
+        const note: ErrorNoteDto = { id, unitId: b.unitId, unitTitle: u.title, attemptId: b.attemptId ?? null, line: b.line.trim(), category: b.category, createdAt: NOW, cardKey: `note:${id}` };
+        notebook.unshift(note);
+        return { note, cardDueAt: NOW + DAY_MS };
+      }),
+    getNotebook: () =>
+      wrap((): NotebookResponse => {
+        const counts = new Map<ErrorNoteDto['category'], number>();
+        for (const e of notebook) counts.set(e.category, (counts.get(e.category) ?? 0) + 1);
+        return { entries: [...notebook], categories: [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([category, count]) => ({ category, count })) };
       }),
   };
 }
