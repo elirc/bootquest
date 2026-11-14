@@ -57,7 +57,7 @@ import { gradeReview, runUnit, type ServiceDeps } from './service.ts';
 
 /**
  * rv2 S1 (PLAN §2.1 items 1-6; F1, F2): the key-ideas layer's API.
- *   GET  /keyideas[?track=&unit=]        sections, ideas (prompt / answer / why ONLY once the idea is met), tiles
+ *   GET  /keyideas[?track=&unit=]        sections, ideas (idea / prompt / answer / why ONLY once the idea is met), tiles
  *   GET  /keyideas/queue[?tag=&limit=]   due key-idea cards, interleaved across sections (cap 12; 10-min mode 5)
  *   GET  /keyideas/cards/:itemId         what a concept card is about (source links, the redo drill); no answer
  *   GET  /keyideas/recap/:section        the recap prompts (open recap only)
@@ -212,8 +212,10 @@ export function getKeyIdeas(deps: Deps, q: z.infer<typeof KeyIdeasQuery>): KeyId
       recap: recaps.find((r) => r.s === s)!.r,
       ideas: s.ideas.map((i): KeyIdeaDto => {
         const met = metAt(i, passed) !== null;
-        const base: KeyIdeaDto = { id: i.idea.id, idea: i.idea.idea, tags: [...i.idea.tags], status: status.get(cardKeyOf(KEYIDEA_PREFIX, i.section, i.idea.id))!, sources: sourceDtos(i, passed) };
-        // the leak rule (PLAN §5.3): prompt / answer / why leave the server only once every live source is passed
+        // rv3 MF-4: the idea sentence often restates a source's gate key, so it is withheld too: '' until met (the
+        // shared DTO keeps `idea` a required string; the fold shows "opens once you pass <sources>" instead)
+        const base: KeyIdeaDto = { id: i.idea.id, idea: met ? i.idea.idea : '', tags: [...i.idea.tags], status: status.get(cardKeyOf(KEYIDEA_PREFIX, i.section, i.idea.id))!, sources: sourceDtos(i, passed) };
+        // the leak rule (PLAN §5.3): idea / prompt / answer / why leave the server only once every live source is passed
         return met ? { ...base, prompt: i.idea.prompt, answer: i.idea.answer, why: i.idea.why } : base;
       }),
     })),

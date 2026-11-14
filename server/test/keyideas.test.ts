@@ -157,16 +157,16 @@ describe('key-concept cards (F1)', () => {
     const src = readKeyIdeas(CONTENT).sections.get('fx-alpha')!.ideas.find((i) => i.id === 'keyset-pagination')!;
     expect(r.text).not.toContain(src.answer);
     expect(r.text).not.toContain(src.prompt);
+    // rv3 MF-4: nor the idea sentence (it often restates a source's gate key); a met idea carries it
+    expect(waiting.idea).toBe('');
+    expect(r.text).not.toContain(src.idea);
+    expect(met.idea).toBe(readKeyIdeas(CONTENT).sections.get('fx-alpha')!.ideas.find((i) => i.id === 'idempotent-write')!.idea);
     expect(body.tiles.find((t) => t.track === 'js')).toEqual({ track: 'js', owned: 0, shaky: 1, notMet: 4 });
     expect(body.tiles.find((t) => t.track === 'sysdesign')).toEqual({ track: 'sysdesign', owned: 0, shaky: 0, notMet: 3 });
     // ?unit= narrows the sections to those that contain the unit
     expect(((await request(app).get('/api/keyideas').query({ unit: 'kx/b/02' })).body as KeyIdeasResponse).sections.map((s) => s.section)).toEqual(['fx-beta']);
   });
 
-  it('an unknown key warns once and the routes answer; no content/keyideas/ = no ideas, nothing breaks', async () => {
-    const warn = vi.mocked(console.warn);
-    warn.mockClear();
-    await request(app).get('/api/keyideas');
   it('rv3 MF-6: /reviews/queue resolves the key-idea sections at most once per request (never per concept card), and not at all when nothing changed', async () => {
     for (const k of ['kx/a/01', 'kx/a/02', 'kx/b/01', 'kx/b/02', 'kx/b/03']) submit(tmp.db, clock, ids[k]!);
     syncKeyIdeaCards(tmp.db, clock);
@@ -193,6 +193,10 @@ describe('key-concept cards (F1)', () => {
     expect(fullResolves()).toBe(0);
   });
 
+  it('an unknown key warns once and the routes answer; no content/keyideas/ = no ideas, nothing breaks', async () => {
+    const warn = vi.mocked(console.warn);
+    warn.mockClear();
+    await request(app).get('/api/keyideas');
     await request(app).get('/api/keyideas');
     const unknown = warn.mock.calls.filter((c) => String(c[0]).includes('kx/does-not-exist'));
     expect(unknown).toHaveLength(1);

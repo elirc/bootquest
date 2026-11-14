@@ -112,7 +112,7 @@ const IDEAS: KeyIdeasResponse = {
       recap: { state: 'open', passed: 2, total: 3, needed: 2, doneAt: null },
       ideas: [
         { id: 'met', idea: 'Invalidate on write.', tags: ['caching'], status: 'shaky', sources: [{ key: 'kx/b/01', unitId: 5, title: 'Caching 01', passed: true }], prompt: 'A price is stale. Why?', answer: 'Delete the entry in the write path.', why: 'Stale reads.' },
-        { id: 'waiting', idea: 'Guard the stampede.', tags: ['caching'], status: 'not-met', sources: [{ key: 'kx/b/03', unitId: 6, title: 'Caching 03', passed: false }] },
+        { id: 'waiting', idea: '', tags: ['caching'], status: 'not-met', sources: [{ key: 'kx/b/03', unitId: 6, title: 'Caching 03', passed: false }] },
       ],
     },
   ],
@@ -122,13 +122,14 @@ const IDEAS: KeyIdeasResponse = {
 };
 
 describe('Key ideas page, dashboard tile and the section recap', () => {
-  it('the fold lists every idea sentence; the answer only for a met idea; the unmet one names what to pass', async () => {
+  it('the fold lists the met idea sentences and answers; the unmet one shows neither and names what to pass', async () => {
     renderApp('/keyideas', { ...createMockApi(), getKeyIdeas: async () => IDEAS });
     const fold = await screen.findByTestId('keyidea-fold-fx-beta');
     expect(within(fold).getByTestId('keyidea-met')).toHaveTextContent('Delete the entry in the write path.');
     const waiting = within(fold).getByTestId('keyidea-waiting');
-    expect(waiting).toHaveTextContent('Guard the stampede.');
-    expect(within(waiting).getByTestId('keyidea-locked')).toHaveTextContent('Caching 03');
+    // rv3 MF-4: the server sends no idea sentence for an unmet idea; the row says what to pass
+    expect(waiting).toHaveTextContent('An idea you meet in its sources.');
+    expect(within(waiting).getByTestId('keyidea-locked')).toHaveTextContent('The idea and its answer open once you pass: Caching 03');
     expect(within(fold).getByRole('link', { name: 'Section recap' })).toHaveAttribute('href', '/keyideas?recap=fx-beta');
   });
 
