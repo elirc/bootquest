@@ -3876,6 +3876,182 @@
     "fund-csharp/22-httpclient-timeouts-retries-and-cancellation/01-attempt-timeout-or-caller-cancelled",
     "fund-csharp/22-httpclient-timeouts-retries-and-cancellation/02-retry-safe-requests-within-a-budget"
    ]
+  },
+  {
+   "id": "23-authentication-authorization-and-resource-checks",
+   "order": 23,
+   "title": "Authentication vs authorization & resource-based checks",
+   "level": "advanced",
+   "summary": "401 versus 403, what authentication middleware does and does not do, claims and roles on a ClaimsPrincipal, how a policy's requirements and handlers combine, resource-based checks with IAuthorizationService, deny-by-default fallback policies, and tenant filters that live in the query.",
+   "lesson": "## Authentication says who, authorization says what\n\nAuthentication turns credentials (a cookie, a bearer token) into a `ClaimsPrincipal` on `HttpContext.User`. It does not reject anyone: a request without credentials simply carries an anonymous user. Authorization then decides whether that user may run this endpoint. The two failures have two status codes:\n\n- **401 Unauthorized**: the caller is not authenticated. The scheme answers with a challenge (a `WWW-Authenticate` header for bearer tokens, a login redirect for cookies).\n- **403 Forbidden**: the caller is known but not allowed. Signing in again will not help.\n\n## Claims, roles and the principal\n\nA `ClaimsIdentity` is a bag of claims (`sub`, `email`, `role`, `tenant`) plus an authentication type. `User.Identity.IsAuthenticated` is true only when that authentication type is set, so an identity built in a test with claims but no type still counts as anonymous. `User.IsInRole(\"admin\")` looks for a claim of the identity's role claim type with that value, and `User.FindFirst(ClaimTypes.NameIdentifier)` reads the user id.\n\n## Policies: every requirement must pass\n\n```csharp\nbuilder.Services.AddAuthorization(options =>\n    options.AddPolicy(\"CanRefund\", p => p.RequireRole(\"support\").RequireClaim(\"scope\", \"refunds\")));\n\napp.MapPost(\"/refunds\", Refund).RequireAuthorization(\"CanRefund\");\n```\n\nA policy is a list of requirements, and each requirement is checked by handlers (`AuthorizationHandler<TRequirement>`). The policy succeeds only when EVERY requirement has been marked succeeded by some handler and no handler called `Fail()`. One `Fail()` denies the whole check, whatever the other handlers said, which is how a \"suspended account\" handler can veto everything.\n\n## Resource-based checks: load first, then decide\n\n`[Authorize(Policy = \"...\")]` runs before the endpoint has loaded anything, so it cannot know who owns invoice 77. Load the resource, then ask the authorization service with it:\n\n```csharp\nvar invoice = await db.Invoices.FindAsync(id);\nif (invoice is null) return Results.NotFound();\nvar result = await auth.AuthorizeAsync(User, invoice, \"CanApproveInvoice\");\nif (!result.Succeeded) return Results.Forbid();\n```\n\nThe handler for that policy receives the invoice as `context.Resource` and can compare its owner and tenant with the user's claims. For a resource of another tenant, many APIs answer 404 instead of 403, so ids cannot be probed across tenants.\n\n## Deny by default\n\nAn endpoint with no authorization metadata is open to anyone. Set a fallback policy, `options.FallbackPolicy = new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build()`, so every new endpoint needs a signed-in user unless it says `[AllowAnonymous]`. The default policy is different: it is what a bare `[Authorize]` (no policy named) applies.\n\n## Filter in the query, not after it\n\nAn insecure direct object reference (IDOR) is an endpoint that trusts an id from the request without checking the caller may see that object. For lists the fix belongs in the query: `db.Orders.Where(o => o.TenantId == tenantId)`, or a global query filter on `TenantId`, so rows of other tenants never leave the database and page counts stay right. Removing foreign rows after loading a page leaks them the day someone forgets the check.\n",
+   "quiz": [
+    {
+     "key": "fund:csharp/23-authentication-authorization-and-resource-checks/q01",
+     "prompt": "A request with no credentials calls an endpoint that requires an authenticated user. What does ASP.NET Core answer?",
+     "choices": [
+      "403 Forbidden, because nobody is allowed in",
+      "401 Unauthorized, through the scheme's challenge",
+      "404 Not Found, so that the endpoint stays hidden",
+      "200 OK, with an empty body for the anonymous user"
+     ],
+     "answer": 1,
+     "explanation": "The caller is not authenticated, so the authentication scheme challenges: 401 with WWW-Authenticate for bearer tokens, a login redirect for cookies."
+    },
+    {
+     "key": "fund:csharp/23-authentication-authorization-and-resource-checks/q02",
+     "prompt": "A signed-in user with the role \"viewer\" calls an endpoint whose policy requires the role \"admin\". What should the response be?",
+     "choices": [
+      "401, so the user signs in again with more rights",
+      "404, to hide that the admin endpoint exists at all",
+      "403 Forbidden: known user, not permitted here",
+      "400 Bad Request, because the role claim is wrong"
+     ],
+     "answer": 2,
+     "explanation": "The user is known but not permitted. A fresh sign-in would produce the same user and the same answer, so 401 would be misleading."
+    },
+    {
+     "key": "fund:csharp/23-authentication-authorization-and-resource-checks/q03",
+     "prompt": "A policy has two requirements. A handler succeeds the first one, and no handler succeeds the second. What is the result?",
+     "choices": [
+      "Allowed: one succeeding handler is enough for the policy",
+      "Denied: every requirement of the policy must succeed",
+      "Allowed, because nothing ever evaluated the second one",
+      "An exception, because a requirement has no handler"
+     ],
+     "answer": 1,
+     "explanation": "A policy succeeds only when every requirement is marked succeeded. A requirement nobody succeeds leaves the policy failed."
+    },
+    {
+     "key": "fund:csharp/23-authentication-authorization-and-resource-checks/q04",
+     "prompt": "For one requirement, handler A calls `Succeed` and handler B calls `Fail`. What is the result?",
+     "choices": [
+      "Denied: an explicit Fail wins over any Succeed",
+      "Allowed: one Succeed is enough for each requirement",
+      "It depends on the order the handlers were registered",
+      "Allowed, and the failure is only written to the log"
+     ],
+     "answer": 0,
+     "explanation": "Fail marks the whole authorization check as failed, whatever other handlers did. That is how a veto handler (a suspended account) works."
+    },
+    {
+     "key": "fund:csharp/23-authentication-authorization-and-resource-checks/q05",
+     "prompt": "Why can `[Authorize(Policy = \"CanEditDocument\")]` on the endpoint not check that the caller owns document 42?",
+     "choices": [
+      "Attributes are evaluated once at startup, never per request",
+      "Policies cannot read any of the user's claims",
+      "It runs before the document is loaded, so there is no resource to check",
+      "Route values are hidden from the authorization layer"
+     ],
+     "answer": 2,
+     "explanation": "Endpoint authorization runs before your code, with no resource. Load the document first and call IAuthorizationService.AuthorizeAsync with it."
+    },
+    {
+     "key": "fund:csharp/23-authentication-authorization-and-resource-checks/q06",
+     "prompt": "Which line is a resource-based authorization check?",
+     "choices": [
+      "`[Authorize(Roles = \"Owner\")]` on the endpoint",
+      "`await auth.AuthorizeAsync(User, doc, \"EditPolicy\")` after loading doc",
+      "`if (User.Identity!.IsAuthenticated)` before loading doc",
+      "`User.IsInRole(doc.OwnerId)` inside the query"
+     ],
+     "answer": 1,
+     "explanation": "AuthorizeAsync with the loaded resource lets the policy's handlers compare the document's owner and tenant with the user's claims."
+    },
+    {
+     "key": "fund:csharp/23-authentication-authorization-and-resource-checks/q07",
+     "prompt": "A user of tenant A requests `/invoices/77`, which belongs to tenant B. Which answer gives away the least?",
+     "choices": [
+      "404 Not Found, as if the invoice did not exist",
+      "403 Forbidden, naming the tenant that owns it",
+      "200 OK, with every amount blanked out",
+      "401 Unauthorized, asking for a sign-in to tenant B"
+     ],
+     "answer": 0,
+     "explanation": "404 does not confirm that invoice 77 exists, so ids cannot be probed across tenants. A 403 tells the caller the id is real."
+    },
+    {
+     "key": "fund:csharp/23-authentication-authorization-and-resource-checks/q08",
+     "prompt": "What changes when the fallback policy is set to require an authenticated user?",
+     "choices": [
+      "Endpoints marked [Authorize] now also need a role",
+      "Anonymous users are sent to the login page on every request",
+      "Endpoints marked [AllowAnonymous] now need a signed-in user",
+      "Endpoints with no authorization metadata now need a signed-in user"
+     ],
+     "answer": 3,
+     "explanation": "The fallback policy applies only where an endpoint declares nothing. [AllowAnonymous] still opts out, and a bare [Authorize] uses the default policy."
+    },
+    {
+     "key": "fund:csharp/23-authentication-authorization-and-resource-checks/q09",
+     "prompt": "A test builds `new ClaimsPrincipal(new ClaimsIdentity(claims))`, with claims but no authentication type. What is `User.Identity.IsAuthenticated`?",
+     "choices": [
+      "true, because the identity carries claims",
+      "true, but only when one claim is a NameIdentifier",
+      "false: without an authentication type it is anonymous",
+      "It throws, because the authentication type is required"
+     ],
+     "answer": 2,
+     "explanation": "IsAuthenticated reports whether an authentication type was set, not whether claims exist. Pass a type such as \"Test\" to the identity."
+    },
+    {
+     "key": "fund:csharp/23-authentication-authorization-and-resource-checks/q10",
+     "prompt": "Where is the safest place to enforce \"users see only their own tenant's orders\" in a list endpoint?",
+     "choices": [
+      "In the client, which hides the rows of other tenants",
+      "In the query, for example a global filter on TenantId",
+      "In a check that drops foreign rows from each loaded page",
+      "In the endpoint's [Authorize] attribute"
+     ],
+     "answer": 1,
+     "explanation": "A filter in the query keeps other tenants' rows in the database and keeps counts and pages right; a global query filter applies it to every query by default."
+    }
+   ],
+   "flashcards": [
+    {
+     "key": "fund:csharp/23-authentication-authorization-and-resource-checks/c01",
+     "front": "401 versus 403",
+     "back": "401: the request is not authenticated, so the scheme challenges; 403: the caller is known but not allowed."
+    },
+    {
+     "key": "fund:csharp/23-authentication-authorization-and-resource-checks/c02",
+     "front": "What does authentication middleware do with a request that has no credentials?",
+     "back": "It leaves HttpContext.User anonymous and lets the request through; authorization decides later whether to challenge."
+    },
+    {
+     "key": "fund:csharp/23-authentication-authorization-and-resource-checks/c03",
+     "front": "How are a policy's requirements combined?",
+     "back": "All of them must succeed; a requirement succeeds when some handler calls Succeed, and a single Fail denies the check."
+    },
+    {
+     "key": "fund:csharp/23-authentication-authorization-and-resource-checks/c04",
+     "front": "Resource-based authorization",
+     "back": "Load the resource first, then call IAuthorizationService.AuthorizeAsync with the user, the resource and a policy or requirement."
+    },
+    {
+     "key": "fund:csharp/23-authentication-authorization-and-resource-checks/c05",
+     "front": "Default policy versus fallback policy",
+     "back": "The default policy is what [Authorize] with no policy name applies; the fallback policy covers endpoints that declare no authorization at all."
+    },
+    {
+     "key": "fund:csharp/23-authentication-authorization-and-resource-checks/c06",
+     "front": "What does User.IsInRole check?",
+     "back": "Whether the principal has a claim of its identity's role claim type with that exact value."
+    },
+    {
+     "key": "fund:csharp/23-authentication-authorization-and-resource-checks/c07",
+     "front": "Why answer 404 for another tenant's resource?",
+     "back": "It does not confirm that the id exists, so a caller cannot probe ids that belong to other tenants."
+    },
+    {
+     "key": "fund:csharp/23-authentication-authorization-and-resource-checks/c08",
+     "front": "IDOR",
+     "back": "Insecure direct object reference: an endpoint acts on an id from the request without checking that the caller may access that object."
+    }
+   ],
+   "drillKeys": [
+    "fund-csharp/23-authentication-authorization-and-resource-checks/01-evaluate-a-policy",
+    "fund-csharp/23-authentication-authorization-and-resource-checks/02-resource-based-invoice-access"
+   ]
   }
  ]
 }
