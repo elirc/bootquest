@@ -4,6 +4,7 @@ import { DAY_MS, nowMs, type Clock } from './clock.ts';
 import { meetsCorePct } from './campaign.ts';
 import { unitCompetencies } from '../store/queries.ts';
 import { addReviewItem, regradeMissedCard, reviveRetiredCard } from './fsrs.ts';
+import { keyIdeas } from '../store/keyideas.ts';
 
 /**
  * W8 study-quest quiz gate (spec §4 "Study quest": reading steps + pre-seeded quiz gate,
@@ -98,8 +99,15 @@ export function queueQuizMisses(db: Db, unitId: number, missedItemKeys: readonly
   return { ...counts, dueAt: row?.d ?? null };
 }
 
-/** The quest's seeded flashcards -> FSRS cards due the next day (first pass; deduped by card key). */
+/**
+ * The quest's seeded flashcards -> FSRS cards due the next day (first pass; deduped by card key).
+ * rv2 S1 (F3, R2-05/M7): a flashcard tagged repo-recall (or listed under noEnrol) in content/seed/card-tags.json
+ * is never enrolled: it stays readable in the pack, it is just not scheduled. Absent file = no filter. Rows that
+ * already exist are untouched (a tagged card enrolled before the tag stays as it is: no retire, no revive).
+ */
 export function enrollFlashcards(db: Db, unitId: number, flashcardItemKeys: readonly string[], now: Clock): number {
-  if (flashcardItemKeys.length === 0) return 0;
-  return enqueue(db, unitId, flashcardItemKeys.map((k) => `${FLASHCARD_CARD_PREFIX}${k}`), 'card', nowMs(now) + DAY_MS, now).created;
+  const noEnrol = keyIdeas().noEnrol;
+  const keys = noEnrol.size === 0 ? flashcardItemKeys : flashcardItemKeys.filter((k) => !noEnrol.has(k));
+  if (keys.length === 0) return 0;
+  return enqueue(db, unitId, keys.map((k) => `${FLASHCARD_CARD_PREFIX}${k}`), 'card', nowMs(now) + DAY_MS, now).created;
 }

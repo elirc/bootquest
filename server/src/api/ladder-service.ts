@@ -28,6 +28,7 @@ import { ebObservation, ebPasses, ebScore, recordEbScoreDetail } from '../engine
 import { PROMOTION_MIN_COVERAGE, promoteIfEligible, recordEvidence } from '../engines/evidence.ts';
 import { artifactsAwaitingSoloPass, EB_SET_MIN_GAP_MS, MutationGateError, openRetests, promotionProgress, recordMutationEvidence, scheduleRetests } from '../engines/ladder.ts';
 import { closeElapsedDays, composeSlate } from '../engines/streak.ts';
+import { enrolEbMisses } from '../engines/redo.ts';
 import { awardXp } from '../engines/xp.ts';
 import { competencyTable, getTrack, getUnit, primaryCheck, unitCompetencies, type CheckRecord, type UnitRecord } from '../store/queries.ts';
 import { explainBackKey, explainBackQuestions, kataKey, kataPublic, seedItemHash, type SeedItemStore } from '../store/seed-items.ts';
@@ -531,6 +532,8 @@ export function selfScoreExplainBack(deps: LadderDeps, unitId: number, body: { p
       const retests = passed ? scheduleRetests(db, attempt.id, clock) : [];
       const promotions = promoteAll(db, competencies, clock);
       composeSlate(db, clock);
+      // rv2 S1 (F2): the enrol hook. Missed [w2]/[w3] key points become ebmiss cards (<= 3, [w3] first); no score change
+      enrolEbMisses(db, unit, explainBackKey(item), body.perKeyPoint, clock);
       return {
         attemptId: attempt.id,
         covered: s.covered,

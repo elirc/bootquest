@@ -54,6 +54,10 @@ import { registerFindRoutes } from './find-routes.ts';
 import { getRefContent } from './service.ts';
 import { getUnitNotes } from './notes-service.ts';
 import { reviewCardText } from './study-service.ts';
+import { conceptCardText, registerKeyIdeaRoutes, syncKeyIdeas } from './keyideas-service.ts';
+import { registerNotebookRoutes } from './notebook-service.ts';
+import { HonestyRuleError } from '../engines/attempts.ts';
+import { RECHECK_PREFIX, REDO_PREFIX } from '../engines/keyideas.ts';
 import { campaignProgress, passRates, reviewStats, xpStats } from './stats-service.ts';
 import { registerS3Routes } from './s3-routes.ts';
 import { defaultRunners, type RunnerRegistry } from './runners.ts';
@@ -181,6 +185,7 @@ export function createApp(opts: AppOptions): Express {
 
   router.get('/dashboard', asyncRoute((req, res) => {
     validate(EmptyQuery, req.query, 'query');
+    syncKeyIdeas(deps); // rv2: key-idea / redo cards earned so far, today's redo released (counts below see them)
     sendJson(res, 200, getDashboard(deps));
   }));
 
@@ -251,13 +256,11 @@ export function createApp(opts: AppOptions): Express {
     const { id } = validate(UnitIdParams, req.params, 'params');
     validate(EmptyQuery, req.query, 'query');
     const body = validate(SubmissionBody, req.body, 'body');
-    sendJson(
-      res,
-      200,
-      SubmitResponse.parse(
-        await submitUnit(deps, id, { code: body.code, answer: body.answer, answers: body.answers, port: body.port, repoPath: body.repoPath, selfAssisted: body.selfAssisted }),
-      ),
+    const out = SubmitResponse.parse(
+      await submitUnit(deps, id, { code: body.code, answer: body.answer, answers: body.answers, port: body.port, repoPath: body.repoPath, selfAssisted: body.selfAssisted }),
     );
+    if (out.verdict === 'pass') syncKeyIdeas(deps); // rv2: a pass may meet a key idea (its card is enrolled now)
+    sendJson(res, 200, out);
   }));
 
   router.post('/units/:id/reveal', asyncRoute((req, res) => {
@@ -285,7 +288,9 @@ export function createApp(opts: AppOptions): Express {
     const { id } = validate(UnitIdParams, req.params, 'params');
     validate(EmptyQuery, req.query, 'query');
     validate(EmptyBody, req.body, 'body');
-    sendJson(res, 200, selfAttestUnit(deps, id));
+    const out = selfAttestUnit(deps, id);
+    syncKeyIdeas(deps);
+    sendJson(res, 200, out);
   }));
 
   router.get('/units/:id/solution', asyncRoute((req, res) => {
@@ -328,7 +333,9 @@ export function createApp(opts: AppOptions): Express {
     const { id } = validate(UnitIdParams, req.params, 'params');
     validate(EmptyQuery, req.query, 'query');
     const body = validate(ExplainBackSelfScoreBody, req.body, 'body');
-    sendJson(res, 200, ExplainBackScoreResponse.parse(selfScoreExplainBack(ladder, id, body)));
+    const out = ExplainBackScoreResponse.parse(selfScoreExplainBack(ladder, id, body));
+    if (out.passed) syncKeyIdeas(deps);
+    sendJson(res, 200, out);
   }));
 
   // explain-back retakes: a PRACTICE re-answer (after the answer of record is self-scored) and its
@@ -364,7 +371,9 @@ export function createApp(opts: AppOptions): Express {
     const { id } = validate(UnitIdParams, req.params, 'params');
     validate(EmptyQuery, req.query, 'query');
     const body = validate(KataSelfScoreBody, req.body, 'body');
-    sendJson(res, 200, KataScoreResponse.parse(selfScoreKata(ladder, id, body)));
+    const out = KataScoreResponse.parse(selfScoreKata(ladder, id, body));
+    syncKeyIdeas(deps);
+    sendJson(res, 200, out);
   }));
 
   // `bootquest mutate`: the server re-evaluates the per-file floor + overall break from the counts
@@ -430,9 +439,11 @@ export function createApp(opts: AppOptions): Express {
 
   router.get('/reviews/queue', asyncRoute((req, res) => {
     const q = validate(ReviewQueueQuery, req.query, 'query');
-    // W8: seeded cards (study-quest misses, flashcards) carry their text, resolved from the stamped pack
+    syncKeyIdeas(deps); // rv2: enrol what the passes earned, release today's redo card
+    // W8: seeded cards (study-quest misses, flashcards) carry their text, resolved from the stamped pack;
+    // rv2: concept cards (key ideas, redo, ebmiss, re-check, notebook) from the side files / their tables
     const items = reviewQueue(deps.db, nowMs(deps.clock), q.limit ?? DEFAULT_QUEUE_LIMIT).map((it) => {
-      const card = reviewCardText(deps.seedItems, it.cardKey);
+      const card = reviewCardText(deps.seedItems, it.cardKey) ?? (it.kind === 'concept' ? conceptCardText(deps.db, deps.seedItems, it.cardKey) : undefined);
       return card ? { ...it, card } : it;
     });
     sendJson(res, 200, ReviewQueueResponse.parse({ count: dueCount(deps.db, deps.clock), items }));
@@ -442,7 +453,17 @@ export function createApp(opts: AppOptions): Express {
     const { itemId } = validate(ReviewItemParams, req.params, 'params');
     validate(EmptyQuery, req.query, 'query');
     const { grade } = validate(GradeBody, req.body, 'body');
-    sendJson(res, 200, gradeReview(deps, itemId, grade));
+    // rv2: a redo card is graded by its practice run, a re-check by its five prompts, never by a bare self-rating
+    const key = deps.db.get<{ k: string }>('SELECT card_key AS k FROM review_item WHERE id = ?', itemId)?.k ?? '';
+    if (key.startsWith(REDO_PREFIX)) throw new HttpError(409, 'WRONG_UNIT_KIND', 'a redo card is graded by its practice run (POST /redo/:itemId/run)');
+    if (key.startsWith(RECHECK_PREFIX)) throw new HttpError(409, 'WRONG_UNIT_KIND', 'a re-check is graded by its prompts (POST /keyideas/recheck/:itemId)');
+    try {
+      sendJson(res, 200, gradeReview(deps, itemId, grade));
+    } catch (err) {
+      // a retired card (its source left the content) is refused as not due, never a 500
+      if (err instanceof HonestyRuleError && err.code === 'STALE') throw new HttpError(409, 'NOT_DUE', err.message);
+      throw err;
+    }
   }));
 
   // ---------------------------------------------------------------- W4 GitHub sync
@@ -485,6 +506,8 @@ export function createApp(opts: AppOptions): Express {
     sendJson(res, 200, RefContentResponse.parse(await getRefContent(deps, id)));
   }));
 
+  registerKeyIdeaRoutes(router, deps); // rv2 S1: key ideas, recap / re-check, redo runs
+  registerNotebookRoutes(router, deps); // rv2 S1: the error notebook (F6)
   registerSettingsRoutes(router, deps); // ab S1: GET/PUT /settings/slate
   registerPracticeRoutes(router, deps, ladder); // rv B: GET /units/:id/gate-status, POST /units/:id/practice, GET /units/:id/source
 

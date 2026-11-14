@@ -519,3 +519,206 @@ export const EvidenceRowDtoExt = api.EvidenceRowDto.extend({ hinted: z.boolean()
 export type EvidenceRowDtoExt = z.infer<typeof EvidenceRowDtoExt>;
 export const EvidenceListResponseExt = api.EvidenceListResponse.extend({ items: z.array(EvidenceRowDtoExt) }).strict();
 export type EvidenceListResponseExt = z.infer<typeof EvidenceListResponseExt>;
+
+// ---- rv2 S1: key ideas, spaced production, error notebook (PLAN §2.1, F1 F2 F3 F6 F8) ------------------------
+// Server: api/keyideas-service.ts (+ engines/keyideas.ts, engines/redo.ts), api/notebook-service.ts. Key-idea,
+// redo, ebmiss, re-check and note cards are review_item kind 'concept'; none of them is evidence.
+
+/** Typed free recall of a recap / re-check prompt needs at least this many words (the rv B minimum-answer check). */
+export const RECAP_MIN_WORDS = 8;
+/** A section recap pays this flat XP once per section. */
+export const RECAP_XP = 20;
+/** The interleaved key-ideas session size, and the 10-minute mode's. */
+export const KEYIDEA_SESSION_CAP = 12;
+export const KEYIDEA_TEN_MINUTE_CAP = 5;
+/** Review page, 10-minute mode: a hard cap on cards served (rv C deferred F8; holds across paging). */
+export const TEN_MINUTE_REVIEW_CAP = 20;
+
+export const KeyIdeaStatus = z.enum(['owned', 'shaky', 'not-met']);
+export type KeyIdeaStatus = z.infer<typeof KeyIdeaStatus>;
+
+export const KeyIdeaSourceDto = z
+  .object({ key: z.string(), unitId: z.number().int().positive().nullable(), title: z.string().nullable(), passed: z.boolean() })
+  .strict();
+export type KeyIdeaSourceDto = z.infer<typeof KeyIdeaSourceDto>;
+
+/** One idea. `prompt`, `answer` and `why` are present only once the idea is met (every live source passed). */
+export const KeyIdeaDto = z
+  .object({
+    id: z.string(),
+    idea: z.string(),
+    tags: z.array(z.string()),
+    status: KeyIdeaStatus,
+    sources: z.array(KeyIdeaSourceDto),
+    prompt: z.string().optional(),
+    answer: z.string().optional(),
+    why: z.string().optional(),
+  })
+  .strict();
+export type KeyIdeaDto = z.infer<typeof KeyIdeaDto>;
+
+export const RecapKind = z.enum(['recap', 'recheck-14', 'recheck-45']);
+export type RecapKind = z.infer<typeof RecapKind>;
+
+export const KeyIdeaRecapDto = z
+  .object({
+    /** locked: not enough scope units passed (or no idea met); open: offered; done: the checkpoint row exists */
+    state: z.enum(['locked', 'open', 'done']),
+    passed: z.number().int().nonnegative(),
+    total: z.number().int().nonnegative(),
+    needed: z.number().int().nonnegative(),
+    doneAt: z.number().int().nullable(),
+  })
+  .strict();
+
+export const KeyIdeaSectionDto = z
+  .object({ section: z.string(), title: z.string(), track: z.string(), recap: KeyIdeaRecapDto, ideas: z.array(KeyIdeaDto) })
+  .strict();
+export type KeyIdeaSectionDto = z.infer<typeof KeyIdeaSectionDto>;
+
+export const KeyIdeaTileDto = z
+  .object({ track: z.string(), owned: z.number().int().nonnegative(), shaky: z.number().int().nonnegative(), notMet: z.number().int().nonnegative() })
+  .strict();
+export type KeyIdeaTileDto = z.infer<typeof KeyIdeaTileDto>;
+
+/** GET /keyideas[?track=&unit=] */
+export const KeyIdeasQuery = z
+  .object({ track: z.string().regex(/^[a-z0-9-]{1,40}$/).optional(), unit: z.string().min(1).max(400).optional() })
+  .strict();
+export const KeyIdeasResponse = z
+  .object({
+    sections: z.array(KeyIdeaSectionDto),
+    /** per track over ALL sections (the query filters only `sections`) */
+    tiles: z.array(KeyIdeaTileDto),
+    recapsOpen: z.array(z.object({ section: z.string(), title: z.string() }).strict()),
+    /** due key-idea cards right now (keyidea: only) */
+    dueCards: z.number().int().nonnegative(),
+  })
+  .strict();
+export type KeyIdeasResponse = z.infer<typeof KeyIdeasResponse>;
+
+/** GET /keyideas/queue[?tag=&limit=]: due key-idea cards from every section, interleaved (no two neighbours share a section). */
+export const KeyIdeaQueueQuery = z
+  .object({
+    tag: z.string().regex(/^[a-z0-9-]{1,60}$/).optional(),
+    limit: z.string().regex(/^\d{1,2}$/).transform(Number).pipe(z.number().int().min(1).max(KEYIDEA_SESSION_CAP)).optional(),
+  })
+  .strict();
+export const KeyIdeaRefDto = z
+  .object({ section: z.string(), sectionTitle: z.string(), ideaId: z.string(), tags: z.array(z.string()), sources: z.array(KeyIdeaSourceDto) })
+  .strict();
+export type KeyIdeaRefDto = z.infer<typeof KeyIdeaRefDto>;
+export const KeyIdeaQueueItem = api.ReviewQueueItem.extend({ keyIdea: KeyIdeaRefDto }).strict();
+export type KeyIdeaQueueItem = z.infer<typeof KeyIdeaQueueItem>;
+export const KeyIdeaQueueResponse = z
+  .object({
+    /** due key-idea cards matching the tag filter (before the cap) */
+    count: z.number().int().nonnegative(),
+    items: z.array(KeyIdeaQueueItem),
+    /** the concept index: every tag of a due key-idea card, with its count */
+    tags: z.array(z.object({ tag: z.string(), count: z.number().int().positive() }).strict()),
+  })
+  .strict();
+export type KeyIdeaQueueResponse = z.infer<typeof KeyIdeaQueueResponse>;
+
+/** GET /keyideas/cards/:itemId: what a concept card is about (links, redo target). Never the answer. */
+export const ConceptCardResponse = z
+  .object({
+    itemId: z.number().int().positive(),
+    cardKey: z.string(),
+    type: z.enum(['keyidea', 'redo', 'ebmiss', 'recheck', 'note']),
+    keyIdea: KeyIdeaRefDto.optional(),
+    /** redo: the sibling drill the run must be done on (null: no live sibling) */
+    redo: z.object({ unitId: z.number().int().positive(), key: z.string(), title: z.string() }).strict().nullable().optional(),
+    /** recheck: the section and the re-check kind */
+    recheck: z.object({ section: z.string(), title: z.string(), kind: RecapKind }).strict().optional(),
+  })
+  .strict();
+export type ConceptCardResponse = z.infer<typeof ConceptCardResponse>;
+
+/** GET /keyideas/recap/:section and GET /keyideas/recheck/:itemId: the prompts, never the answers. */
+export const RecapPromptsResponse = z
+  .object({
+    section: z.string(),
+    title: z.string(),
+    kind: RecapKind,
+    prompts: z.array(z.object({ ideaId: z.string(), prompt: z.string() }).strict()),
+  })
+  .strict();
+export type RecapPromptsResponse = z.infer<typeof RecapPromptsResponse>;
+
+export const RecapRevealBody = z.object({ ideaId: z.string().min(1).max(80), recall: z.string().min(1).max(4000) }).strict();
+export type RecapRevealBody = z.infer<typeof RecapRevealBody>;
+export const RecapRevealResponse = z.object({ ideaId: z.string(), answer: z.string(), why: z.string(), sources: z.array(KeyIdeaSourceDto) }).strict();
+export type RecapRevealResponse = z.infer<typeof RecapRevealResponse>;
+
+export const RecapMark = z.enum(['got', 'partly', 'missed']);
+export type RecapMark = z.infer<typeof RecapMark>;
+export const RecapSubmitBody = z
+  .object({ items: z.array(z.object({ ideaId: z.string().min(1).max(80), recall: z.string().min(1).max(4000), mark: RecapMark }).strict()).min(1).max(20) })
+  .strict();
+export type RecapSubmitBody = z.infer<typeof RecapSubmitBody>;
+export const RecapSubmitResponse = z
+  .object({
+    checkpointId: z.number().int().positive(),
+    section: z.string(),
+    kind: RecapKind,
+    /** the recap's flat XP (null for a re-check: its card's review XP is in `reviewXp`) */
+    xp: api.XpOutcome.nullable(),
+    reviewXp: api.XpOutcome.nullable(),
+    /** key-idea card keys (re)enrolled due tomorrow: the partly / missed ideas */
+    reenrolled: z.array(z.string()),
+    /** recap: the 14- and 45-day re-check due times */
+    recheckDueAt: z.array(z.number().int()),
+  })
+  .strict();
+export type RecapSubmitResponse = z.infer<typeof RecapSubmitResponse>;
+
+/** POST /redo/:itemId/run: a practice-mode run of the redo card's sibling drill; it grades only the card. */
+export const RedoRunBody = z.object({ code: z.string().min(1).max(api.MAX_CODE_CHARS) }).strict();
+export type RedoRunBody = z.infer<typeof RedoRunBody>;
+export const RedoRunResponse = z
+  .object({
+    itemId: z.number().int().positive(),
+    unitId: z.number().int().positive(),
+    result: api.CanonicalRunResult,
+    grade: z.enum(['good', 'again']),
+    xp: api.XpOutcome,
+    nextDueAt: z.number().int(),
+  })
+  .strict();
+export type RedoRunResponse = z.infer<typeof RedoRunResponse>;
+
+/** F6 error notebook (migration 024): one line + a category after a failed submit or a missed key point. */
+export const NOTE_CATEGORIES = ['misread', 'concept-gap', 'edge-case', 'api-or-syntax', 'slip', 'other'] as const;
+export const NoteCategory = z.enum(NOTE_CATEGORIES);
+export type NoteCategory = z.infer<typeof NoteCategory>;
+export const NOTE_MAX_CHARS = 200;
+export const ErrorNoteBody = z
+  .object({
+    unitId: z.number().int().positive(),
+    attemptId: z.number().int().positive().optional(),
+    line: z.string().trim().min(3).max(NOTE_MAX_CHARS),
+    category: NoteCategory,
+  })
+  .strict();
+export type ErrorNoteBody = z.infer<typeof ErrorNoteBody>;
+export const ErrorNoteDto = z
+  .object({
+    id: z.number().int().positive(),
+    unitId: z.number().int().positive(),
+    unitTitle: z.string(),
+    attemptId: z.number().int().positive().nullable(),
+    line: z.string(),
+    category: NoteCategory,
+    createdAt: z.number().int(),
+    cardKey: z.string(),
+  })
+  .strict();
+export type ErrorNoteDto = z.infer<typeof ErrorNoteDto>;
+export const ErrorNoteResponse = z.object({ note: ErrorNoteDto, cardDueAt: z.number().int() }).strict();
+export type ErrorNoteResponse = z.infer<typeof ErrorNoteResponse>;
+export const NotebookResponse = z
+  .object({ entries: z.array(ErrorNoteDto), categories: z.array(z.object({ category: NoteCategory, count: z.number().int().positive() }).strict()) })
+  .strict();
+export type NotebookResponse = z.infer<typeof NotebookResponse>;
