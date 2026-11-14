@@ -1,0 +1,126 @@
+{
+ "format": "bootquest-keyideas@1",
+ "section": "campaign-authz-tenancy",
+ "title": "Campaign: authorization and tenancy across the estate",
+ "track": "js",
+ "_note": "rv2 S2 (PLAN §2.2 campaign-<tag> row, tag authz-tenancy). Sources are 3 live campaign study quests from different repos per idea; recapAfter = any 3 sources passed. Server-local side file, never stamped.",
+ "scope": [
+  "campaign/csharp/atlas-swe-bootcamp",
+  "campaign/csharp/dotnet-auth",
+  "campaign/csharp/dotnet-stripe",
+  "campaign/csharp/netcalendy",
+  "campaign/csharp/netcleanarch",
+  "campaign/csharp/organized-dotnet-slack",
+  "campaign/js/grok-build-ecommerce",
+  "campaign/js/organized-anti-helpdesk",
+  "campaign/js/organized-experiment-ww10",
+  "campaign/js/organized-study-support-desk-crm",
+  "campaign/js/w22",
+  "campaign/js/zz1",
+  "campaign/js/zz8"
+ ],
+ "recapAfter": 0.2307,
+ "ideas": [
+  {
+   "id": "scope-related-ids-too",
+   "idea": "Tenant scoping must cover every id a request carries, including foreign keys to related rows, not only the primary row being written.",
+   "why": "A create that checks the parent's tenant but accepts any related id lets a user attach their record to another organization's data.",
+   "prompt": "Creating an activity checks that the caller belongs to the organization, then stores the leadId from the request body. What attack does that allow, and where should the check go?",
+   "answer": "A user can paste a leadId from another organization and link a record to data they cannot see, which may later show it to them. Load each referenced row through the same tenant-scoped query (or a composite foreign key including the tenant id) before writing, and reject ids that are not in the caller's tenant.",
+   "tags": [
+    "authz-tenancy",
+    "security"
+   ],
+   "sources": [
+    "campaign/js/zz1",
+    "campaign/js/zz8",
+    "campaign/csharp/netcleanarch"
+   ],
+   "siblings": []
+  },
+  {
+   "id": "ownership-on-every-path",
+   "idea": "Check ownership on every read and every write by id: get, update and delete each verify the caller's scope, not only the list endpoint.",
+   "why": "IDOR bugs live in the endpoints that take an id from the URL; a filtered list proves nothing about the detail and update routes.",
+   "prompt": "A review finds the list endpoint filters by owner, so the team assumes the API is safe. What do you check next, in order, before you agree?",
+   "answer": "Does the resource have an owner or tenant column? Is every read by id filtered by it, or checked after loading? Does every update and delete verify it before writing? Is there a test per route that uses another tenant's id? Any route that answers that test with data or a write has an IDOR hole.",
+   "tags": [
+    "authz-tenancy",
+    "code-review"
+   ],
+   "sources": [
+    "campaign/csharp/netcleanarch",
+    "campaign/csharp/netcalendy",
+    "campaign/csharp/dotnet-stripe"
+   ],
+   "siblings": []
+  },
+  {
+   "id": "one-permission-map",
+   "idea": "Keep the role-to-permission rules in one explicit map, and have every route declare the permission it needs instead of testing role names inline.",
+   "why": "Inline role checks drift apart as roles are added, and nobody can answer 'what can SUPPORT do?' without reading every handler.",
+   "prompt": "Three handlers check `if (user.role === 'ADMIN' || user.role === 'OPS')`, a fourth forgets OPS, and a new AUDITOR role is coming. How should authorization be organised?",
+   "answer": "One module maps each role to named permissions, and each route asserts the permission it needs (for example payments:refund) through a shared handler wrapper. Adding AUDITOR is then one change in the map, and the map itself answers what each role may do.",
+   "tags": [
+    "authz-tenancy"
+   ],
+   "sources": [
+    "campaign/js/w22",
+    "campaign/js/organized-experiment-ww10",
+    "campaign/csharp/atlas-swe-bootcamp"
+   ],
+   "siblings": []
+  },
+  {
+   "id": "layers-of-auth",
+   "idea": "Treat auth as layers with one job each (authenticate, resolve the tenant, authorize the action, then run the handler), and debug by probing one layer at a time.",
+   "why": "When the layers blur, a 401 or a leak cannot be placed, and fixes land in the wrong layer.",
+   "prompt": "Users report random 401s after login. One developer changes token expiry, another the CORS config. How would you find the failing layer instead of guessing?",
+   "answer": "Walk the layers in order with a cheap probe each: does the client hold the token, does the request carry the Authorization header, does the server validate the token, does it map claims to the current user and tenant, does the permission check pass. The first probe that fails names the layer to fix.",
+   "tags": [
+    "authz-tenancy",
+    "debugging"
+   ],
+   "sources": [
+    "campaign/csharp/dotnet-auth",
+    "campaign/js/organized-experiment-ww10",
+    "campaign/csharp/organized-dotnet-slack"
+   ],
+   "siblings": []
+  },
+  {
+   "id": "not-found-for-other-tenants",
+   "idea": "For a record that belongs to another tenant, answer as if it does not exist (404), so the response does not confirm that the id is real.",
+   "why": "Answering 403 for another tenant's id tells a caller which ids exist, which helps enumeration and leaks business facts.",
+   "prompt": "An agent in organization A requests a ticket id that belongs to organization B. One teammate wants 403 'forbidden', another 404. Which do you choose, and how should the query be written?",
+   "answer": "404: to a caller in organization A that ticket should be indistinguishable from a missing one. Query with both the id and the caller's tenant, so another tenant's row is never even loaded, and return not found when nothing matches. 403 is for resources the caller can see but may not change.",
+   "tags": [
+    "authz-tenancy",
+    "security"
+   ],
+   "sources": [
+    "campaign/js/organized-anti-helpdesk",
+    "campaign/csharp/netcleanarch",
+    "campaign/js/zz1"
+   ],
+   "siblings": []
+  },
+  {
+   "id": "identity-from-the-session",
+   "idea": "Take who is acting, and for which tenant, from the verified session or token, never from a request body field or a header the client sets.",
+   "why": "A userId or tenant header supplied by the client lets anyone act as anyone; demo defaults that fill them in make it worse.",
+   "prompt": "An API reads the tenant from an x-tenant-slug header and the user from x-user-email, with defaults when they are missing. What happens with a request that sends neither, and what should the API do?",
+   "answer": "The defaults quietly turn an anonymous request into a known user of a known tenant. Have the server derive who is acting, and for which organization, from a verified login; refuse requests without one (401), and ignore client-supplied identity fields entirely.",
+   "tags": [
+    "authz-tenancy",
+    "authentication"
+   ],
+   "sources": [
+    "campaign/js/organized-study-support-desk-crm",
+    "campaign/js/grok-build-ecommerce",
+    "campaign/csharp/dotnet-stripe"
+   ],
+   "siblings": []
+  }
+ ]
+}
