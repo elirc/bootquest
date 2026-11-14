@@ -3700,6 +3700,182 @@
     "fund-csharp/21-testing-web-apps-seams-and-fakes/01-clock-seam-and-invite-expiry",
     "fund-csharp/21-testing-web-apps-seams-and-fakes/02-fake-repository-keeps-the-constraints"
    ]
+  },
+  {
+   "id": "22-httpclient-timeouts-retries-and-cancellation",
+   "order": 22,
+   "title": "HttpClient resilience: timeouts, retries & cancellation",
+   "level": "advanced",
+   "summary": "IHttpClientFactory and socket reuse, timeouts on every call, telling a timeout from caller cancellation with linked tokens, which failures are transient and which requests are safe to repeat, exponential backoff with full jitter inside a budget, and the standard resilience pipeline.",
+   "lesson": "## One client per dependency, from the factory\n\nCreating `new HttpClient()` for every call and disposing it closes a connection each time; closed connections linger in TIME_WAIT, and under load the machine runs out of sockets. One static client kept forever never notices a DNS change. `IHttpClientFactory` pools and recycles the message handlers, and a typed client is the one place to set the base address, headers, timeout and resilience handlers:\n\n```csharp\nbuilder.Services.AddHttpClient<IWebhookSender, HttpWebhookSender>(client =>\n    client.Timeout = TimeSpan.FromSeconds(10));   // one slow subscriber cannot stall the drain\n```\n\n## Every outbound call needs a timeout\n\n`HttpClient.Timeout` defaults to 100 seconds, so a hung dependency holds your request, its connection and its caller for that long. When the timeout fires, `SendAsync` throws a `TaskCanceledException` (an `OperationCanceledException`) whose inner exception is a `TimeoutException`. Pick a timeout that fits inside your own caller's deadline.\n\n## Timeout or cancellation? Ask the caller's token\n\nAn `OperationCanceledException` means one of two things: your timeout fired, or the caller gave up (the client disconnected, the host is stopping). Only the caller's token can tell them apart:\n\n```csharp\nusing var attempt = CancellationTokenSource.CreateLinkedTokenSource(ct);\nattempt.CancelAfter(TimeSpan.FromSeconds(2));\ntry\n{\n    return Results.Ok(await client.GetStringAsync(url, attempt.Token));\n}\ncatch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }   // the caller left\ncatch (OperationCanceledException) { return Results.StatusCode(504); }          // our timeout fired\n```\n\nA linked source is cancelled when the caller's token is cancelled and also when its own `CancelAfter` fires; it never cancels the caller's token. Dispose it, and pass the token to every async call, including the `Task.Delay` of a backoff.\n\n## Retry only what is transient and safe to repeat\n\nTransient: connection failures (`HttpRequestException`), 408, 429, 500, 502, 503 and 504. The other 4xx answers (400, 401, 403, 404, 409, 422) will be the same next time, so a retry only adds latency. Safe to repeat: GET, HEAD, PUT and DELETE, which are idempotent. Retry a POST or PATCH only when it carries an idempotency key that the server deduplicates on; otherwise a retried \"create payment\" can charge twice. A request message can be sent only once, so build a fresh `HttpRequestMessage` for every attempt.\n\n## Backoff with jitter, inside a budget\n\nExponential backoff (base x 2^(attempt-1), capped) gives a struggling service room to recover. Full jitter waits a random fraction of that delay, so clients that failed at the same moment do not all come back at the same moment. A 429 or 503 may carry `Retry-After`: honour it. Bound everything: a maximum number of attempts and a total waiting budget below your caller's timeout. Retries multiply: three layers that each try 3 times send 27 calls to the bottom service during an outage.\n\n## The standard resilience pipeline\n\n`AddStandardResilienceHandler()` (package `Microsoft.Extensions.Http.Resilience`, used by the eShop sample's service defaults) stacks the pieces for you: a total request timeout on the outside, then retry, then a circuit breaker, and a per-attempt timeout on the inside. Every retry gets a fresh attempt timeout, and the total timeout caps the whole operation. After many failures the circuit breaker opens and fails calls at once for a while, so a dead dependency costs microseconds instead of a full timeout per request.\n",
+   "quiz": [
+    {
+     "key": "fund:csharp/22-httpclient-timeouts-retries-and-cancellation/q01",
+     "prompt": "What does `HttpClient` throw when its `Timeout` elapses?",
+     "choices": [
+      "A TimeoutException, thrown directly by SendAsync",
+      "A TaskCanceledException wrapping a TimeoutException",
+      "An HttpRequestException whose StatusCode is 408 Request Timeout",
+      "Nothing: it returns a 504 response to the caller"
+     ],
+     "answer": 1,
+     "explanation": "The timeout cancels the request, so it surfaces as a TaskCanceledException (an OperationCanceledException); the inner TimeoutException says the cause was the timeout, not a caller."
+    },
+    {
+     "key": "fund:csharp/22-httpclient-timeouts-retries-and-cancellation/q02",
+     "prompt": "A handler catches every `OperationCanceledException` from an outbound call and returns 504. What is wrong with that?",
+     "choices": [
+      "A caller that gave up is reported as an upstream timeout",
+      "An OperationCanceledException can never come from a timeout",
+      "504 is reserved for timeouts inside the server's own pipeline",
+      "It has to catch TaskCanceledException for the catch to work at all"
+     ],
+     "answer": 0,
+     "explanation": "Cancellation by the caller and your own timeout both throw OperationCanceledException. Check the caller's token: if it is cancelled, let the exception go; otherwise your timeout fired and 504 is right."
+    },
+    {
+     "key": "fund:csharp/22-httpclient-timeouts-retries-and-cancellation/q03",
+     "prompt": "Which failed call should a client retry?",
+     "choices": [
+      "422 Unprocessable Entity on a POST",
+      "404 Not Found on a GET",
+      "503 Service Unavailable on a GET request",
+      "401 Unauthorized on a DELETE"
+     ],
+     "answer": 2,
+     "explanation": "503 is transient and GET is safe to repeat. The 4xx answers describe the request itself, so the same request gets the same answer."
+    },
+    {
+     "key": "fund:csharp/22-httpclient-timeouts-retries-and-cancellation/q04",
+     "prompt": "A POST /payments call timed out. When is it safe to retry it?",
+     "choices": [
+      "Always, because a timeout means the server did nothing",
+      "Never: no POST request may ever be sent a second time",
+      "When the retry first waits as long as the timeout did",
+      "With an idempotency key the server deduplicates on"
+     ],
+     "answer": 3,
+     "explanation": "The server may have charged before the response was lost. An idempotency key lets it recognise the retry and return the first result instead of charging again."
+    },
+    {
+     "key": "fund:csharp/22-httpclient-timeouts-retries-and-cancellation/q05",
+     "prompt": "Why add jitter to exponential backoff?",
+     "choices": [
+      "So clients that failed together do not all retry at once",
+      "So the delay never grows past the HttpClient timeout value",
+      "So that each retry reaches a different server instance",
+      "Because Task.Delay is inaccurate below about 15 milliseconds"
+     ],
+     "answer": 0,
+     "explanation": "Without jitter, every client that saw the same outage retries on the same schedule, and the synchronised waves keep the service down. A random fraction of the delay spreads them out."
+    },
+    {
+     "key": "fund:csharp/22-httpclient-timeouts-retries-and-cancellation/q06",
+     "prompt": "A retry loop sends the same `HttpRequestMessage` instance on every attempt. What happens on the second attempt?",
+     "choices": [
+      "It is sent again with the same headers, body and method",
+      "HttpClient clones the message automatically before sending it again",
+      "SendAsync throws: a request message can only be sent once",
+      "The body goes out empty because its stream was read"
+     ],
+     "answer": 2,
+     "explanation": "SendAsync refuses a message that was already sent, with an InvalidOperationException. Build a fresh request for every attempt."
+    },
+    {
+     "key": "fund:csharp/22-httpclient-timeouts-retries-and-cancellation/q07",
+     "prompt": "A service creates `new HttpClient()` for each outbound call and disposes it straight after. What happens under load?",
+     "choices": [
+      "Calls get slower because every header is parsed again",
+      "Closed connections pile up until sockets run out",
+      "The clients cannot be collected, so memory grows without bound",
+      "Nothing: disposing each client releases everything at once"
+     ],
+     "answer": 1,
+     "explanation": "Each disposed client closes its connection, which lingers in TIME_WAIT. IHttpClientFactory pools and reuses the handlers instead."
+    },
+    {
+     "key": "fund:csharp/22-httpclient-timeouts-retries-and-cancellation/q08",
+     "prompt": "A linked source is created from the request's token and given `CancelAfter` of 2 seconds. The 2 seconds pass. What is cancelled?",
+     "choices": [
+      "Both the linked token and the request's own token are cancelled",
+      "Only the request's token, and the linked one follows it",
+      "Only the linked token; the request's token is untouched",
+      "Neither, because CancelAfter only affects later tasks"
+     ],
+     "answer": 2,
+     "explanation": "Linking works one way: the linked source listens to the request's token, but its own cancellation never flows back to the token it was linked from."
+    },
+    {
+     "key": "fund:csharp/22-httpclient-timeouts-retries-and-cancellation/q09",
+     "prompt": "Three service layers each try a failing call up to 3 times. How many calls can one user request send to the bottom service?",
+     "choices": [
+      "3 calls, one per layer",
+      "9 calls",
+      "27 calls",
+      "6 calls"
+     ],
+     "answer": 2,
+     "explanation": "Each layer multiplies the attempts below it: 3 x 3 x 3. Retry in one layer only, or share a budget, so an outage is not amplified."
+    },
+    {
+     "key": "fund:csharp/22-httpclient-timeouts-retries-and-cancellation/q10",
+     "prompt": "A resilience pipeline has a total timeout, retries and a per-attempt timeout. Where does the per-attempt timeout belong?",
+     "choices": [
+      "Outside the retry, so it caps the whole operation",
+      "Inside the retry, so each attempt gets a fresh timeout of its own",
+      "Before the circuit breaker, so timeouts are never counted",
+      "Nowhere, because the total timeout makes it redundant"
+     ],
+     "answer": 1,
+     "explanation": "Inside the retry, every attempt starts a fresh attempt timeout, while the total timeout outside caps the attempts and waits together."
+    }
+   ],
+   "flashcards": [
+    {
+     "key": "fund:csharp/22-httpclient-timeouts-retries-and-cancellation/c01",
+     "front": "The default HttpClient.Timeout",
+     "back": "100 seconds, so a client with no timeout of its own lets a hung dependency hold the caller's request that long."
+    },
+    {
+     "key": "fund:csharp/22-httpclient-timeouts-retries-and-cancellation/c02",
+     "front": "Timeout versus caller cancellation",
+     "back": "Both surface as OperationCanceledException; whether the caller's own token is cancelled tells you which one happened."
+    },
+    {
+     "key": "fund:csharp/22-httpclient-timeouts-retries-and-cancellation/c03",
+     "front": "Transient HTTP failures",
+     "back": "Connection errors and the statuses 408, 429, 500, 502, 503 and 504; the other 4xx answers will not change on a retry."
+    },
+    {
+     "key": "fund:csharp/22-httpclient-timeouts-retries-and-cancellation/c04",
+     "front": "Which methods are safe to retry?",
+     "back": "The idempotent ones, GET, HEAD, PUT and DELETE; a POST or PATCH first needs a key the server deduplicates on."
+    },
+    {
+     "key": "fund:csharp/22-httpclient-timeouts-retries-and-cancellation/c05",
+     "front": "Full jitter",
+     "back": "Wait a random fraction of the capped exponential delay, so clients that failed together spread out instead of returning in waves."
+    },
+    {
+     "key": "fund:csharp/22-httpclient-timeouts-retries-and-cancellation/c06",
+     "front": "Why IHttpClientFactory?",
+     "back": "It pools and recycles message handlers, which avoids both socket exhaustion from per-call clients and stale DNS in one client kept forever."
+    },
+    {
+     "key": "fund:csharp/22-httpclient-timeouts-retries-and-cancellation/c07",
+     "front": "Retry-After",
+     "back": "A 429 or 503 can say how long to wait before trying again; that wait replaces the computed backoff."
+    },
+    {
+     "key": "fund:csharp/22-httpclient-timeouts-retries-and-cancellation/c08",
+     "front": "Why give retries a budget?",
+     "back": "Capped attempts and a total wait below the caller's deadline stop retries from multiplying load or outliving the request they serve."
+    }
+   ],
+   "drillKeys": [
+    "fund-csharp/22-httpclient-timeouts-retries-and-cancellation/01-attempt-timeout-or-caller-cancelled",
+    "fund-csharp/22-httpclient-timeouts-retries-and-cancellation/02-retry-safe-requests-within-a-budget"
+   ]
   }
  ]
 }
