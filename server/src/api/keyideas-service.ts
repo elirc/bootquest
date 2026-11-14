@@ -39,6 +39,7 @@ import {
   parseIdeaCardKey,
   passTimes,
   RECHECK_PREFIX,
+  recapIdeasNeeded,
   recapProgress,
   REDO_PREFIX,
   resolveSections,
@@ -160,8 +161,17 @@ function recapRow(db: Db, section: string, kind: RecapKind): { id: number; at: n
 function sectionRecap(db: Db, s: ResolvedSection, passed: ReadonlyMap<number, number>) {
   const p = recapProgress(s, passed);
   const done = recapRow(db, s.file.section, 'recap');
-  const anyMet = s.ideas.some((i) => metAt(i, passed) !== null);
-  return { state: done ? ('done' as const) : p.open && anyMet ? ('open' as const) : ('locked' as const), passed: p.passed, total: p.total, needed: p.needed, doneAt: done?.at ?? null };
+  // rv3 MF-1 (ruling 8): the unit threshold AND at least min(3, live ideas) met ideas
+  const met = s.ideas.filter((i) => metAt(i, passed) !== null).length;
+  const open = p.open && met >= recapIdeasNeeded(s);
+  return { state: done ? ('done' as const) : open ? ('open' as const) : ('locked' as const), passed: p.passed, total: p.total, needed: p.needed, doneAt: done?.at ?? null };
+}
+
+/** Why a recap is still locked (the NOT_DUE message). */
+function lockedReason(s: ResolvedSection, passed: ReadonlyMap<number, number>, r: { passed: number; total: number; needed: number }): string {
+  if (r.passed < r.needed || r.total === 0) return `the ${s.file.title} recap opens after ${r.needed} of its ${r.total} units are passed (${r.passed} so far)`;
+  const met = s.ideas.filter((i) => metAt(i, passed) !== null).length;
+  return `the ${s.file.title} recap opens once ${recapIdeasNeeded(s)} of its ideas are met (every source of an idea passed; ${met} so far)`;
 }
 
 export function getKeyIdeas(deps: Deps, q: z.infer<typeof KeyIdeasQuery>): KeyIdeasResponse {
@@ -329,7 +339,7 @@ export function recapPrompts(deps: Deps, section: string): RecapPromptsResponse 
   const { s, passed } = requireSection(db, section);
   const r = sectionRecap(db, s, passed);
   if (r.state === 'done') throw new HttpError(409, 'ALREADY_SCORED', `the ${s.file.title} recap is done`);
-  if (r.state !== 'open') throw new HttpError(409, 'NOT_DUE', `the ${s.file.title} recap opens after ${r.needed} of its ${r.total} units are passed (${r.passed} so far)`);
+  if (r.state !== 'open') throw new HttpError(409, 'NOT_DUE', lockedReason(s, passed, r));
   return { section, title: s.file.title, kind: 'recap', prompts: metIdeas(s, passed).map((i) => ({ ideaId: i.idea.id, prompt: i.idea.prompt })) };
 }
 
@@ -377,7 +387,7 @@ export function submitRecap(deps: Deps, section: string, body: z.infer<typeof Re
   const { s, passed } = requireSection(db, section);
   const r = sectionRecap(db, s, passed);
   if (r.state === 'done') throw new HttpError(409, 'ALREADY_SCORED', `the ${s.file.title} recap is done (it pays once)`);
-  if (r.state !== 'open') throw new HttpError(409, 'NOT_DUE', `the ${s.file.title} recap is not open yet`);
+  if (r.state !== 'open') throw new HttpError(409, 'NOT_DUE', lockedReason(s, passed, r));
   const ideas = metIdeas(s, passed);
   const got = checkItems(ideas, body.items);
   const t = nowMs(clock);

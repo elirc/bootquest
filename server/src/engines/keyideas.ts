@@ -253,6 +253,19 @@ export interface RecapProgress {
   open: boolean;
 }
 
+/**
+ * rv3 MF-1 (ruling 8): a recap also needs at least RECAP_MIN_MET_IDEAS met ideas, or every live idea of the section
+ * when it has fewer (an idea with no live source can never be met, so it does not count). Without this a recap
+ * opened on one met idea, paid its XP and closed the section for good.
+ */
+export const RECAP_MIN_MET_IDEAS = 3;
+
+/** Met ideas a section's recap needs: min(RECAP_MIN_MET_IDEAS, live ideas), at least 1. */
+export function recapIdeasNeeded(s: ResolvedSection): number {
+  const live = s.ideas.filter((i) => liveSources(i).length > 0).length;
+  return Math.max(1, Math.min(RECAP_MIN_MET_IDEAS, live));
+}
+
 /** recapAfter <= 1: that fraction of the live scope units (ceil); > 1: that many passed scope units (capped at the total). */
 export function recapProgress(s: ResolvedSection, passed: ReadonlyMap<number, number>): RecapProgress {
   const total = s.scopeIds.length;

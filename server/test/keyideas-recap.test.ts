@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RecapSubmitResponse } from '@bootquest/shared/api-ext';
 import { createApp } from '../src/api/app.ts';
 import { DAY_MS, fixedClock, nowMs } from '../src/engines/clock.ts';
-import { readKeyIdeas, setKeyIdeas } from '../src/store/keyideas.ts';
+import { makeKeyIdeas, readKeyIdeas, setKeyIdeas } from '../src/store/keyideas.ts';
 import { makeRouting, setRouting } from '../src/store/routing.ts';
 import { reconcileSeededReviewCards } from '../src/store/review-cards.ts';
 import { emptySeedItemStore } from '../src/store/seed-items.ts';
@@ -54,33 +54,60 @@ describe('section recap + re-check', () => {
     expect((await recapState('fx-beta')).state).toBe('locked');
     expect((await request(app).get('/api/keyideas/recap/fx-beta')).status).toBe(409);
     submit(tmp.db, clock, ids['kx/b/02']!);
+    submit(tmp.db, clock, ids['kx/b/03']!);
     expect((await recapState('fx-beta')).state).toBe('open');
     expect((await request(app).get('/api/keyideas')).body.recapsOpen).toEqual([{ section: 'fx-beta', title: 'Fixture beta: reads' }]);
     // fx-alpha: scope kx/a/ = 5 live units (the archived / unknown keys are not in it)
     expect(await recapState('fx-alpha')).toMatchObject({ state: 'locked', needed: 4, total: 5 });
   });
 
+  it('rv3 MF-1 (ruling 8): the recap needs min(3, live ideas) met ideas besides the unit threshold (1, 2 and 3 met)', async () => {
+    // fx-beta: recapAfter 2 of 3 units, 3 live ideas (one source each)
+    submit(tmp.db, clock, ids['kx/b/01']!);
+    expect((await recapState('fx-beta')).state).toBe('locked'); // 1 met, 1 of 2 units
+    submit(tmp.db, clock, ids['kx/b/02']!);
+    // 2 of 3 units passed (threshold reached) but only 2 ideas met: still locked, and no prompt is served
+    expect(await recapState('fx-beta')).toMatchObject({ state: 'locked', passed: 2, needed: 2 });
+    const locked = await request(app).get('/api/keyideas/recap/fx-beta');
+    expect(locked.status).toBe(409);
+    expect(JSON.stringify(locked.body)).toMatch(/3 of its ideas are met .*2 so far/);
+    const items2 = ['cache-invalidate', 'stampede'].map((ideaId) => ({ ideaId, recall: RECALL, mark: 'got' }));
+    expect((await request(app).post('/api/keyideas/recap/fx-beta').send({ items: items2 })).status).toBe(409);
+    expect(n(tmp.db, "SELECT COALESCE(SUM(amount), 0) AS n FROM xp_event WHERE kind = 'study-quest'")).toBe(0);
+    expect(n(tmp.db, 'SELECT COUNT(*) AS n FROM keyidea_checkpoint')).toBe(0);
+    submit(tmp.db, clock, ids['kx/b/03']!);
+    expect((await recapState('fx-beta')).state).toBe('open'); // 3 met
+    expect((await request(app).get('/api/keyideas/recap/fx-beta')).body.prompts).toHaveLength(3);
+    // a section with only 2 live ideas opens once BOTH are met ("or all of them"); an idea with no live source does not count
+    const idea = (id: string, src: string) => ({ id, idea: 'i', why: 'w', prompt: `${id}?`, answer: 'a', tags: ['t'], sources: [src], siblings: [] });
+    const two = { format: 'bootquest-keyideas@1', section: 'fx-two', title: 'Two', track: 'js', scope: ['kx/b/'], recapAfter: 1, ideas: [idea('one', 'kx/b/01'), idea('two', 'kx/b/02'), idea('never', 'kx/does-not-exist')] };
+    setKeyIdeas(makeKeyIdeas([two]));
+    expect((await recapState('fx-two')).state).toBe('open');
+    expect((await request(app).get('/api/keyideas/recap/fx-two')).body.prompts.map((x: { ideaId: string }) => x.ideaId)).toEqual(['one', 'two']);
+  });
+
   it('answer-first, 20 XP once, one checkpoint row, partly/missed re-enrolled tomorrow, no evidence, no practice_log', async () => {
     submit(tmp.db, clock, ids['kx/b/01']!);
     submit(tmp.db, clock, ids['kx/b/02']!);
+    submit(tmp.db, clock, ids['kx/b/03']!);
     const p = await request(app).get('/api/keyideas/recap/fx-beta');
     expect(p.status).toBe(200);
-    expect(p.body.prompts.map((x: { ideaId: string }) => x.ideaId)).toEqual(['cache-invalidate', 'stampede']);
+    expect(p.body.prompts.map((x: { ideaId: string }) => x.ideaId)).toEqual(['cache-invalidate', 'stampede', 'idempotent-consumer']);
     const beta = readKeyIdeas(CONTENT).sections.get('fx-beta')!;
     for (const i of beta.ideas) expect(p.text).not.toContain(i.answer);
     // the reveal needs >= 8 typed words; an unmet idea is refused
     expect((await request(app).post('/api/keyideas/sections/fx-beta/reveal').send({ ideaId: 'stampede', recall: 'a lock' })).status).toBe(400);
-    expect((await request(app).post('/api/keyideas/sections/fx-beta/reveal').send({ ideaId: 'idempotent-consumer', recall: RECALL })).status).toBe(403);
+    expect((await request(app).post('/api/keyideas/sections/fx-alpha/reveal').send({ ideaId: 'keyset-pagination', recall: RECALL })).status).toBe(403);
     const rv = await request(app).post('/api/keyideas/sections/fx-beta/reveal').send({ ideaId: 'stampede', recall: RECALL });
     expect(rv.body.answer).toBe(beta.ideas[1]!.answer);
     const ev0 = n(tmp.db, 'SELECT COUNT(*) AS n FROM evidence');
     const xp0 = n(tmp.db, 'SELECT COALESCE(SUM(amount), 0) AS n FROM xp_event');
     // a short recall in the final submit is refused too
-    const short = await request(app).post('/api/keyideas/recap/fx-beta').send({ items: [{ ideaId: 'cache-invalidate', recall: 'ttl', mark: 'got' }, { ideaId: 'stampede', recall: RECALL, mark: 'got' }] });
+    const short = await request(app).post('/api/keyideas/recap/fx-beta').send({ items: [{ ideaId: 'cache-invalidate', recall: 'ttl', mark: 'got' }, { ideaId: 'stampede', recall: RECALL, mark: 'got' }, { ideaId: 'idempotent-consumer', recall: RECALL, mark: 'got' }] });
     expect(short.status).toBe(400);
     const sub = await request(app)
       .post('/api/keyideas/recap/fx-beta')
-      .send({ items: [{ ideaId: 'cache-invalidate', recall: RECALL, mark: 'got' }, { ideaId: 'stampede', recall: RECALL, mark: 'missed' }] });
+      .send({ items: [{ ideaId: 'cache-invalidate', recall: RECALL, mark: 'got' }, { ideaId: 'stampede', recall: RECALL, mark: 'missed' }, { ideaId: 'idempotent-consumer', recall: RECALL, mark: 'got' }] });
     expect(sub.status).toBe(200);
     const body = RecapSubmitResponse.parse(sub.body);
     expect(body.xp).toMatchObject({ amount: 20, reason: null });
@@ -93,7 +120,7 @@ describe('section recap + re-check', () => {
     expect(n(tmp.db, 'SELECT COUNT(*) AS n FROM practice_log')).toBe(0);
     // replay: refused, nothing paid twice (farming)
     for (let k = 0; k < 3; k++) {
-      const again = await request(app).post('/api/keyideas/recap/fx-beta').send({ items: [{ ideaId: 'cache-invalidate', recall: RECALL, mark: 'got' }, { ideaId: 'stampede', recall: RECALL, mark: 'got' }] });
+      const again = await request(app).post('/api/keyideas/recap/fx-beta').send({ items: [{ ideaId: 'cache-invalidate', recall: RECALL, mark: 'got' }, { ideaId: 'stampede', recall: RECALL, mark: 'got' }, { ideaId: 'idempotent-consumer', recall: RECALL, mark: 'got' }] });
       expect(again.status).toBe(409);
     }
     expect(n(tmp.db, 'SELECT COALESCE(SUM(amount), 0) AS n FROM xp_event')).toBe(xp0 + 20);
@@ -105,8 +132,9 @@ describe('section recap + re-check', () => {
   it('the 14-day re-check appears once in the reviews queue, is graded by its prompts, then is never due again', async () => {
     submit(tmp.db, clock, ids['kx/b/01']!);
     submit(tmp.db, clock, ids['kx/b/02']!);
+    submit(tmp.db, clock, ids['kx/b/03']!);
     await request(app).get('/api/keyideas'); // enrols the met ideas' cards
-    const items = [{ ideaId: 'cache-invalidate', recall: RECALL, mark: 'got' }, { ideaId: 'stampede', recall: RECALL, mark: 'got' }];
+    const items = [{ ideaId: 'cache-invalidate', recall: RECALL, mark: 'got' }, { ideaId: 'stampede', recall: RECALL, mark: 'got' }, { ideaId: 'idempotent-consumer', recall: RECALL, mark: 'got' }];
     expect((await request(app).post('/api/keyideas/recap/fx-beta').send({ items })).status).toBe(200);
     clock.advance(14 * DAY_MS + 1);
     const q = await request(app).get('/api/reviews/queue');
@@ -117,9 +145,9 @@ describe('section recap + re-check', () => {
     expect((await request(app).post(`/api/reviews/${rc.id}/grade`).send({ grade: 'good' })).status).toBe(409);
     const pr = await request(app).get(`/api/keyideas/recheck/${rc.id}`);
     expect(pr.body).toMatchObject({ section: 'fx-beta', kind: 'recheck-14' });
-    expect(pr.body.prompts).toHaveLength(2); // min(5, met ideas)
+    expect(pr.body.prompts).toHaveLength(3); // min(5, met ideas)
     const ev0 = n(tmp.db, 'SELECT COUNT(*) AS n FROM evidence');
-    const done = await request(app).post(`/api/keyideas/recheck/${rc.id}`).send({ items: [{ ...items[0], mark: 'partly' }, items[1]] });
+    const done = await request(app).post(`/api/keyideas/recheck/${rc.id}`).send({ items: [{ ...items[0], mark: 'partly' }, items[1], items[2]] });
     expect(done.status).toBe(200);
     expect(done.body).toMatchObject({ kind: 'recheck-14', xp: null, reviewXp: { amount: 1 }, reenrolled: ['keyidea:fx-beta/cache-invalidate'] });
     expect(n(tmp.db, 'SELECT COUNT(*) AS n FROM evidence')).toBe(ev0);
