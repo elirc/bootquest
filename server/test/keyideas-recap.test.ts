@@ -129,6 +129,62 @@ describe('section recap + re-check', () => {
     expect(() => tmp.db.run("UPDATE keyidea_checkpoint SET section = 'x'")).toThrow(/append-only/);
   });
 
+  it('rv3 F6: the recap re-enrols within the 4-a-day cap: a never-reviewed card keeps its capped day, a reviewed one is pulled forward', async () => {
+    const idea = (k: number) => ({ id: `idea-${k}`, idea: 'i', why: 'w', prompt: `p${k}?`, answer: 'a', tags: ['t'], sources: [`kx/f/${k}`], siblings: [] });
+    setKeyIdeas(makeKeyIdeas([{ format: 'bootquest-keyideas@1', section: 'fx-flood', title: 'Flood', track: 'js', scope: ['kx/f/'], recapAfter: 6, ideas: [1, 2, 3, 4, 5, 6].map(idea) }]));
+    const t0 = nowMs(clock);
+    for (let k = 1; k <= 6; k++) submit(tmp.db, clock, makeUnit(tmp.db, clock, { key: `kx/f/${k}`, kind: 'quiz' }));
+    await request(app).get('/api/keyideas'); // enrols 6 cards: 4 due on day 1, 2 on day 2
+    const dues = () => tmp.db.all<{ key: string; due: number }>("SELECT card_key AS key, due_at AS due FROM review_item WHERE card_key LIKE 'keyidea:fx-flood/%' ORDER BY id");
+    const perDay = () => { const m = new Map<number, number>(); for (const d of dues()) { const day = Math.floor((d.due - t0) / DAY_MS); m.set(day, (m.get(day) ?? 0) + 1); } return [...m.entries()].sort((a, b) => a[0] - b[0]); };
+    expect(perDay()).toEqual([[1, 4], [2, 2]]);
+    // day 1: one card is reviewed (Easy on a new card schedules it days out; Good would be a minutes-long learning step)
+    clock.advance(DAY_MS);
+    const first = tmp.db.get<{ id: number }>("SELECT id FROM review_item WHERE card_key = 'keyidea:fx-flood/idea-1'")!.id;
+    expect((await request(app).post(`/api/reviews/${first}/grade`).send({ grade: 'easy' })).status).toBe(200);
+    const goodDue = dues().find((d) => d.key === 'keyidea:fx-flood/idea-1')!.due;
+    expect(goodDue).toBeGreaterThan(nowMs(clock) + DAY_MS);
+    const before = new Map(dues().map((d) => [d.key, d.due]));
+    // the recap marks every idea missed
+    const items = [1, 2, 3, 4, 5, 6].map((k) => ({ ideaId: `idea-${k}`, recall: RECALL, mark: 'missed' }));
+    const r = await request(app).post('/api/keyideas/recap/fx-flood').send({ items });
+    expect(r.status).toBe(200);
+    expect(r.body.reenrolled).toHaveLength(6);
+    const after = new Map(dues().map((d) => [d.key, d.due]));
+    // the reviewed card is pulled forward to tomorrow at the latest; the never-reviewed ones did not move
+    expect(after.get('keyidea:fx-flood/idea-1')!).toBeLessThan(goodDue);
+    expect(after.get('keyidea:fx-flood/idea-1')!).toBeLessThanOrEqual(nowMs(clock) + DAY_MS);
+    for (let k = 2; k <= 6; k++) expect(after.get(`keyidea:fx-flood/idea-${k}`)).toBe(before.get(`keyidea:fx-flood/idea-${k}`));
+    // never more than 4 never-reviewed key-idea cards due on one local day
+    const neverReviewed = tmp.db.all<{ due: number }>("SELECT due_at AS due FROM review_item ri WHERE card_key LIKE 'keyidea:%' AND NOT EXISTS (SELECT 1 FROM review_log rl WHERE rl.review_item_id = ri.id)");
+    const byDay = new Map<number, number>();
+    for (const d of neverReviewed) byDay.set(Math.floor((d.due - t0) / DAY_MS), (byDay.get(Math.floor((d.due - t0) / DAY_MS)) ?? 0) + 1);
+    for (const n of byDay.values()) expect(n).toBeLessThanOrEqual(4);
+  });
+
+  it('rv3 L4: the re-check prompts drawn at the first GET are the ones the POST accepts, whatever is graded or passed in between', async () => {
+    const idea = (k: number) => ({ id: `idea-${k}`, idea: 'i', why: 'w', prompt: `p${k}?`, answer: 'a', tags: ['t'], sources: [`kx/g/${k}`], siblings: [] });
+    setKeyIdeas(makeKeyIdeas([{ format: 'bootquest-keyideas@1', section: 'fx-seven', title: 'Seven', track: 'js', scope: ['kx/g/'], recapAfter: 6, ideas: [1, 2, 3, 4, 5, 6, 7, 8].map(idea) }]));
+    const unit: number[] = [];
+    for (let k = 1; k <= 8; k++) unit.push(makeUnit(tmp.db, clock, { key: `kx/g/${k}`, kind: 'quiz' }));
+    for (let k = 0; k < 7; k++) submit(tmp.db, clock, unit[k]!); // 7 met, idea-8 not yet
+    await request(app).get('/api/keyideas');
+    const items = [1, 2, 3, 4, 5, 6, 7].map((k) => ({ ideaId: `idea-${k}`, recall: RECALL, mark: 'got' }));
+    expect((await request(app).post('/api/keyideas/recap/fx-seven').send({ items })).status).toBe(200);
+    clock.advance(14 * DAY_MS + 1);
+    const rc = tmp.db.get<{ id: number }>("SELECT id FROM review_item WHERE card_key = 'recheck:fx-seven/14'")!.id;
+    const drawn = ((await request(app).get(`/api/keyideas/recheck/${rc}`)).body.prompts as { ideaId: string }[]).map((x) => x.ideaId);
+    expect(drawn).toHaveLength(5);
+    // between the GET and the POST: a drawn idea's card is graded Easy and the 8th idea is met (both would change the draw)
+    const card = tmp.db.get<{ id: number }>('SELECT id FROM review_item WHERE card_key = ?', `keyidea:fx-seven/${drawn[0]}`)!.id;
+    expect((await request(app).post(`/api/reviews/${card}/grade`).send({ grade: 'easy' })).status).toBe(200);
+    submit(tmp.db, clock, unit[7]!);
+    expect(((await request(app).get(`/api/keyideas/recheck/${rc}`)).body.prompts as { ideaId: string }[]).map((x) => x.ideaId)).toEqual(drawn);
+    const done = await request(app).post(`/api/keyideas/recheck/${rc}`).send({ items: drawn.map((ideaId) => ({ ideaId, recall: RECALL, mark: 'got' })) });
+    expect(done.status).toBe(200);
+    expect(done.body.kind).toBe('recheck-14');
+  });
+
   it('the 14-day re-check appears once in the reviews queue, is graded by its prompts, then is never due again', async () => {
     submit(tmp.db, clock, ids['kx/b/01']!);
     submit(tmp.db, clock, ids['kx/b/02']!);

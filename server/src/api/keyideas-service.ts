@@ -28,8 +28,9 @@ import { answerWords, stripKpWeight } from '@bootquest/shared/eb-weight';
 import { z } from 'zod';
 import type { Db } from '../db/database.ts';
 import { DAY_MS, dayKey, nowMs } from '../engines/clock.ts';
-import { addReviewItem, deserializeCard, regradeMissedCard, REVIEWABLE_SQL, reviveRetiredCard, type ReviewItemRow } from '../engines/fsrs.ts';
+import { addReviewItem, regradeMissedCard, REVIEWABLE_SQL, reviveRetiredCard, type ReviewItemRow } from '../engines/fsrs.ts';
 import {
+  cappedKeyIdeaDue,
   cardKeyOf,
   ideaStatuses,
   KEYIDEA_PREFIX,
@@ -356,16 +357,26 @@ export function revealIdea(deps: Deps, section: string, body: z.infer<typeof Rec
   return { ideaId: i.idea.id, answer: i.idea.answer, why: i.idea.why, sources: sourceDtos(i, passed) };
 }
 
-/** Partly / missed ideas: their key-idea card re-graded Again, due tomorrow at the latest (created if missing). */
+/**
+ * Partly / missed ideas: a REVIEWED key-idea card is re-graded Again, due tomorrow at the latest. rv3 F6: a card
+ * never reviewed keeps its capped first day (engines/keyideas.ts cappedKeyIdeaDue), and a missing one is created on
+ * the capped day, so a recap never puts more than NEW_KEYIDEA_CARDS_PER_DAY new key-idea cards on one day.
+ */
 function reenrol(db: Db, i: ResolvedIdea, passed: ReadonlyMap<number, number>, t: number, clock: Deps['clock']): string {
   const key = cardKeyOf(KEYIDEA_PREFIX, i.section, i.idea.id);
   const due = t + DAY_MS;
-  if (db.get('SELECT 1 AS x FROM review_item WHERE card_key = ?', key)) {
-    reviveRetiredCard(db, key, due, clock);
-    regradeMissedCard(db, key, due, clock);
+  const row = db.get<{ id: number; retired: number | null }>('SELECT id, retired_at AS retired FROM review_item WHERE card_key = ?', key);
+  if (row) {
+    const reviewed = db.get('SELECT 1 AS x FROM review_log WHERE review_item_id = ? LIMIT 1', row.id) !== undefined;
+    if (reviewed) {
+      reviveRetiredCard(db, key, due, clock);
+      regradeMissedCard(db, key, due, clock);
+    } else if (row.retired !== null) {
+      reviveRetiredCard(db, key, cappedKeyIdeaDue(db, t), clock);
+    }
   } else {
     const last = liveSources(i).reduce((a, b) => ((passed.get(b.unitId!) ?? 0) > (passed.get(a.unitId!) ?? 0) ? b : a));
-    addReviewItem(db, { cardKey: key, kind: 'concept', unitId: last.unitId!, dueAt: due }, clock);
+    addReviewItem(db, { cardKey: key, kind: 'concept', unitId: last.unitId!, dueAt: cappedKeyIdeaDue(db, t) }, clock);
   }
   return key;
 }
@@ -427,16 +438,26 @@ function requireRecheck(deps: Deps, itemId: number): { row: ReviewItemRow; s: Re
   if (row.retired_at !== null) throw new HttpError(409, 'NOT_DUE', 'this re-check was retired (its section left the side files)');
   if (row.due_at > nowMs(clock)) throw new HttpError(409, 'NOT_DUE', `this re-check is due ${new Date(row.due_at).toISOString()}`);
   const { s, passed } = requireSection(db, rc.section);
-  return { row, s, passed, kind, ideas: shakiest(db, metIdeas(s, passed)) };
+  // rv3 L4: the draw is fixed as of the card's due time (ideas met by then, grades logged before it), so a card
+  // graded or a source passed between the GET and the POST cannot change the five prompts and refuse the submit
+  const asOf = row.due_at;
+  return { row, s, passed, kind, ideas: shakiest(db, metIdeas(s, passed).filter((i) => metAt(i, passed)! <= asOf), asOf) };
 }
 
-/** The RECHECK_PROMPTS met ideas with the worst FSRS state: not in Review state first, then most lapses, lowest stability. */
-function shakiest(db: Db, ideas: readonly ResolvedIdea[]): ResolvedIdea[] {
+/**
+ * The RECHECK_PROMPTS shakiest met ideas as of `asOf` (review_log rows before it): never reviewed or last graded
+ * Again / Hard first, then the most Again grades, then the fewest reviews; ties keep the section order.
+ */
+function shakiest(db: Db, ideas: readonly ResolvedIdea[], asOf: number): ResolvedIdea[] {
   const score = (i: ResolvedIdea): [number, number, number] => {
-    const row = db.get<{ state: string }>('SELECT fsrs_state AS state FROM review_item WHERE card_key = ?', cardKeyOf(KEYIDEA_PREFIX, i.section, i.idea.id));
-    if (!row) return [0, 0, 0];
-    const c = deserializeCard(row.state);
-    return [c.state === 2 ? 1 : 0, -c.lapses, c.stability];
+    const log = db.all<{ rating: string }>(
+      'SELECT rl.rating FROM review_log rl JOIN review_item ri ON ri.id = rl.review_item_id WHERE ri.card_key = ? AND rl.reviewed_at < ? ORDER BY rl.reviewed_at, rl.id',
+      cardKeyOf(KEYIDEA_PREFIX, i.section, i.idea.id),
+      asOf,
+    );
+    if (log.length === 0) return [0, 0, 0];
+    const last = log[log.length - 1]!.rating;
+    return [last === 'good' || last === 'easy' ? 1 : 0, -log.filter((r) => r.rating === 'again').length, log.length];
   };
   return ideas
     .map((i, n) => ({ i, n, k: score(i) }))
