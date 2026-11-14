@@ -59,6 +59,45 @@
      "bounded caches"
     ]
    }
+  },
+  {
+   "unit": {
+    "key": "fund-java/16-jvm-memory-and-gc/02-bug-hunt-bounded-lru-cache",
+    "track": "java",
+    "kind": "drill",
+    "title": "Bug hunt: replace a leaking cache with a bounded LRU",
+    "phase": "16-jvm-memory-and-gc",
+    "difficulty": 2,
+    "competencies": [
+     "language-fluency"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-java",
+       "files": {
+        "tests": "    // ─── tests ───────────────────────────────────────────────────────────\n    public static void main(String[] args) {\n        test(\"a read refreshes an entry\", () -> {\n            Map<String, Integer> c = lruCache(2);\n            c.put(\"a\", 1);\n            c.put(\"b\", 2);\n            c.get(\"a\");\n            c.put(\"c\", 3);\n            eq(new ArrayList<>(c.keySet()), List.of(\"a\", \"c\"));\n        });\n        test(\"never more than the limit\", () -> {\n            Map<Integer, Integer> c = lruCache(100);\n            for (int i = 0; i < 10_000; i++) c.put(i, i);\n            eq(c.size(), 100);\n            ok(c.containsKey(9_999) && !c.containsKey(0), \"keeps the newest entries\");\n        });\n        test(\"containsKey does not count as a use\", () -> {\n            Map<String, Integer> c = lruCache(2);\n            c.put(\"a\", 1);\n            c.put(\"b\", 2);\n            c.containsKey(\"a\");\n            c.put(\"c\", 3);\n            ok(!c.containsKey(\"a\"), \"a should have been evicted\");\n        });\n        test(\"a limit of one keeps the latest entry (boundary)\", () -> {\n            Map<String, Integer> c = lruCache(1);\n            c.put(\"a\", 1);\n            c.put(\"b\", 2);\n            eq(c, Map.of(\"b\", 2));\n        });\n        test(\"a limit below one is rejected\", () -> raises(IllegalArgumentException.class, () -> lruCache(0)));\n        System.exit(report());\n    }\n    // ─── end tests ───────────────────────────────────────────────────────\n",
+        "tail": "}\n"
+       },
+       "className": "Exercise",
+       "timeoutMs": 10000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "16-jvm-memory-and-gc/02-bug-hunt-bounded-lru-cache",
+    "type": "code",
+    "module": "16-jvm-memory-and-gc",
+    "lesson": "drills",
+    "position": 1,
+    "skills": [
+     "debugging",
+     "LinkedHashMap access order",
+     "bounded caches"
+    ]
+   }
   }
  ],
  "content": {
@@ -71,6 +110,17 @@
     "LinkedHashMap can keep its entries in access order and has a hook that runs after every insertion.",
     "Configure the map to order its entries by access instead of insertion, and override its eviction hook so it drops the eldest entry once the size passes the limit; validate the limit first.",
     "Use a map that remembers which entries were touched most recently, and tell it to drop its oldest entry whenever adding one pushes it past the limit."
+   ]
+  },
+  "fund-java/16-jvm-memory-and-gc/02-bug-hunt-bounded-lru-cache": {
+   "instructions": "**Skills:** debugging · LinkedHashMap access order · bounded caches  \n**Level:** ★★☆\n\n**Bug hunt.** The code in the editor is a plausible first attempt at drill 1, \"Replace a leaking cache with a bounded LRU\". It passes some of the tests, but it has one real bug, the kind a reviewer should catch before it ships.\n\n**Your task.** Find the bug and fix it, changing as little as you can; the tests are the same as drill 1's. The spec is unchanged: Implement `static <K, V> Map<K, V> lruCache(int maxEntries)`:\n- the returned map never holds more than `maxEntries` entries\n- when a put would exceed the limit, the LEAST RECENTLY USED entry is evicted\n- `get` and `put` both count as uses (a read moves the entry to most-recent); `containsKey` does not\n- iteration order is least recently used first\n- `maxEntries` below 1 throws `IllegalArgumentException`\n",
+   "starter": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · bounded LRU cache★★☆\n//  concepts: LinkedHashMap access order · removeEldestEntry\n// ─────────────────────────────────────────────────────────────────────────\n\nimport static bootcamp.Check.*;\n\nimport java.util.*;\n\nclass Exercise {\n    // TODO: one bug hides in this code. Run the tests, find it and fix it.\n\n    /** A size-bounded map that evicts the least recently used entry. */\n    static <K, V> Map<K, V> lruCache(int maxEntries) {\n        if (maxEntries < 1) throw new IllegalArgumentException(\"maxEntries must be >= 1\");\n        return new LinkedHashMap<>(16, 0.75f, false) {\n            @Override\n            protected boolean removeEldestEntry(Map.Entry<K, V> eldest) {\n                return size() > maxEntries;\n            }\n        };\n    }\n\n    // ─── tests ───────────────────────────────────────────────────────────\n    public static void main(String[] args) {\n        test(\"a read refreshes an entry\", () -> {\n            Map<String, Integer> c = lruCache(2);\n            c.put(\"a\", 1);\n            c.put(\"b\", 2);\n            c.get(\"a\");\n            c.put(\"c\", 3);\n            eq(new ArrayList<>(c.keySet()), List.of(\"a\", \"c\"));\n        });\n        test(\"never more than the limit\", () -> {\n            Map<Integer, Integer> c = lruCache(100);\n            for (int i = 0; i < 10_000; i++) c.put(i, i);\n            eq(c.size(), 100);\n            ok(c.containsKey(9_999) && !c.containsKey(0), \"keeps the newest entries\");\n        });\n        test(\"containsKey does not count as a use\", () -> {\n            Map<String, Integer> c = lruCache(2);\n            c.put(\"a\", 1);\n            c.put(\"b\", 2);\n            c.containsKey(\"a\");\n            c.put(\"c\", 3);\n            ok(!c.containsKey(\"a\"), \"a should have been evicted\");\n        });\n        test(\"a limit of one keeps the latest entry (boundary)\", () -> {\n            Map<String, Integer> c = lruCache(1);\n            c.put(\"a\", 1);\n            c.put(\"b\", 2);\n            eq(c, Map.of(\"b\", 2));\n        });\n        test(\"a limit below one is rejected\", () -> raises(IllegalArgumentException.class, () -> lruCache(0)));\n        System.exit(report());\n    }\n    // ─── end tests ───────────────────────────────────────────────────────\n}\n",
+   "solution": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · bounded LRU cache★★☆\n//  concepts: LinkedHashMap access order · removeEldestEntry\n// ─────────────────────────────────────────────────────────────────────────\n\nimport static bootcamp.Check.*;\n\nimport java.util.*;\n\nclass Exercise {\n\n    /** A size-bounded map that evicts the least recently used entry. */\n    static <K, V> Map<K, V> lruCache(int maxEntries) {\n        if (maxEntries < 1) throw new IllegalArgumentException(\"maxEntries must be >= 1\");\n        return new LinkedHashMap<>(16, 0.75f, true) {\n            @Override\n            protected boolean removeEldestEntry(Map.Entry<K, V> eldest) {\n                return size() > maxEntries;\n            }\n        };\n    }\n\n    // ─── tests ───────────────────────────────────────────────────────────\n    public static void main(String[] args) {\n        test(\"a read refreshes an entry\", () -> {\n            Map<String, Integer> c = lruCache(2);\n            c.put(\"a\", 1);\n            c.put(\"b\", 2);\n            c.get(\"a\");\n            c.put(\"c\", 3);\n            eq(new ArrayList<>(c.keySet()), List.of(\"a\", \"c\"));\n        });\n        test(\"never more than the limit\", () -> {\n            Map<Integer, Integer> c = lruCache(100);\n            for (int i = 0; i < 10_000; i++) c.put(i, i);\n            eq(c.size(), 100);\n            ok(c.containsKey(9_999) && !c.containsKey(0), \"keeps the newest entries\");\n        });\n        test(\"containsKey does not count as a use\", () -> {\n            Map<String, Integer> c = lruCache(2);\n            c.put(\"a\", 1);\n            c.put(\"b\", 2);\n            c.containsKey(\"a\");\n            c.put(\"c\", 3);\n            ok(!c.containsKey(\"a\"), \"a should have been evicted\");\n        });\n        test(\"a limit of one keeps the latest entry (boundary)\", () -> {\n            Map<String, Integer> c = lruCache(1);\n            c.put(\"a\", 1);\n            c.put(\"b\", 2);\n            eq(c, Map.of(\"b\", 2));\n        });\n        test(\"a limit below one is rejected\", () -> raises(IllegalArgumentException.class, () -> lruCache(0)));\n        System.exit(report());\n    }\n    // ─── end tests ───────────────────────────────────────────────────────\n}\n",
+   "explanation": "With `accessOrder = false` the map keeps insertion order, so `removeEldestEntry` evicts the oldest INSERTED entry even if it was just read: FIFO, not LRU. Passing `true` makes `get` move the entry to the tail, so the head is always the least recently used.",
+   "hints": [
+    "Read the oldest entry, insert one more, and check which entry was evicted.",
+    "With insertion order, reading an entry does not move it, so eviction is first in, first out.",
+    "Turn on access ordering, so every read moves the entry to the most recent end."
    ]
   }
  }
