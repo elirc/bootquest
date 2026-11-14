@@ -1,0 +1,138 @@
+{
+ "format": "bootquest-keyideas@1",
+ "section": "fund-js-platform",
+ "title": "JS: TypeScript, Node and React (topics 15-20)",
+ "track": "js",
+ "_note": "rv2 S2 (PLAN §2.2 fund-js-platform row). Scope = Fundamentals JS topic gates 15-20. Sources = the topic gate plus its first drill; siblings = the bug-hunt drill and related.json drills. Server-local side file, never stamped.",
+ "scope": [
+  "fund/js/15-typescript-types-and-narrowing",
+  "fund/js/16-typescript-generics-and-utility-types",
+  "fund/js/17-node-core",
+  "fund/js/18-http-apis-in-node",
+  "fund/js/19-react-components-state-and-hooks",
+  "fund/js/20-react-effects-and-rendering"
+ ],
+ "recapAfter": 0.8,
+ "ideas": [
+  {
+   "id": "narrow-unknown",
+   "idea": "Type data from outside the program as unknown and narrow it with checks (typeof, in, a discriminant field) before use; any switches the checker off.",
+   "why": "An any-typed payload compiles everywhere and fails at runtime, far from the place where the bad data entered.",
+   "prompt": "A webhook handler does `const event = JSON.parse(body) as any` and reads event.data.amount. A malformed event crashes a nightly job three services away. How should the handler be typed?",
+   "answer": "Parse into unknown and prove its shape before use: check it is an object, check the discriminating type field, check that amount is a number, then treat it as the narrowed union member. Reject anything else at the edge with a clear error. The compiler then guarantees that later code only sees validated events.",
+   "tags": [
+    "typescript",
+    "validation-at-boundaries"
+   ],
+   "sources": [
+    "fund/js/15-typescript-types-and-narrowing",
+    "fund-js/15-typescript-types-and-narrowing/01-validate-a-discriminated-union"
+   ],
+   "siblings": [
+    "fund-js/15-typescript-types-and-narrowing/02-bug-hunt-validate-a-discriminated-union",
+    "jstrain/ts-02-narrowing/01-typeof-format",
+    "jstrain/ts-02-narrowing/04-in-operator"
+   ]
+  },
+  {
+   "id": "generics-relate-types",
+   "idea": "A generic type parameter expresses a relation between inputs and outputs, such as 'returns the same type it was given'; without a relation it is just a disguised any.",
+   "why": "Functions typed with wide unions or any lose the link between argument and result, so every caller casts and the checker stops catching mismatches.",
+   "prompt": "`function pick(obj: object, keys: string[]): object` forces every caller to cast its result. Rewrite the signature so the result type follows the arguments, and say what the generics guarantee.",
+   "answer": "`function pick<T, K extends keyof T>(obj: T, keys: K[]): Pick<T, K>`. T captures the input's type, K is limited to its real keys, and the result is exactly those properties. A typo in a key becomes a compile error, and callers get a precise type with no cast.",
+   "tags": [
+    "typescript",
+    "generics"
+   ],
+   "sources": [
+    "fund/js/16-typescript-generics-and-utility-types",
+    "fund-js/16-typescript-generics-and-utility-types/01-pick-and-omit-at-runtime"
+   ],
+   "siblings": [
+    "fund-js/16-typescript-generics-and-utility-types/02-bug-hunt-pick-and-omit-at-runtime",
+    "bootforge/ts-apps/generics/generic-functions/identity",
+    "jstrain/ts-04-utility-and-mapped-types/01-partial-patch"
+   ]
+  },
+  {
+   "id": "stream-backpressure",
+   "idea": "Streams move data in chunks with backpressure: when the writer is full, the reader must pause; pipeline() wires that up and propagates errors and cleanup.",
+   "why": "Reading faster than you can write buffers the whole input in memory, and hand-wired pipes leak file handles when one side fails.",
+   "prompt": "A Node script copies a 10 GB export to a slow network share with `readable.on('data', c => writable.write(c))`. Memory climbs until the process dies. What is wrong, and what do you write instead?",
+   "answer": "write() returns false when the destination's buffer is full, but the handler ignores it and keeps reading, so chunks pile up in memory. Use stream.pipeline(readable, writable) from node:stream/promises: it pauses the reader until the writer drains, and if either side errors it destroys both and rejects.",
+   "tags": [
+    "node-runtime",
+    "streams"
+   ],
+   "sources": [
+    "fund/js/17-node-core",
+    "fund-js/17-node-core/01-line-splitter"
+   ],
+   "siblings": [
+    "fund-js/17-node-core/02-bug-hunt-line-splitter",
+    "jstrain/12-node-fundamentals/03-path-basics",
+    "jstrain/12-node-fundamentals/05-fs-text"
+   ]
+  },
+  {
+   "id": "validate-at-the-edge",
+   "idea": "Validate requests at the HTTP edge and pick the status by who must act: the client's mistake is a 4xx with a reason, the server's own failure is a 5xx.",
+   "why": "Unvalidated input fails deep inside the code as a 500, and wrong status codes make clients retry what can never succeed or give up on what would.",
+   "prompt": "POST /orders with a missing quantity currently crashes inside the pricing code and returns 500. Clients retry it in a loop. What should the endpoint do?",
+   "answer": "Check the body at the route before any work: a missing or invalid field is the client's to fix, so answer 400 (or 422) with which field and why, and clients stop retrying. A 500 is only for failures on the server's side, which a retry might cure. Map not found, conflict and auth errors to their own statuses too.",
+   "tags": [
+    "http",
+    "validation-at-boundaries"
+   ],
+   "sources": [
+    "fund/js/18-http-apis-in-node",
+    "fund-js/18-http-apis-in-node/01-route-matcher"
+   ],
+   "siblings": [
+    "fund-js/18-http-apis-in-node/02-bug-hunt-route-matcher",
+    "jstrain/18-node-http-apis/01-response-helpers",
+    "bootforge/http-rest/http/methods-and-semantics/is-idempotent"
+   ]
+  },
+  {
+   "id": "state-snapshot-pure-render",
+   "idea": "React state is a snapshot for one render: setting it schedules a new render, render must be pure, and updates replace objects instead of mutating them.",
+   "why": "Mutating state in place or reading it right after setState shows stale values and skipped re-renders, bugs that look random.",
+   "prompt": "A click handler calls `setCount(count + 1)` three times and the counter only goes up by one. Another handler does `cart.items.push(item); setCart(cart)` and nothing re-renders. Explain both.",
+   "answer": "In one render count is a fixed snapshot, so all three calls set the same value; use the updater form setCount(c => c + 1) to build on the latest value. The push mutates the existing object and passes the same reference back, so React sees no change; create a new object and a new items array instead.",
+   "tags": [
+    "react",
+    "immutability"
+   ],
+   "sources": [
+    "fund/js/19-react-components-state-and-hooks",
+    "fund-js/19-react-components-state-and-hooks/01-cart-reducer"
+   ],
+   "siblings": [
+    "fund-js/19-react-components-state-and-hooks/02-bug-hunt-cart-reducer",
+    "bootforge/react-state/state-mechanics/usestate-semantics/updater-increment",
+    "bootforge/react-fundamentals/components/components-and-props/badge-component"
+   ]
+  },
+  {
+   "id": "effects-sync-external",
+   "idea": "An effect keeps a component in sync with something outside React; list every value it reads as a dependency and return a cleanup that undoes it.",
+   "why": "Missing dependencies leave stale closures that act on old props, and missing cleanup leaves subscriptions, timers and late fetches writing into unmounted or changed screens.",
+   "prompt": "A profile page fetches `/users/${id}` in an effect with an empty dependency array. Switching quickly between users sometimes shows the wrong person. Fix the effect and explain why it broke.",
+   "answer": "The effect reads id but never re-runs when it changes, and nothing stops an older, slower response from landing last. Put id in the dependency array and return a cleanup that aborts the request (AbortController) or ignores its result, so only the latest user's response updates state.",
+   "tags": [
+    "react",
+    "effects"
+   ],
+   "sources": [
+    "fund/js/20-react-effects-and-rendering",
+    "fund-js/20-react-effects-and-rendering/01-effect-runner"
+   ],
+   "siblings": [
+    "fund-js/20-react-effects-and-rendering/02-bug-hunt-effect-runner",
+    "bootforge/react-state/effects-and-data/effects-thinking/classify-code-home",
+    "bootforge/react-state/effects-and-data/effects-thinking/deps-equal"
+   ]
+  }
+ ]
+}

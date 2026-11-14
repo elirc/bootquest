@@ -1,0 +1,389 @@
+{
+ "format": "bootquest-keyideas@1",
+ "section": "sysdrills",
+ "title": "System-design drills: the 18 maths modules",
+ "track": "sysdesign",
+ "_note": "rv2 S2 (PLAN §2.2 sysdrills row): one idea per sysdrills module; sources are the module drills that teach it, siblings are other drills of the same module (redo cards). Server-local side file, never stamped.",
+ "scope": [
+  "sysdrills/01-estimation/",
+  "sysdrills/02-caching-and-pools/",
+  "sysdrills/03-reliability-math/",
+  "sysdrills/04-networking-and-latency/",
+  "sysdrills/05-sql-and-indexing/",
+  "sysdrills/06-concurrency-and-throughput/",
+  "sysdrills/07-hashing-and-sharding/",
+  "sysdrills/08-encoding-and-counting/",
+  "sysdrills/09-queues-and-backlog/",
+  "sysdrills/10-capacity-and-cost/",
+  "sysdrills/11-replication-and-consistency/",
+  "sysdrills/12-multi-region-and-failover/",
+  "sysdrills/13-search-and-indexing/",
+  "sysdrills/14-observability-and-telemetry/",
+  "sysdrills/15-node-service-runtime/",
+  "sysdrills/16-data-access-and-integrity/",
+  "sysdrills/17-client-data-layer/",
+  "sysdrills/18-web-authz-and-sessions/"
+ ],
+ "recapAfter": 0.8,
+ "ideas": [
+  {
+   "id": "envelope-from-dau",
+   "idea": "Every sizing starts from one chain: daily users times requests per user, spread over 86,400 seconds, then a peak factor, then bytes per request for storage.",
+   "why": "Without the chain you size servers, caches and disks from guesses, and a design sized for the daily average falls over at the evening peak.",
+   "prompt": "An interviewer says: 4 million daily users, about 20 reads each, evenings run five times the average. Before drawing any box, which three numbers do you state, and in what order?",
+   "answer": "First the average rate: 80 million reads over 86,400 seconds, close to 925 per second. Then the peak, five times that, near 4,600 per second. Only then storage or bandwidth, from bytes per read times reads per day. Servers, caches and queues are sized from the peak, never from the average.",
+   "tags": [
+    "estimation",
+    "capacity"
+   ],
+   "sources": [
+    "sysdrills/01-estimation/01-qps-from-dau",
+    "sysdrills/01-estimation/02-peak-qps"
+   ],
+   "siblings": [
+    "sysdrills/01-estimation/03-storage-growth",
+    "sysdrills/01-estimation/04-bandwidth-budget",
+    "sysdrills/01-estimation/05-cache-working-set"
+   ]
+  },
+  {
+   "id": "hit-ratio-and-pools",
+   "idea": "Only cache misses reach the database, so a small drop in hit ratio multiplies database load; a pool holds rate times hold time connections, capped by the database limit.",
+   "why": "Teams read 98% as 'almost 99%' and miss that it doubles database reads; pools sized by feel either queue requests or exhaust the database's connection limit across instances.",
+   "prompt": "Your cache hit ratio slips from 99% to 98% after a deploy, and every app instance has a pool of 50 connections. What do you check on the database, and why do both numbers matter?",
+   "answer": "Misses went from 1% to 2% of reads, so database reads doubled. Each instance owns its own pool, so instances times pool size must stay under the database connection limit, and each pool only needs request rate times hold time plus headroom. Doubled load plus oversized pools is how the database runs out of connections.",
+   "tags": [
+    "caching",
+    "connection-pools"
+   ],
+   "sources": [
+    "sysdrills/02-caching-and-pools/01-effective-latency",
+    "sysdrills/02-caching-and-pools/03-connection-pool"
+   ],
+   "siblings": [
+    "sysdrills/02-caching-and-pools/02-lru-capacity",
+    "sysdrills/02-caching-and-pools/04-rate-limit-window",
+    "sysdrills/02-caching-and-pools/05-token-bucket"
+   ]
+  },
+  {
+   "id": "series-parallel-and-retry-budget",
+   "idea": "Availabilities in series multiply down, redundant copies multiply their downtime away; a retry policy's worst case is every attempt timing out plus every backoff wait.",
+   "why": "Adding a dependency silently lowers your ceiling below the weakest link, and retries that outlast the caller's deadline are wasted load during an outage.",
+   "prompt": "A request path calls three services, each at 99.9%, and the client retries 4 times with exponential backoff inside a 2-second deadline. What two checks do you make before promising 99.9% to the client?",
+   "answer": "Three services in series give about 99.7%, below each one, so the promise needs redundancy or fewer hard dependencies. Then add the worst case of the retry policy: every attempt running to its timeout plus every backoff at the top of its range. If that exceeds 2 seconds, the late retries only add load after the caller gave up.",
+   "tags": [
+    "availability",
+    "retries-timeouts"
+   ],
+   "sources": [
+    "sysdrills/03-reliability-math/02-availability-ppm",
+    "sysdrills/03-reliability-math/06-retry-budget"
+   ],
+   "siblings": [
+    "sysdrills/03-reliability-math/03-error-budget",
+    "sysdrills/03-reliability-math/04-exponential-backoff",
+    "sysdrills/03-reliability-math/07-mtbf-availability"
+   ]
+  },
+  {
+   "id": "tail-grows-with-fanout",
+   "idea": "A page that waits for N backends is fast only when all N are fast, so a rare slow call becomes the common case as fan-out grows.",
+   "why": "Each backend looks healthy at p99 while most pages are slow; you fix the wrong service or promise a latency the fan-out makes impossible.",
+   "prompt": "Each of 100 backends answers within 10 ms 99% of the time, and a page needs all 100. Your product manager wants the page under 10 ms 'almost always'. What do you tell them?",
+   "answer": "The chance that all 100 are fast is 0.99 to the power 100, about 37%, so roughly two pages in three wait for at least one slow call. The page's typical latency is the backends' tail. Options: fewer calls on the critical path, hedged requests, or a timeout with a partial answer.",
+   "tags": [
+    "latency",
+    "fan-out"
+   ],
+   "sources": [
+    "sysdrills/04-networking-and-latency/04-tail-at-fanout"
+   ],
+   "siblings": [
+    "sysdrills/04-networking-and-latency/03-nearest-rank-percentile",
+    "sysdrills/04-networking-and-latency/06-timeout-cascade",
+    "sysdrills/04-networking-and-latency/05-retries-within-deadline"
+   ]
+  },
+  {
+   "id": "selectivity-decides-index",
+   "idea": "An index pays off only for predicates that return a small slice of the table; the cost to watch is rows examined against rows returned.",
+   "why": "Indexing a low-cardinality column adds write cost and the planner still scans; a query that examines a million rows to return ten looks fine until the table grows.",
+   "prompt": "A teammate wants an index on orders.status, which has 4 values over 20 million rows, to speed up 'status = shipped'. How do you decide, and what number do you ask the query plan for?",
+   "answer": "With 4 evenly spread values the predicate returns about a quarter of the table, so random index lookups would cost more than a sequential scan and the planner will likely ignore it. Ask for rows examined versus rows returned; a composite index with a selective leading column, or a partial index on a rare status, is the better fix.",
+   "tags": [
+    "indexing",
+    "sql"
+   ],
+   "sources": [
+    "sysdrills/05-sql-and-indexing/01-selectivity",
+    "sysdrills/05-sql-and-indexing/02-rows-examined-vs-returned"
+   ],
+   "siblings": [
+    "sysdrills/05-sql-and-indexing/04-covering-index",
+    "sysdrills/05-sql-and-indexing/05-offset-pagination-cost",
+    "sysdrills/05-sql-and-indexing/03-btree-depth"
+   ]
+  },
+  {
+   "id": "throughput-bounds",
+   "idea": "Throughput has hard ceilings: work in flight equals rate times time (Little's law), and the serial part of a job caps speedup no matter how many workers you add.",
+   "why": "Without the bounds, teams add workers or servers to a job limited by one lock or one serial step and get no faster while paying more.",
+   "prompt": "A nightly job takes 60 minutes: 10 minutes reading one file serially, 50 minutes of independent work. Someone proposes 50 workers to finish in about a minute. What runtime do you predict, and why?",
+   "answer": "Only the 50 independent minutes divide by the workers, so 50 workers give about 10 + 1 = 11 minutes, and no worker count beats 10. The serial read is the ceiling, like a single lock that every request must pass. To go faster, shrink or split the serial part, not the pool.",
+   "tags": [
+    "throughput",
+    "concurrency"
+   ],
+   "sources": [
+    "sysdrills/06-concurrency-and-throughput/08-amdahl-runtime",
+    "sysdrills/06-concurrency-and-throughput/02-utilisation-headroom"
+   ],
+   "siblings": [
+    "sysdrills/06-concurrency-and-throughput/03-lock-serialization",
+    "sysdrills/06-concurrency-and-throughput/06-pipeline-bottleneck",
+    "sysdrills/06-concurrency-and-throughput/05-batching-amortization"
+   ]
+  },
+  {
+   "id": "consistent-hashing-and-skew",
+   "idea": "Modulo hashing moves almost every key when the node count changes, consistent hashing moves about one node's share; and hashing spreads keys, never the traffic of one hot key.",
+   "why": "A resize under modulo empties every cache at once, and a celebrity key overloads its shard however many shards you add.",
+   "prompt": "You grow a cache cluster from 4 to 5 nodes, and one product id gets 20% of all reads. What happens to the hit ratio during the resize, and does the fifth node help the hot product?",
+   "answer": "With key modulo node count about 80% of keys change node, so the hit ratio collapses and the database takes the misses; consistent hashing would move only about a fifth. The hot product still lands on one node, carrying its 20% plus a fair share. Replicate or split that key; more nodes do not help it.",
+   "tags": [
+    "sharding",
+    "hot-keys",
+    "caching"
+   ],
+   "sources": [
+    "sysdrills/07-hashing-and-sharding/01-modulo-vs-consistent",
+    "sysdrills/07-hashing-and-sharding/03-hot-key-skew"
+   ],
+   "siblings": [
+    "sysdrills/07-hashing-and-sharding/02-node-loss-load",
+    "sysdrills/07-hashing-and-sharding/06-weighted-vnodes",
+    "sysdrills/07-hashing-and-sharding/04-rebalance-cost"
+   ]
+  },
+  {
+   "id": "bytes-per-record",
+   "idea": "Size data from bytes per record: column widths plus overhead, times rows; text is UTF-8 bytes, not characters; and count operations before trusting a complexity class.",
+   "why": "Estimates from 'a row is small' miss the overhead, the multi-byte text and the indexes, and an innocent nested loop hides a quadratic count.",
+   "prompt": "A table stores a bigint id, a uuid, two timestamps and a 40-character name that is often Japanese. Estimate its size at 500 million rows, and say which part of your estimate is shakiest.",
+   "answer": "Fixed columns are 8 + 16 + 8 + 8 = 40 bytes. The name is 40 characters but up to 3 bytes each in UTF-8, so up to 120 bytes. About 160 bytes plus overhead for headers, page slack and indexes: roughly 100 GB or more. The text width and the overhead factor are the shaky parts; state both.",
+   "tags": [
+    "estimation",
+    "storage",
+    "encoding"
+   ],
+   "sources": [
+    "sysdrills/08-encoding-and-counting/03-row-size",
+    "sysdrills/08-encoding-and-counting/01-utf8-bytes"
+   ],
+   "siblings": [
+    "sysdrills/08-encoding-and-counting/04-page-math",
+    "sysdrills/08-encoding-and-counting/02-base64-overhead",
+    "sysdrills/08-encoding-and-counting/05-loop-op-counts"
+   ]
+  },
+  {
+   "id": "backlog-drain-time",
+   "idea": "A backlog drains only by the surplus of processing rate over arrival rate, so the fleet must cover the existing backlog plus everything that arrives while it drains.",
+   "why": "Sizing consumers for the backlog alone ignores new arrivals, so the lag never closes and the freshness promise breaks for hours.",
+   "prompt": "A queue is 1,200,000 messages behind, new messages arrive at 1,000 per second, and each consumer handles 500 per second. You must be caught up in 10 minutes. How many consumers, and what mistake do people make here?",
+   "answer": "In 600 seconds the fleet must handle the 1,200,000 backlog plus 600,000 arrivals, 1,800,000 messages; one consumer handles 300,000 in that window, so 6 consumers. The usual mistake divides only the backlog and gets 4: those barely beat arrivals and drain far too slowly.",
+   "tags": [
+    "queues",
+    "backlog"
+   ],
+   "sources": [
+    "sysdrills/09-queues-and-backlog/03-consumers-to-drain",
+    "sysdrills/09-queues-and-backlog/01-queue-position-eta"
+   ],
+   "siblings": [
+    "sysdrills/09-queues-and-backlog/02-backlog-sla-threshold",
+    "sysdrills/09-queues-and-backlog/05-dlq-sizing",
+    "sysdrills/09-queues-and-backlog/08-load-shedding"
+   ]
+  },
+  {
+   "id": "headroom-and-unit-cost",
+   "idea": "Size compute as busy cores (rate times CPU time) plus headroom, rounded up to whole machines; then express the bill as cost per million requests to compare options.",
+   "why": "Fleets sized to 100% busy fall over at the first peak or deploy, and a monthly bill alone cannot tell you whether serverless or a fleet is cheaper at your volume.",
+   "prompt": "Requests cost 20 ms of CPU each, peak is 4,000 per second, instances have 8 cores. A colleague says '10 instances, done'. What do you add, and how do you argue for or against moving to per-request pricing?",
+   "answer": "4,000 times 20 ms is 80 busy cores: exactly 10 instances at 100%, with no room for peaks, deploys or a lost node. Add 30-50% headroom and round up, about 13-15. Then divide the monthly fleet bill by monthly requests for cost per million: below the breakeven volume per-request pricing wins, above it the fleet does.",
+   "tags": [
+    "capacity",
+    "cost"
+   ],
+   "sources": [
+    "sysdrills/10-capacity-and-cost/01-cores-for-load",
+    "sysdrills/10-capacity-and-cost/03-cost-per-million"
+   ],
+   "siblings": [
+    "sysdrills/10-capacity-and-cost/04-autoscale-steps",
+    "sysdrills/10-capacity-and-cost/05-read-replica-sizing",
+    "sysdrills/10-capacity-and-cost/08-pool-per-instance"
+   ]
+  },
+  {
+   "id": "quorum-and-lag",
+   "idea": "Reads see the latest write only when read and write quorums overlap (R + W > N); otherwise a replica's lag is exactly how stale a read can be.",
+   "why": "Without the overlap rule a 'strongly consistent' store returns old data under load, and lag that only grows breaches the freshness promise silently.",
+   "prompt": "A store keeps 3 replicas. Writes wait for 2 acks and reads ask 1 replica. A user updates their address and immediately reloads the page. What can they see, and what is the cheapest change that fixes it?",
+   "answer": "One read plus two write acks only equals the three replicas, so the quorums need not overlap: the replica read may have missed the write, and the old address shows for as long as it lags. Reading two replicas makes them overlap, at the cost of waiting for the slower answer; routing that user to the primary briefly also works.",
+   "tags": [
+    "replication",
+    "consistency"
+   ],
+   "sources": [
+    "sysdrills/11-replication-and-consistency/01-quorum-step-latency",
+    "sysdrills/11-replication-and-consistency/07-lag-breach-eta"
+   ],
+   "siblings": [
+    "sysdrills/11-replication-and-consistency/09-quorum-zone-placement",
+    "sysdrills/11-replication-and-consistency/08-stale-read-share",
+    "sysdrills/11-replication-and-consistency/02-freshness-read-routing"
+   ]
+  },
+  {
+   "id": "rpo-rto-cost",
+   "idea": "Failover loses the writes in the replication lag window (RPO) and takes detection plus promotion plus DNS time (RTO); tighter targets cost standby capacity and money.",
+   "why": "Teams promise 'no data loss, instant failover' with asynchronous replication and a pilot-light standby, and find out the real numbers during the outage.",
+   "prompt": "Your primary region replicates asynchronously with about 5 seconds of lag, health checks need 60 seconds to declare it dead, and DNS TTL is 300 seconds. The business asks what a region failure costs them. Answer in their terms.",
+   "answer": "Up to about 5 seconds of acknowledged writes are lost, because that is the lag window. Users are down for detection plus promotion plus DNS expiry, around 6 minutes or more. Cutting loss to zero needs synchronous replication with higher write latency; cutting downtime needs a hot standby and short TTLs, both more expensive.",
+   "tags": [
+    "failover",
+    "disaster-recovery"
+   ],
+   "sources": [
+    "sysdrills/12-multi-region-and-failover/01-failover-rpo",
+    "sysdrills/12-multi-region-and-failover/02-failover-rto"
+   ],
+   "siblings": [
+    "sysdrills/12-multi-region-and-failover/07-standby-cost",
+    "sysdrills/12-multi-region-and-failover/03-region-loss-capacity",
+    "sysdrills/12-multi-region-and-failover/04-failover-error-burn"
+   ]
+  },
+  {
+   "id": "inverted-index-size-and-lag",
+   "idea": "A search index is sized by its postings (one entry per term per document), and a write becomes searchable only after the next refresh, not when it is stored.",
+   "why": "Sizing by document count underestimates memory and disk, and 'I saved it but search cannot find it' bugs are really the refresh interval.",
+   "prompt": "Support reports that a product renamed a minute ago still shows its old name in search, though the product page is correct. The index refreshes every 60 seconds and gets bulk updates. What is happening, and what are your options?",
+   "answer": "The database write is done, but the search index exposes new segments only at the next refresh, so a lag up to the interval (longer under heavy merging) is expected. Options: a shorter refresh, paid for in more segments and merge writes; a forced refresh on this one write path; or a UI note that search updates are delayed.",
+   "tags": [
+    "search",
+    "indexing"
+   ],
+   "sources": [
+    "sysdrills/13-search-and-indexing/01-inverted-index-size",
+    "sysdrills/13-search-and-indexing/04-refresh-visibility-lag"
+   ],
+   "siblings": [
+    "sysdrills/13-search-and-indexing/02-posting-list-costs",
+    "sysdrills/13-search-and-indexing/05-segment-merge-writes",
+    "sysdrills/13-search-and-indexing/07-search-cluster-sizing"
+   ]
+  },
+  {
+   "id": "slo-burn-rate",
+   "idea": "An SLO gives an error budget; page on how fast the budget burns, checked over a long and a short window, not on single error spikes.",
+   "why": "Threshold alerts on raw error rate either page all night for blips or stay silent while a slow burn spends the whole month's budget.",
+   "prompt": "Your SLO is 99.9% of requests succeed over 30 days. Errors jump to 1% for 20 minutes, then settle at 0.2% for a day. Which of these should page someone, and what do you measure to decide?",
+   "answer": "The budget is 0.1% of requests. A 1% error rate burns it ten times too fast, so it pages only if it holds across both the long and the short window. A steady 0.2% burns at twice the allowed rate and spends the month in about 15 days: a ticket-level alert, not silence. Burn rate decides, not raw counts.",
+   "tags": [
+    "observability",
+    "slo"
+   ],
+   "sources": [
+    "sysdrills/14-observability-and-telemetry/04-error-budget-burn-rate",
+    "sysdrills/14-observability-and-telemetry/09-multi-window-burn-alert"
+   ],
+   "siblings": [
+    "sysdrills/14-observability-and-telemetry/05-alert-noise-toil",
+    "sysdrills/14-observability-and-telemetry/01-trace-sampling-budget",
+    "sysdrills/14-observability-and-telemetry/02-metric-cardinality"
+   ]
+  },
+  {
+   "id": "blocked-event-loop",
+   "idea": "Node runs your JavaScript on one thread, so one synchronous call delays every request in flight on that process, not just its own.",
+   "why": "A 200 ms synchronous parse or hash looks harmless in one request's trace but multiplies into seconds of latency for everyone during a burst.",
+   "prompt": "A Node API handles 500 requests per second. A new endpoint parses a 5 MB JSON file synchronously, taking 100 ms, and it is called twice a second. Health checks start timing out. Explain to the team why the unrelated endpoints got slow.",
+   "answer": "Every synchronous parse holds the only JavaScript thread for 100 ms, so twice a second every in-flight request, health checks included, waits behind it: about 20% of each second the process answers nobody. Move the work off the loop with a worker thread, streaming or a precomputed cache, and watch event-loop lag as a metric.",
+   "tags": [
+    "node-runtime",
+    "latency"
+   ],
+   "sources": [
+    "sysdrills/15-node-service-runtime/01-event-loop-stall"
+   ],
+   "siblings": [
+    "sysdrills/15-node-service-runtime/02-threadpool-starvation",
+    "sysdrills/15-node-service-runtime/04-keepalive-idle-chain",
+    "sysdrills/15-node-service-runtime/05-rolling-deploy-drain"
+   ]
+  },
+  {
+   "id": "integrity-under-soft-delete-and-contention",
+   "idea": "Soft delete breaks plain unique constraints, so uniqueness must cover only live rows; and concurrent edits need a version check, whose retries pile up on hot rows.",
+   "why": "Either a deleted user blocks re-signup forever, or two uniques slip in; and a hot row under optimistic locking turns into a retry storm.",
+   "prompt": "Users are soft-deleted with a deleted_at column, and email must be unique. A deleted user signs up again and gets 'email taken'. A colleague drops the unique index. What do you do instead, and what happens if two signups race?",
+   "answer": "Keep the guarantee but scope it to live rows: uniqueness that only covers rows not yet soft-deleted, for example an index filtered on the deleted marker. Dropping the index lets two racing signups both succeed. With the scoped index the database rejects the second insert, and the app maps that violation to a clear conflict answer.",
+   "tags": [
+    "data-integrity",
+    "uniqueness",
+    "concurrency"
+   ],
+   "sources": [
+    "sysdrills/16-data-access-and-integrity/01-soft-delete-unique",
+    "sysdrills/16-data-access-and-integrity/02-optimistic-contention"
+   ],
+   "siblings": [
+    "sysdrills/16-data-access-and-integrity/03-expand-contract-phases",
+    "sysdrills/16-data-access-and-integrity/05-backfill-pacing",
+    "sysdrills/16-data-access-and-integrity/04-sibling-include-explosion"
+   ]
+  },
+  {
+   "id": "client-cache-staleness",
+   "idea": "A client cache decides when to refetch (fresh for a set time, then stale) and how long unused data stays; correctness after a write needs explicit invalidation.",
+   "why": "Defaults either refetch on every mount and flood the API, or show the user their own old data after they saved a change.",
+   "prompt": "A dashboard caches the project list on the client. After a user renames a project and returns to the list, they still see the old name until a page reload. Which knobs explain it, and what is the right fix?",
+   "answer": "The list is still inside its fresh window, so returning to it reuses the cached copy without refetching. Making everything refetch on every mount fixes it by flooding the API. The right fix is to invalidate or update that query when the rename succeeds, so the next read refetches; keep a sensible freshness time for everything else.",
+   "tags": [
+    "client-cache",
+    "caching"
+   ],
+   "sources": [
+    "sysdrills/17-client-data-layer/02-query-freshness"
+   ],
+   "siblings": [
+    "sysdrills/17-client-data-layer/01-fetch-waterfall",
+    "sysdrills/17-client-data-layer/03-visibility-gated-polling",
+    "sysdrills/17-client-data-layer/04-six-connections-per-domain"
+   ]
+  },
+  {
+   "id": "authz-every-request",
+   "idea": "Authorisation is decided per request: an explicit deny wins, no matching rule means no, and every data query carries the tenant filter, with no shortcut around it.",
+   "why": "Default-allow rules and one missing tenant predicate in an OR clause leak another customer's data without any error showing up.",
+   "prompt": "A search endpoint builds 'WHERE tenant_id = ? AND name LIKE ? OR tag = ?' and a role table has an allow rule for 'reports' plus a deny for 'billing reports'. What leaks, and how do you reason about each case?",
+   "answer": "Without parentheses AND binds tighter, so the tag branch skips the tenant filter and matches rows of every tenant: scope the whole OR group. For the roles, an explicit deny overrides the broader allow, and anything no rule matches is refused. Check both on every request, not once at login.",
+   "tags": [
+    "authz-tenancy",
+    "security"
+   ],
+   "sources": [
+    "sysdrills/18-web-authz-and-sessions/01-deny-overrides",
+    "sysdrills/18-web-authz-and-sessions/02-tenant-scope-filter"
+   ],
+   "siblings": [
+    "sysdrills/18-web-authz-and-sessions/03-session-idle-absolute",
+    "sysdrills/18-web-authz-and-sessions/04-access-token-lifetime"
+   ]
+  }
+ ]
+}

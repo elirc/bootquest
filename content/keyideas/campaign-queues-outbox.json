@@ -1,0 +1,117 @@
+{
+ "format": "bootquest-keyideas@1",
+ "section": "campaign-queues-outbox",
+ "title": "Campaign: queues and the outbox across the estate",
+ "track": "js",
+ "_note": "rv2 S2 (PLAN §2.2 campaign-<tag> row, tag queues-outbox). Sources are 3 live campaign study quests from different repos per idea; recapAfter = any 3 sources passed. Server-local side file, never stamped.",
+ "scope": [
+  "campaign/csharp/dotnet-auth",
+  "campaign/csharp/dotnet-ramp",
+  "campaign/csharp/harbor-swe-bootcamp",
+  "campaign/csharp/relay-app",
+  "campaign/js/3buildagenthelpdesk",
+  "campaign/js/ankijs",
+  "campaign/js/astraspacegameweb",
+  "campaign/js/bazaar",
+  "campaign/js/forgeai",
+  "campaign/js/jsprojectlearn",
+  "campaign/js/masteropen",
+  "campaign/js/mobiletagalog",
+  "campaign/js/opusorganize",
+  "campaign/js/organized-anti-testbuild",
+  "campaign/js/organized-experiment-temporal-lite-orchestrator",
+  "campaign/js/organized-grav-vg-vgdemo",
+  "campaign/js/organized-study-support-desk-crm",
+  "campaign/js/relay",
+  "campaign/js/relay-upskilling",
+  "campaign/js/zz8"
+ ],
+ "recapAfter": 3,
+ "ideas": [
+  {
+   "id": "outbox-in-the-same-transaction",
+   "idea": "Write the state change and the message announcing it in one database transaction (the outbox); a separate relay publishes the stored messages.",
+   "why": "Saving and then publishing separately loses the message if the process dies in between, or announces a change that was rolled back.",
+   "prompt": "A service saves a ticket, then publishes 'ticket.updated' to a broker. After a crash, a customer never gets their notification, and once a notification went out for an update that failed. Explain and fix.",
+   "answer": "The two writes can split either way: crash after the save loses the event, publish before a rollback announces a change that never happened. Insert an outbox row in the same transaction as the change; a relay reads committed rows, publishes them and marks them sent. A crash then only delays publishing.",
+   "tags": [
+    "queues-outbox",
+    "consistency"
+   ],
+   "sources": [
+    "campaign/js/opusorganize",
+    "campaign/js/organized-study-support-desk-crm",
+    "campaign/csharp/dotnet-ramp"
+   ],
+   "siblings": []
+  },
+  {
+   "id": "claim-with-a-conditional-update",
+   "idea": "A worker claims a job with one conditional update (status still queued, a new claim token, attempt count up) and processes it only if that update changed exactly one row.",
+   "why": "Read-then-update claims let two workers take the same job, and a worker that lost its lease can still finish and overwrite the new owner's result.",
+   "prompt": "Two worker processes poll the same jobs table and sometimes both send the same invoice email. Each one selects a queued job, then updates its status. Fix the claim.",
+   "answer": "Make the claim a single UPDATE with the job id and 'status = queued' in the WHERE clause, setting running, a fresh claim token and attempts + 1; continue only if one row changed. When finishing, check the token again so a worker whose lease expired cannot overwrite the result.",
+   "tags": [
+    "queues-outbox",
+    "concurrency"
+   ],
+   "sources": [
+    "campaign/js/zz8",
+    "campaign/js/organized-experiment-temporal-lite-orchestrator",
+    "campaign/js/forgeai"
+   ],
+   "siblings": []
+  },
+  {
+   "id": "someone-drains-the-queue",
+   "idea": "A queue or outbox needs a process that drains it automatically, with retries scheduled by an available-at time and a cap on attempts.",
+   "why": "An outbox drained only by a manual endpoint quietly fills up, and a failed row with no retry time is either retried in a hot loop or never again.",
+   "prompt": "A webhook outbox is processed only when an admin calls a dispatch endpoint, and failed rows stay failed forever. What two changes make it production-shaped?",
+   "answer": "Run a worker that polls on a schedule (or is woken by new rows) and drains in batches. On failure, set an available-at time with growing backoff and count attempts; select rows whose time has come and whose attempts are under the cap, and move exhausted ones aside for a person to inspect.",
+   "tags": [
+    "queues-outbox",
+    "retries-timeouts"
+   ],
+   "sources": [
+    "campaign/csharp/harbor-swe-bootcamp",
+    "campaign/js/organized-study-support-desk-crm",
+    "campaign/csharp/dotnet-ramp"
+   ],
+   "siblings": []
+  },
+  {
+   "id": "visibility-timeout-and-redelivery",
+   "idea": "A message being processed is hidden for a visibility window; if work takes longer or the ack is lost, it is delivered again, so handlers must tolerate repeats.",
+   "why": "A visibility window shorter than the work produces duplicate processing under normal load, not only during failures.",
+   "prompt": "A queue's visibility timeout is 30 seconds and some jobs take 45. Customers receive duplicate exports. Explain the mechanism and two fixes.",
+   "answer": "After 30 seconds without an ack the message becomes visible again and a second consumer starts it while the first is still working. Extend the visibility while working (or set it above the worst-case time), and make the handler idempotent by job id, so a redelivery that does slip through does no harm.",
+   "tags": [
+    "queues-outbox",
+    "idempotency"
+   ],
+   "sources": [
+    "campaign/js/jsprojectlearn",
+    "campaign/js/masteropen",
+    "campaign/csharp/relay-app"
+   ],
+   "siblings": []
+  },
+  {
+   "id": "persist-progress-before-the-crash",
+   "idea": "Record a run's progress durably as it goes, so a crash mid-run leaves something to resume or dead-letter instead of nothing at all.",
+   "why": "A run saved only at the end vanishes when it crashes halfway, so nobody knows which steps already had side effects.",
+   "prompt": "A flow engine writes the run record only after all steps finish. A deploy kills a run after step 3 of 6. What do you know about that run afterwards, and what should the engine do instead?",
+   "answer": "Nothing: there is no record, so you cannot tell whether steps 1-3 sent emails or charges, and nothing resumes it. Persist the run and each step's state as it starts and completes, so a restarted worker can resume from the last finished step, or dead-letter the run with its history for a person.",
+   "tags": [
+    "queues-outbox",
+    "reliability"
+   ],
+   "sources": [
+    "campaign/csharp/relay-app",
+    "campaign/js/relay",
+    "campaign/js/organized-experiment-temporal-lite-orchestrator"
+   ],
+   "siblings": []
+  }
+ ]
+}
