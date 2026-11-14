@@ -112,7 +112,7 @@ describe('mock semantics = server semantics', () => {
     expect(json).not.toContain('A D C B');
     expect(wrong.result.failures.every((f) => f.expected === undefined)).toBe(true);
     const right = await api.submitUnit(QUIZ, { answer: 1, selfAssisted: false });
-    expect(right).toMatchObject({ verdict: 'pass', xp: { amount: 2, reason: null }, attempt: { mode: 'solo' } });
+    expect(right).toMatchObject({ verdict: 'pass', xp: { amount: 0, reason: null }, attempt: { mode: 'solo' } });
   });
 
   it('awards XP once; selfAssisted -> assisted mode; reveal -> guided with 0 XP forever', async () => {

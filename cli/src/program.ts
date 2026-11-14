@@ -310,7 +310,7 @@ export function buildProgram(io: CliIo, setExit: (code: number) => void): Comman
       type Item = { cardKey: string; card?: { front: string }; keyIdea?: { sectionTitle: string } };
       const params = new URLSearchParams({ limit: String(limit) });
       if (o.tag !== undefined) params.set('tag', o.tag);
-      const r = o.keyideas
+      const r: { count: number; items: Item[]; tags?: { tag: string; count: number }[] } = o.keyideas
         ? await client.request<{ count: number; items: Item[]; tags: { tag: string; count: number }[] }>('GET', `/keyideas/queue?${params.toString()}`)
         : await client.request<{ count: number; items: Item[] }>('GET', `/reviews/queue?limit=${limit}`);
       const what = o.keyideas ? `key-idea card${r.count === 1 ? '' : 's'}${o.tag ? ` tagged ${o.tag}` : ''}` : `card${r.count === 1 ? '' : 's'}`;
@@ -319,7 +319,7 @@ export function buildProgram(io: CliIo, setExit: (code: number) => void): Comman
         const front = (it.card?.front ?? it.cardKey).split('\n')[0]!.slice(0, 100);
         io.out(`  ${String(i + 1).padStart(2)}. ${it.keyIdea ? `[${it.keyIdea.sectionTitle}] ` : ''}${front}`);
       });
-      if ('tags' in r && r.tags.length > 0) io.out(`Tags: ${r.tags.map((t) => `${t.tag} (${t.count})`).join(', ')}`);
+      if (r.tags && r.tags.length > 0) io.out(`Tags: ${r.tags.map((t) => `${t.tag} (${t.count})`).join(', ')}`);
       if (r.count > 0) io.out(`Grade them in the app: ${client.server}/review${o.keyideas ? `?mode=keyideas${o.tag ? `&tag=${encodeURIComponent(o.tag)}` : ''}` : ''}`);
       setExit(EXIT.OK);
     });
