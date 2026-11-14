@@ -1,0 +1,244 @@
+{
+ "format": "bootquest-keyideas@1",
+ "section": "bank-java",
+ "title": "Java drill banks: javabootcamp and javadrills",
+ "track": "java",
+ "_note": "rv2 S2 (PLAN §2.2 bank-java row). Scope = javabootcamp modules 01-21 (there is no 07) and javadrills modules 01-11. Sources and siblings are live drills of the modules that teach the idea. Server-local side file, never stamped.",
+ "scope": [
+  "javabootcamp/01-language-core/",
+  "javabootcamp/02-methods-and-lambdas/",
+  "javabootcamp/03-collections-and-streams/",
+  "javabootcamp/04-strings-and-time/",
+  "javabootcamp/05-classes-records-enums/",
+  "javabootcamp/06-exceptions-and-files/",
+  "javabootcamp/08-domain-rules/",
+  "javabootcamp/09-caching/",
+  "javabootcamp/10-rate-limits-and-resilience/",
+  "javabootcamp/11-partitioning-and-ids/",
+  "javabootcamp/12-messaging-and-events/",
+  "javabootcamp/13-storage-and-consistency/",
+  "javabootcamp/14-generics-and-interfaces/",
+  "javabootcamp/15-sealed-types-and-patterns/",
+  "javabootcamp/16-design-patterns/",
+  "javabootcamp/17-deterministic-concurrency/",
+  "javabootcamp/18-parsing-and-serialization/",
+  "javabootcamp/19-debugging/",
+  "javabootcamp/20-scaffolded/",
+  "javabootcamp/21-design-debugging/",
+  "javadrills/01-collections-behavior/",
+  "javadrills/02-equality-and-ordering/",
+  "javadrills/03-streams-execution/",
+  "javadrills/04-collectors/",
+  "javadrills/05-optional-discipline/",
+  "javadrills/06-strings-and-text/",
+  "javadrills/07-exception-flow/",
+  "javadrills/08-money-math/",
+  "javadrills/09-instants-and-zones/",
+  "javadrills/10-completablefuture-composition/",
+  "javadrills/11-cross-language-bugs/"
+ ],
+ "recapAfter": 0.8,
+ "ideas": [
+  {
+   "id": "collection-contracts",
+   "idea": "Know each collection's contract: ordering (insertion, sorted, none), null handling, and whether a method returns a copy or a live view of the original.",
+   "why": "A 'read-only' view that keeps changing, a subList that breaks after the parent shrinks, or a HashMap whose order shifts all look like random bugs without the contract.",
+   "prompt": "A method returns `Collections.unmodifiableList(items)` as a snapshot for a report, and the report later shows items that were added after it was taken. Another uses `list.subList(0, 10)` and fails after the parent list is cleared. Explain both.",
+   "answer": "Both are views, not copies: the unmodifiable wrapper blocks writes through itself but still reflects every change to the list underneath, and a subList is a window onto the parent that is invalid once the parent changes size. For a snapshot, copy with List.copyOf or new ArrayList<>(list).",
+   "tags": [
+    "java",
+    "collections"
+   ],
+   "sources": [
+    "javadrills/01-collections-behavior/03-view-vs-copy",
+    "javadrills/01-collections-behavior/02-sublist-window"
+   ],
+   "siblings": [
+    "javadrills/01-collections-behavior/01-three-list-factories",
+    "javadrills/01-collections-behavior/04-first-seen-order",
+    "javadrills/01-collections-behavior/06-priority-poll"
+   ]
+  },
+  {
+   "id": "consistent-equality-in-sets-and-maps",
+   "idea": "Sorted collections use compareTo or the comparator to decide duplicates, hashed ones use hashCode then equals; both must agree, and keys must not change while stored.",
+   "why": "A comparator that ties on different elements makes a TreeSet drop entries, and a key mutated inside a HashMap can no longer be found.",
+   "prompt": "A TreeSet of words sorted by length silently holds only one word per length, and a HashMap keyed by a mutable Tag object loses entries after a rename. What is wrong in each case?",
+   "answer": "The TreeSet treats elements the comparator calls equal as the same element, so words of equal length collapse; add a tie-breaker such as natural order. The HashMap filed the tag under the hash it had when inserted; after the rename, lookups search somewhere else. Keep keys immutable, or remove and re-insert.",
+   "tags": [
+    "java",
+    "equality"
+   ],
+   "sources": [
+    "javadrills/02-equality-and-ordering/02-treeset-tiebreak",
+    "javadrills/02-equality-and-ordering/09-mutable-hashmap-key"
+   ],
+   "siblings": [
+    "javadrills/02-equality-and-ordering/01-overflow-safe-comparator",
+    "javadrills/02-equality-and-ordering/04-case-insensitive-key",
+    "javadrills/02-equality-and-ordering/05-arrays-make-bad-keys"
+   ]
+  },
+  {
+   "id": "stream-execution-order",
+   "idea": "A stream pulls elements through the whole pipeline one at a time, so short-circuiting operations stop early, but stateful ones such as sorted must consume everything first.",
+   "why": "Without that model you expect limit to save work after sorted, or you are surprised that a filter's side effect ran only three times.",
+   "prompt": "`names.stream().peek(log).sorted().limit(3).toList()` logs every name, while `names.stream().peek(log).filter(n -> n.startsWith(\"A\")).findFirst()` logs only up to the first match. Explain the difference.",
+   "answer": "Elements flow one by one, and findFirst stops pulling as soon as a match arrives, so the pipeline never touches later names. sorted needs all elements before it can emit the smallest, so it buffers the whole stream first and limit only trims its output.",
+   "tags": [
+    "java",
+    "streams"
+   ],
+   "sources": [
+    "javadrills/03-streams-execution/02-short-circuit",
+    "javadrills/03-streams-execution/07-sorted-buffers-everything"
+   ],
+   "siblings": [
+    "javadrills/03-streams-execution/01-lazy-until-terminal",
+    "javadrills/03-streams-execution/03-one-shot-streams",
+    "javadrills/03-streams-execution/06-distinct-uses-equals"
+   ]
+  },
+  {
+   "id": "collectors-downstream",
+   "idea": "groupingBy takes a downstream collector (counting, mapping, summing) that shapes each group, and toMap needs a merge function whenever keys can repeat.",
+   "why": "Without downstream collectors people post-process maps of lists by hand, and toMap without a merge function throws IllegalStateException on the first duplicate key.",
+   "prompt": "You need 'department to list of employee names' and 'email to customer' maps. The first is built with groupingBy and then a loop over the lists; the second crashes on 'Duplicate key'. Rewrite both.",
+   "answer": "groupingBy(Employee::department, mapping(Employee::name, toList())) produces the names directly. For the second, give toMap a merge function that keeps the first customer for each email; choose the merge rule on purpose, or groupingBy if every duplicate matters.",
+   "tags": [
+    "java",
+    "streams"
+   ],
+   "sources": [
+    "javadrills/04-collectors/03-mapping-downstream",
+    "javadrills/04-collectors/02-counting-downstream"
+   ],
+   "siblings": [
+    "javadrills/04-collectors/05-collectingandthen",
+    "javadrills/04-collectors/06-teeing",
+    "javadrills/04-collectors/08-flatmapping-filtering"
+   ]
+  },
+  {
+   "id": "optional-chains",
+   "idea": "Chain Optional with map, flatMap and filter, and end with one decision (orElseGet, orElseThrow); orElse evaluates its argument even when a value is present.",
+   "why": "get() calls bring back the exceptions Optional was meant to remove, and an expensive orElse fallback runs on every call.",
+   "prompt": "`findUser(id).orElse(loadDefaultFromDatabase())` hits the database on every request, even for existing users, and other code calls isPresent() then get(). How should this be written?",
+   "answer": "orElse takes an already computed value, so the database call happens first in every case; orElseGet(() -> loadDefaultFromDatabase()) runs it only when the Optional is empty. Replace isPresent plus get with map or ifPresentOrElse, or orElseThrow with a message naming the missing id.",
+   "tags": [
+    "java",
+    "optional"
+   ],
+   "sources": [
+    "javadrills/05-optional-discipline/01-orelse-vs-orelseget",
+    "javadrills/05-optional-discipline/04-orelsethrow"
+   ],
+   "siblings": [
+    "javadrills/05-optional-discipline/03-ifpresentorelse",
+    "javadrills/05-optional-discipline/05-optional-stream",
+    "javadrills/05-optional-discipline/08-flatten-nested"
+   ]
+  },
+  {
+   "id": "bigdecimal-scale-rounding",
+   "idea": "Use BigDecimal for money, compare amounts with compareTo (equals also compares scale), and set the scale and rounding mode at the step the business rule names.",
+   "why": "new BigDecimal(\"2.0\").equals(new BigDecimal(\"2.00\")) is false, and rounding per line versus per invoice changes the total by a cent.",
+   "prompt": "A test asserts `assertEquals(new BigDecimal(\"10.00\"), total)` and fails although total prints as 10.0. Separately, invoice totals differ by a cent from the sum of the rounded lines. Explain both.",
+   "answer": "BigDecimal.equals compares value and scale, so 10.0 and 10.00 differ; compare with compareTo == 0 or normalise the scale first. Rounding each line and summing gives a different total than summing exactly and rounding once; the business must pick the rule, and the code applies setScale with that rounding mode at exactly that step.",
+   "tags": [
+    "java",
+    "money"
+   ],
+   "sources": [
+    "javadrills/08-money-math/02-line-vs-invoice-rounding",
+    "javadrills/11-cross-language-bugs/01-rounding-mode"
+   ],
+   "siblings": [
+    "javadrills/08-money-math/01-weighted-allocation",
+    "javadrills/08-money-math/07-installments",
+    "javadrills/08-money-math/08-discount-order"
+   ]
+  },
+  {
+   "id": "instant-zoned-arithmetic",
+   "idea": "An Instant is a moment, a ZonedDateTime is a moment seen in a zone: add durations to Instants, add calendar days in the zone, and expect 23- or 25-hour days.",
+   "why": "Adding 24 hours across a clock change moves a 9:00 meeting to 8:00 or 10:00, and comparing wall-clock times from two zones orders events wrongly.",
+   "prompt": "A meeting at 09:00 in New York repeats daily and is computed as `previous.plusHours(24)` on an Instant. After the March clock change it shows at 10:00. What should the code do?",
+   "answer": "The rule is 'same local time each day', which is calendar arithmetic: take the ZonedDateTime in America/New_York and call plusDays(1), which keeps 09:00 and adjusts the offset; convert to an Instant only to store or compare. Adding 24 hours to an Instant is right only for elapsed-time rules.",
+   "tags": [
+    "java",
+    "time"
+   ],
+   "sources": [
+    "javadrills/09-instants-and-zones/05-dst-day",
+    "javadrills/09-instants-and-zones/04-same-instant-vs-same-local"
+   ],
+   "siblings": [
+    "javadrills/09-instants-and-zones/03-wall-clock-is-not-a-moment",
+    "javadrills/09-instants-and-zones/07-compare-across-zones",
+    "javadrills/09-instants-and-zones/06-truncation-buckets"
+   ]
+  },
+  {
+   "id": "completablefuture-composition-paths",
+   "idea": "thenApply maps a value, thenCompose chains another async call; a failure skips the following stages until handle or exceptionally deals with it.",
+   "why": "thenApply on an async call nests futures, and code that only adds success stages silently skips its own logging or fallbacks when an earlier stage fails.",
+   "prompt": "`loadUser(id).thenApply(u -> loadOrders(u))` gives a CompletableFuture<CompletableFuture<List<Order>>>, and a thenAccept that logs 'done' never runs when loadUser fails. Fix both.",
+   "answer": "loadOrders returns a future, so use thenCompose to flatten it into one future of orders. A failed stage skips every later thenApply or thenAccept; add handle (sees value or exception) or exceptionally (supplies a fallback) where you want the failure dealt with, and whenComplete only to observe it.",
+   "tags": [
+    "java",
+    "async"
+   ],
+   "sources": [
+    "javadrills/10-completablefuture-composition/01-thenapply-vs-thencompose",
+    "javadrills/10-completablefuture-composition/06-failure-skips-stages"
+   ],
+   "siblings": [
+    "javadrills/10-completablefuture-composition/03-handle-both-paths",
+    "javadrills/10-completablefuture-composition/04-fallback-service",
+    "javadrills/10-completablefuture-composition/10-whencomplete-vs-handle"
+   ]
+  },
+  {
+   "id": "deterministic-concurrency-tests",
+   "idea": "Test concurrent code deterministically: drive the interleaving yourself with a manual executor, hand-completed futures or replayed steps, instead of sleeping and hoping.",
+   "why": "Tests that rely on real threads and sleeps pass on fast machines and fail at random in CI, so the race they target stays unproven.",
+   "prompt": "A test for a lost-update bug starts two threads, sleeps 50 ms and asserts the counter is 2. It passes almost always on your laptop. Why is that a weak test, and what would you write?",
+   "answer": "Whether the threads interleave in the bad order depends on the scheduler, so the test rarely shows the race and the fix cannot be proven. Replay the interleaving explicitly: both read, then both write, using a manual executor or steps you call in order. The broken code then fails every time and the fix passes every time.",
+   "tags": [
+    "java",
+    "concurrency",
+    "testing"
+   ],
+   "sources": [
+    "javabootcamp/17-deterministic-concurrency/01-lost-updates",
+    "javabootcamp/17-deterministic-concurrency/05-manual-executor"
+   ],
+   "siblings": [
+    "javabootcamp/17-deterministic-concurrency/02-atomic-counters",
+    "javabootcamp/17-deterministic-concurrency/04-concurrent-map-ops",
+    "javabootcamp/17-deterministic-concurrency/06-completable-futures"
+   ]
+  },
+  {
+   "id": "same-bug-three-languages",
+   "idea": "The same bugs recur across Java, C# and JavaScript: default rounding of negative midpoints, floating-point equality, and text truncated by characters instead of bytes.",
+   "why": "Assuming 'my language rounds the normal way' or that a string's length is its byte size breaks money and storage limits whichever stack you work in.",
+   "prompt": "You port a refund calculation and a 'truncate to 255 bytes' helper from C# to Java. Tests pass in English but fail for -2.5 refunds and for names with emoji. Name what to check in both languages.",
+   "answer": "Check the rounding mode for negative midpoints: each language and API has its own default, so state HALF_UP, HALF_EVEN or away-from-zero explicitly. Truncate by encoded UTF-8 bytes and never split a character or surrogate pair. Compare doubles with a tolerance, or use decimal types for money.",
+   "tags": [
+    "java",
+    "cross-language"
+   ],
+   "sources": [
+    "javadrills/11-cross-language-bugs/08-utf8-byte-budget",
+    "javadrills/11-cross-language-bugs/07-double-equality-traps"
+   ],
+   "siblings": [
+    "javadrills/06-strings-and-text/04-codepoints",
+    "javadrills/06-strings-and-text/01-strip-vs-trim",
+    "javadrills/08-money-math/06-cross-rate"
+   ]
+  }
+ ]
+}
