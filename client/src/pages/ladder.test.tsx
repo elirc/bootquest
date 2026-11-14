@@ -181,8 +181,12 @@ describe('patch-kata player', () => {
 
 describe('dashboard promotion legs', () => {
   it('renders the three legs from the evaluator state and tolerates missing promotion', async () => {
-    renderApp('/');
-    const table = await screen.findByRole('table');
+    renderApp('/stats'); // rv wave C (R4-20): the competency table lives on Stats
+    const table = await waitFor(() => {
+      const el = document.querySelector<HTMLElement>('table.comp-table');
+      expect(el).not.toBeNull();
+      return el!;
+    }, { timeout: 15_000 });
     const lf = table.querySelector('[data-competency="language-fluency"]')!;
     expect(lf.querySelector('[data-leg="artifact"]')).toHaveAttribute('data-state', 'done');
     expect(lf.querySelector('[data-leg="explain"]')).toHaveTextContent('done 88%');
@@ -202,9 +206,9 @@ describe('dashboard promotion legs', () => {
         return { ...d, competencies: d.competencies.map(({ promotion: _p, ...r }) => r) };
       },
     };
-    renderApp('/', old);
-    await waitFor(() => expect(screen.getAllByRole('table')).toHaveLength(2));
-    const second = screen.getAllByRole('table')[1]!;
+    renderApp('/stats', old);
+    await waitFor(() => expect(document.querySelectorAll('table.comp-table')).toHaveLength(2), { timeout: 15_000 });
+    const second = document.querySelectorAll('table.comp-table')[1]!;
     expect(second.querySelector('[data-leg]')).toBeNull();
   });
 });
