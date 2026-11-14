@@ -61,6 +61,47 @@
      "IDisposable subscriptions"
     ]
    }
+  },
+  {
+   "unit": {
+    "key": "fund-csharp/10-delegates-lambdas-and-events/02-bug-hunt-price-feed-subscriptions",
+    "track": "csharp",
+    "kind": "drill",
+    "title": "Bug hunt: a price feed with disposable subscriptions",
+    "phase": "10-delegates-lambdas-and-events",
+    "difficulty": 3,
+    "competencies": [
+     "language-fluency"
+    ],
+    "prerequisites": [],
+    "checks": [
+     {
+      "spec": {
+       "type": "drill-cs",
+       "shape": "console-check",
+       "files": {
+        "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"only changed prices are delivered\", () =>\n{\n    var feed = new PriceFeed();\n    var seen = new List<decimal>();\n    using var sub = feed.Subscribe(p => seen.Add(p));\n    feed.Publish(10m);\n    feed.Publish(10m);\n    feed.Publish(11m);\n    Eq(seen, new[] { 10m, 11m });\n});\n\nTest(\"disposing unsubscribes only that handler\", () =>\n{\n    var feed = new PriceFeed();\n    var a = new List<decimal>();\n    var b = new List<decimal>();\n    var subA = feed.Subscribe(p => a.Add(p));\n    feed.Subscribe(p => b.Add(p));\n    feed.Publish(1m);\n    subA.Dispose();\n    feed.Publish(2m);\n    Eq(a, new[] { 1m });\n    Eq(b, new[] { 1m, 2m });\n    Eq(feed.SubscriberCount, 1);\n});\n\nTest(\"disposing twice is harmless\", () =>\n{\n    var feed = new PriceFeed();\n    var sub = feed.Subscribe(_ => { });\n    sub.Dispose();\n    sub.Dispose();\n    Eq(feed.SubscriberCount, 0);\n});\n\nTest(\"subscribers run in subscription order\", () =>\n{\n    var feed = new PriceFeed();\n    var log = new List<string>();\n    feed.Subscribe(_ => log.Add(\"first\"));\n    feed.Subscribe(_ => log.Add(\"second\"));\n    feed.Publish(5m);\n    Eq(log, new[] { \"first\", \"second\" });\n});\n\nTest(\"publishing with no subscribers does nothing (boundary)\", () =>\n{\n    var feed = new PriceFeed();\n    feed.Publish(3m);\n    Eq(feed.SubscriberCount, 0);\n});\n\n",
+        "tail": "// ──────────────────────────── types ──────────────────────────────────────\n\nclass PriceFeed\n{\n    private event EventHandler<decimal>? PriceChanged;\n    private decimal? _last;\n\n    public int SubscriberCount => PriceChanged?.GetInvocationList().Length ?? 0;\n\n    public IDisposable Subscribe(Action<decimal> handler)\n    {\n        PriceChanged += (_, price) => handler(price);\n        return new Subscription(() => PriceChanged -= (_, price) => handler(price));\n    }\n\n    public void Publish(decimal price)\n    {\n        if (_last == price) return;\n        _last = price;\n        PriceChanged?.Invoke(this, price);\n    }\n}\n\nsealed class Subscription(Action onDispose) : IDisposable\n{\n    private Action? _onDispose = onDispose;\n    public void Dispose()\n    {\n        _onDispose?.Invoke();\n        _onDispose = null;\n    }\n}\n",
+        "frozen": []
+       },
+       "harness": "jstrain",
+       "timeoutMs": 20000
+      }
+     }
+    ]
+   },
+   "origin": {
+    "id": "10-delegates-lambdas-and-events/02-bug-hunt-price-feed-subscriptions",
+    "type": "code",
+    "module": "10-delegates-lambdas-and-events",
+    "lesson": "drills",
+    "position": 1,
+    "skills": [
+     "events",
+     "IDisposable subscriptions",
+     "code review"
+    ]
+   }
   }
  ],
  "content": {
@@ -73,6 +114,17 @@
     "Unsubscribing needs the very same delegate instance that was subscribed, so the subscription must hold on to it.",
     "Create one handler per subscriber and keep that same object inside the subscription you return, so disposing removes exactly it; remember the last price so an unchanged one is not published again.",
     "Create a single handler object per subscriber and remember it inside the disposable you hand back, so disposing removes exactly that handler. Store the last price and skip notifying when a new price equals it."
+   ]
+  },
+  "fund-csharp/10-delegates-lambdas-and-events/02-bug-hunt-price-feed-subscriptions": {
+   "instructions": "**Skills:** events · IDisposable subscriptions · code review  \n**Level:** ★★★\n\n**Bug hunt.** The code in the editor is a plausible first attempt at drill 1, \"A price feed with disposable subscriptions\". It compiles and passes some of the tests, but it has one real bug, the kind a reviewer should catch before it ships.\n\n**Your task.** Find the bug and fix it, changing as little as you can; the tests are the same as drill 1's. The spec is unchanged: Complete `PriceFeed` in the types section:\n- `IDisposable Subscribe(Action<decimal> handler)` registers the handler and returns a subscription; disposing it unregisters THAT handler only, and disposing twice is harmless\n- `void Publish(decimal price)` notifies every current subscriber with the price, in subscription order, but only when the price differs from the last published price (the very first publish always notifies)\n- `int SubscriberCount` is the number of active subscriptions\n- publishing with no subscribers does nothing\n\nA `Subscription` class that runs an action once on `Dispose` is provided.\n",
+   "starter": "// ─────────────────────────────────────────────────────────────────────────\n//  02 · bug hunt: price feed subscriptions★★★ core\n//  concepts: events · IDisposable · change detection\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Subscribe returns the way to unsubscribe.\n\nusing static Bootcamp.Check;\n\n// TODO: one real bug hides in this code: find it and fix it with the smallest change.\n\n// PriceFeed is implemented in the types section\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"only changed prices are delivered\", () =>\n{\n    var feed = new PriceFeed();\n    var seen = new List<decimal>();\n    using var sub = feed.Subscribe(p => seen.Add(p));\n    feed.Publish(10m);\n    feed.Publish(10m);\n    feed.Publish(11m);\n    Eq(seen, new[] { 10m, 11m });\n});\n\nTest(\"disposing unsubscribes only that handler\", () =>\n{\n    var feed = new PriceFeed();\n    var a = new List<decimal>();\n    var b = new List<decimal>();\n    var subA = feed.Subscribe(p => a.Add(p));\n    feed.Subscribe(p => b.Add(p));\n    feed.Publish(1m);\n    subA.Dispose();\n    feed.Publish(2m);\n    Eq(a, new[] { 1m });\n    Eq(b, new[] { 1m, 2m });\n    Eq(feed.SubscriberCount, 1);\n});\n\nTest(\"disposing twice is harmless\", () =>\n{\n    var feed = new PriceFeed();\n    var sub = feed.Subscribe(_ => { });\n    sub.Dispose();\n    sub.Dispose();\n    Eq(feed.SubscriberCount, 0);\n});\n\nTest(\"subscribers run in subscription order\", () =>\n{\n    var feed = new PriceFeed();\n    var log = new List<string>();\n    feed.Subscribe(_ => log.Add(\"first\"));\n    feed.Subscribe(_ => log.Add(\"second\"));\n    feed.Publish(5m);\n    Eq(log, new[] { \"first\", \"second\" });\n});\n\nTest(\"publishing with no subscribers does nothing (boundary)\", () =>\n{\n    var feed = new PriceFeed();\n    feed.Publish(3m);\n    Eq(feed.SubscriberCount, 0);\n});\n\n// ──────────────────────────── types ──────────────────────────────────────\n\nclass PriceFeed\n{\n    private event EventHandler<decimal>? PriceChanged;\n    private decimal? _last;\n\n    public int SubscriberCount => PriceChanged?.GetInvocationList().Length ?? 0;\n\n    public IDisposable Subscribe(Action<decimal> handler)\n    {\n        PriceChanged += (_, price) => handler(price);\n        return new Subscription(() => PriceChanged -= (_, price) => handler(price));\n    }\n\n    public void Publish(decimal price)\n    {\n        if (_last == price) return;\n        _last = price;\n        PriceChanged?.Invoke(this, price);\n    }\n}\n\nsealed class Subscription(Action onDispose) : IDisposable\n{\n    private Action? _onDispose = onDispose;\n    public void Dispose()\n    {\n        _onDispose?.Invoke();\n        _onDispose = null;\n    }\n}\n",
+   "solution": "// ─────────────────────────────────────────────────────────────────────────\n//  02 · bug hunt: price feed subscriptions★★★ core\n//  concepts: events · IDisposable · change detection\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Subscribe returns the way to unsubscribe.\n\nusing static Bootcamp.Check;\n\n// PriceFeed is implemented in the types section\n\n// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"only changed prices are delivered\", () =>\n{\n    var feed = new PriceFeed();\n    var seen = new List<decimal>();\n    using var sub = feed.Subscribe(p => seen.Add(p));\n    feed.Publish(10m);\n    feed.Publish(10m);\n    feed.Publish(11m);\n    Eq(seen, new[] { 10m, 11m });\n});\n\nTest(\"disposing unsubscribes only that handler\", () =>\n{\n    var feed = new PriceFeed();\n    var a = new List<decimal>();\n    var b = new List<decimal>();\n    var subA = feed.Subscribe(p => a.Add(p));\n    feed.Subscribe(p => b.Add(p));\n    feed.Publish(1m);\n    subA.Dispose();\n    feed.Publish(2m);\n    Eq(a, new[] { 1m });\n    Eq(b, new[] { 1m, 2m });\n    Eq(feed.SubscriberCount, 1);\n});\n\nTest(\"disposing twice is harmless\", () =>\n{\n    var feed = new PriceFeed();\n    var sub = feed.Subscribe(_ => { });\n    sub.Dispose();\n    sub.Dispose();\n    Eq(feed.SubscriberCount, 0);\n});\n\nTest(\"subscribers run in subscription order\", () =>\n{\n    var feed = new PriceFeed();\n    var log = new List<string>();\n    feed.Subscribe(_ => log.Add(\"first\"));\n    feed.Subscribe(_ => log.Add(\"second\"));\n    feed.Publish(5m);\n    Eq(log, new[] { \"first\", \"second\" });\n});\n\nTest(\"publishing with no subscribers does nothing (boundary)\", () =>\n{\n    var feed = new PriceFeed();\n    feed.Publish(3m);\n    Eq(feed.SubscriberCount, 0);\n});\n\n// ──────────────────────────── types ──────────────────────────────────────\n\nclass PriceFeed\n{\n    private event EventHandler<decimal>? PriceChanged;\n    private decimal? _last;\n\n    public int SubscriberCount => PriceChanged?.GetInvocationList().Length ?? 0;\n\n    public IDisposable Subscribe(Action<decimal> handler)\n    {\n        EventHandler<decimal> h = (_, price) => handler(price);\n        PriceChanged += h;\n        return new Subscription(() => PriceChanged -= h);\n    }\n\n    public void Publish(decimal price)\n    {\n        if (_last == price) return;\n        _last = price;\n        PriceChanged?.Invoke(this, price);\n    }\n}\n\nsealed class Subscription(Action onDispose) : IDisposable\n{\n    private Action? _onDispose = onDispose;\n    public void Dispose()\n    {\n        _onDispose?.Invoke();\n        _onDispose = null;\n    }\n}\n",
+   "explanation": "Each lambda expression creates a new delegate. The one removed in `Dispose` is a different delegate from the one that was added, so `-=` finds nothing to remove and the subscriber keeps receiving prices. Keep the added delegate in a variable and remove exactly that one.",
+   "hints": [
+    "Subscribe, dispose the subscription, then check SubscriberCount.",
+    "Removing an event handler only works with the same delegate instance that was added.",
+    "Store the delegate you add in a local variable and unsubscribe that variable."
    ]
   }
  }
