@@ -54,7 +54,9 @@ export const KeyIdeasFile = z
     track: z.string().min(1),
     _note: z.string().optional(),
     scope: z.array(z.string().min(1)).min(1),
-    recapAfter: z.number().gt(0).lte(1).optional(),
+    // a fraction in (0, 1] of the scope's live units, or a whole count >= 2 (campaign sections: any 3 sources passed);
+    // the same rule as the server reader (store/keyideas.ts RecapAfter)
+    recapAfter: z.number().positive().refine((n) => n <= 1 || Number.isInteger(n), 'a fraction <= 1 or a whole count >= 2').optional(),
     ideas: z.array(KeyIdea),
   })
   .strict();
@@ -275,6 +277,7 @@ export function keyIdeasReport(contentDir: string, estate: Estate = readEstate(c
       us.forEach((u) => covered.add(u));
     }
     perSection.push({ section: s.section, ideas: s.ideas.length, scopeUnits: covered.size });
+    if (s.recapAfter !== undefined && s.recapAfter > 1 && s.recapAfter > covered.size) p(`recapAfter ${s.recapAfter} is more than the ${covered.size} live scope unit(s)`);
     const ids = new Set<string>();
     for (const it of s.ideas) {
       ideas++;

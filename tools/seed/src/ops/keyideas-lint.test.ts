@@ -103,7 +103,7 @@ describe('seed:lint:keyideas: schema, counts, keys', () => {
   it('rejects an empty sources list (PLAN §5.3), a missing field and an unknown field', () => {
     const ideas = five();
     ideas[0] = idea('idea-1', { sources: [] });
-    ideas[1] = { ...idea('idea-2'), extra: 1 };
+    ideas[1] = { ...idea('idea-2'), extra: 1 } as ReturnType<typeof idea>;
     const { why: _w, ...noWhy } = idea('idea-3');
     ideas[2] = noWhy as ReturnType<typeof idea>;
     const m = msgs(estate({ demo: section(ideas) }));
@@ -117,6 +117,12 @@ describe('seed:lint:keyideas: schema, counts, keys', () => {
     const thirteen = Array.from({ length: 13 }, (_, i) => idea(`i-${i}`));
     expect(msgs(estate({ demo: section(thirteen) }))).toContain(': 13 ideas (want 5-12)');
     expect(msgs(estate({ sysdrills: section(five(), { section: 'sysdrills' }) }))).toContain(': 5 ideas (want 18)');
+  });
+
+  it('recapAfter: a fraction in (0, 1] or a whole count >= 2 that the live scope can reach', () => {
+    expect(msgs(estate({ demo: section(five(), { recapAfter: 3 }) }))).toEqual([]);
+    expect(msgs(estate({ demo: section(five(), { recapAfter: 1.5 }) })).some((x) => /schema: recapAfter: a fraction <= 1 or a whole count >= 2/.test(x))).toBe(true);
+    expect(msgs(estate({ demo: section(five(), { recapAfter: 9 }) }))).toContain(': recapAfter 9 is more than the 5 live scope unit(s)');
   });
 
   it('word limits, duplicate ids and a section that does not match its file name', () => {
