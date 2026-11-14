@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode, type Ref } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode, type Ref } from 'react';
 import { Link } from 'react-router-dom';
 import { useApi } from '../api/context';
 import { errorText } from '../api/errors';
@@ -7,13 +7,15 @@ import {
   NO_LESSON_AIDS,
   type GateStatusResponse,
   type LessonAids,
+  type LessonCheck,
+  type Confidence,
   type PracticeResponse,
   type StudyQuestPublic,
   type SubmitResponse,
   type UnitDetail,
   type UnitNotesResponse,
 } from '../api/types';
-import { LearnMoreButton } from '../components/LearnMore';
+import { ExplanationPanel, LearnMoreButton } from '../components/LearnMore';
 import { Icon } from '../components/Icon';
 import { Chip, Kbd } from '../components/ui';
 import { hasModifier, isEditableTarget, useKeydown } from '../lib/keys';
@@ -107,6 +109,153 @@ function LessonHidden({ onShow }: { onShow: () => void }) {
 
 type Mode = 'graded' | 'practice';
 
+// ---------------------------------------------------------------- rv2 S3 (F9): the confidence tag
+
+export const CONFIDENCE_LABEL: Record<Confidence, string> = { sure: 'Sure', unsure: 'Unsure', guess: 'Guessing' };
+
+/**
+ * rv2 S3 (PLAN F9, stretch): "how sure are you?" on a graded answer, picked BEFORE the result is known and filed
+ * right after the attempt exists (POST /attempts/:id/confidence). Optional, never graded, 0 XP: it feeds the
+ * calibration panel on Stats only.
+ */
+export function ConfidencePick({ value, onChange, disabled, name }: { value: Confidence | null; onChange: (c: Confidence | null) => void; disabled?: boolean; name: string }) {
+  return (
+    <span className="seg confidence-pick" role="radiogroup" aria-label="How sure are you? (optional)" data-testid="confidence-pick">
+      <span className="muted small">How sure?</span>
+      {(Object.keys(CONFIDENCE_LABEL) as Confidence[]).map((c) => (
+        <label key={c} className={`seg-opt${value === c ? ' on' : ''}`}>
+          <input type="radio" name={name} checked={value === c} disabled={disabled} onChange={() => onChange(c)} aria-label={`Confidence: ${CONFIDENCE_LABEL[c]}`} />
+          {CONFIDENCE_LABEL[c]}
+        </label>
+      ))}
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------- rv2 S3 (F4): the pretest
+
+/** Per-browser memory of a finished or skipped pretest (a convenience: a blocked store just shows it again). */
+export const PRETEST_KEY_PREFIX = 'bootquest:pretest-done:';
+
+function pretestDone(unitId: number): boolean {
+  try {
+    return window.localStorage.getItem(`${PRETEST_KEY_PREFIX}${unitId}`) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function markPretestDone(unitId: number): void {
+  try {
+    window.localStorage.setItem(`${PRETEST_KEY_PREFIX}${unitId}`, '1');
+  } catch {
+    /* not remembered; the in-memory state still closes it */
+  }
+}
+
+const normPrompt = (t: string): string => t.replace(/\s+/g, ' ').trim().toLowerCase();
+
+/**
+ * The pretest's cards: the lesson's "check yourself" cards (content/fundamentals/sections.json), never a gate
+ * question. A check whose prompt is also a question of this gate is dropped (defensive: the gate must not be
+ * previewed, even if the content ever overlapped).
+ */
+export function pretestChecks(checks: readonly LessonCheck[], gatePrompts: readonly string[]): LessonCheck[] {
+  const gate = new Set(gatePrompts.map(normPrompt));
+  return checks.filter((c) => !gate.has(normPrompt(c.prompt)));
+}
+
+/** The offer above the lesson: one line, two buttons; nothing is shown from the cards until it is taken. */
+export function PretestOffer({ count, onTake, onDecline }: { count: number; onTake: () => void; onDecline: () => void }) {
+  return (
+    <section className="panel pretest-offer" aria-labelledby="pretest-offer-title" data-testid="pretest-offer">
+      <h2 className="panel-title" id="pretest-offer-title">
+        What do you already know?
+      </h2>
+      <p className="small">
+        <span className="muted">
+          {count === 1 ? 'One question' : `${count} questions`} from this lesson before you read it. Not graded: nothing is sent or recorded.
+        </span>{' '}
+        <button type="button" className="btn btn-sm btn-primary" onClick={onTake} data-testid="pretest-take">
+          Take the pretest
+        </button>{' '}
+        <button type="button" className="btn btn-sm btn-ghost" onClick={onDecline} data-testid="pretest-decline">
+          Not now
+        </button>
+      </p>
+    </section>
+  );
+}
+
+/**
+ * rv2 S3 (PLAN §2.1 item 7, F4): before an unpassed Fundamentals lesson, its check cards as "what do you already
+ * know?". Answer-first (a guess, or "I don't know yet", before the answer shows), unscored (nothing is sent: no
+ * attempt, no XP, no card, no practice lock) and skippable. Done or skipped, the lesson takes its place.
+ */
+export function Pretest({ checks, onDone }: { checks: readonly LessonCheck[]; onDone: () => void }) {
+  const [guesses, setGuesses] = useState<string[]>(() => checks.map(() => ''));
+  const [shown, setShown] = useState<boolean[]>(() => checks.map(() => false));
+  const reveal = (i: number) => setShown((p) => p.map((v, j) => (j === i ? true : v)));
+  const allShown = shown.every(Boolean);
+  return (
+    <section className="panel pretest" aria-labelledby="pretest-title" data-testid="pretest">
+      <h2 className="panel-title" id="pretest-title">
+        What do you already know?
+      </h2>
+      <p className="muted small" data-testid="pretest-intro">
+        {checks.length === 1 ? 'One question' : `${checks.length} questions`} from this lesson, before you read it. Guess first, then look: a try before
+        the lesson helps it stick. Not graded: nothing is sent or recorded, no XP.
+      </p>
+      <ol className="pretest-cards">
+        {checks.map((c, i) => (
+          <li key={`${c.heading}-${i}`}>
+            <aside className="check-card" data-testid="pretest-card" data-revealed={shown[i] ? 'true' : 'false'} aria-label={`Pretest question ${i + 1}`}>
+              <Prose text={c.prompt} className="check-card-prompt" />
+              <textarea
+                className="answer-text"
+                rows={2}
+                value={guesses[i] ?? ''}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setGuesses((p) => p.map((g, j) => (j === i ? v : g)));
+                }}
+                readOnly={shown[i]}
+                aria-label={`Your guess ${i + 1} (not sent)`}
+              />
+              {shown[i] ? (
+                <div className="check-card-answer" data-testid="pretest-answer">
+                  <Prose text={c.answer} />
+                </div>
+              ) : (
+                <p className="toolbar">
+                  <button type="button" className="btn btn-sm" disabled={(guesses[i] ?? '').trim() === ''} onClick={() => reveal(i)}>
+                    Show the answer
+                  </button>
+                  <button type="button" className="btn btn-sm btn-ghost" onClick={() => reveal(i)}>
+                    I don&apos;t know yet
+                  </button>
+                </p>
+              )}
+            </aside>
+          </li>
+        ))}
+      </ol>
+      <div className="toolbar">
+        <span className="toolbar-spacer" />
+        {allShown ? (
+          <button type="button" className="btn btn-primary" onClick={onDone} data-testid="pretest-done">
+            Start the lesson
+          </button>
+        ) : (
+          <button type="button" className="btn" onClick={onDone} data-testid="pretest-skip">
+            Skip to the lesson
+          </button>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function StudyQuest({
   detail,
   sq,
@@ -124,6 +273,8 @@ function StudyQuest({
   const [mode, setMode] = useState<Mode>('graded');
   const [answers, setAnswers] = useState<(number | null)[]>(() => sq.questions.map(() => null));
   const [assisted, setAssisted] = useState(false);
+  // rv2 S3 (F9): the optional confidence tag of this graded try
+  const [confidence, setConfidence] = useState<Confidence | null>(null);
   // U2: the learner opened the lesson during this try (locks "I had help" on until the try ends)
   const [lessonShown, setLessonShown] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -188,6 +339,14 @@ function StudyQuest({
       live = false;
     };
   }, [api, unitId, fund]);
+  // rv2 S3 (F4): the pretest is offered before an unpassed Fundamentals lesson (above it) until it is taken or
+  // waved off (remembered per browser); taken, its cards stand in for the lesson until it is finished or skipped
+  const [pretestPhase, setPretestPhase] = useState<'offer' | 'open' | 'closed'>(() => (pretestDone(unitId) ? 'closed' : 'offer'));
+  const pretest = fund && lesson !== null && detail.unit.state !== 'done' && !started && pretestPhase !== 'closed' ? pretestChecks(aids.checks, sq.questions.map((q) => q.prompt)) : [];
+  const closePretest = () => {
+    markPretestDone(unitId);
+    setPretestPhase('closed');
+  };
   const complete = answers.every((a) => a !== null);
   const answered = answers.filter((a) => a !== null).length;
   // rv B: when the next GRADED try opens (budget spent, or the practice lock); null = open now. The server's
@@ -208,6 +367,8 @@ function StudyQuest({
         setPractice(await api.practiceUnit(unitId, { answers: answers as number[] }));
       } else {
         const r = await api.submitUnit(unitId, { answers: answers as number[], selfAssisted: assisted });
+        // rv2 S3 (F9): the tag was picked before the result; a failed save is silent (it is never part of the grade)
+        if (confidence !== null) void api.tagConfidence(r.attempt.id, confidence).catch(() => undefined);
         setSubmit(r);
         if (r.verdict === 'pass') setDone(true);
         loadNotes(); // explanations may have been released by this answer
@@ -237,6 +398,7 @@ function StudyQuest({
     // a new graded try is closed-book again
     setLessonShown(false);
     setAssisted(false);
+    setConfidence(null);
     setStarted(true);
   };
 
@@ -333,7 +495,8 @@ function StudyQuest({
     <>
     {/* wave B: the check cards are open-book practice, so they are off while a graded gate is open */}
     <LessonAidsContext.Provider value={{ checks: aids.checks, show: !closedBook }}>
-      {lesson !== null && (lessonVisible ? lesson : <LessonHidden onShow={showLesson} />)}
+      {pretest.length > 0 && pretestPhase === 'offer' && <PretestOffer count={pretest.length} onTake={() => setPretestPhase('open')} onDecline={closePretest} />}
+      {pretest.length > 0 && pretestPhase === 'open' ? <Pretest checks={pretest} onDone={closePretest} /> : lesson !== null && (lessonVisible ? lesson : <LessonHidden onShow={showLesson} />)}
     </LessonAidsContext.Provider>
     {lesson !== null && gateOpen && mode === 'graded' && lessonShown && (
       <p className="muted small lesson-shown-note" data-testid="lesson-shown">
@@ -485,7 +648,8 @@ function StudyQuest({
             // rv B: marks exist only after a PASS (a failed try never reaches this list)
             const marked = outcome !== undefined && passedNow;
             return (
-              <fieldset key={q.itemKey} className="choices" disabled={busy || submit !== null} data-testid={`question-${num}`}>
+              <Fragment key={q.itemKey}>
+              <fieldset className="choices" disabled={busy || submit !== null} data-testid={`question-${num}`}>
                 <legend>
                   <strong>Q{num}.</strong> <InlineProse text={q.prompt} />
                   {fund && gateOpen && answers[qi] === null && <span className="gate-unanswered"> not answered</span>}
@@ -501,7 +665,8 @@ function StudyQuest({
                       <CopyPromptButton text={() => missPrompt(qi, ex.answer, ex.rest)} testId={`copy-prompt-${num}`} />
                     </span>
                   )}
-                  {hasNotes(q.itemKey) && !closedBook && (
+                  {/* rv2 S3 (F4): once the explanation is out, its panel below carries the notes (one panel) */}
+                  {hasNotes(q.itemKey) && !closedBook && !ex && (
                     <span className="question-learn-more" data-testid={`learn-more-q${num}`}>
                       <LearnMoreButton unitId={unitId} target={q.itemKey} subject={`Q${num}`} compact />
                     </span>
@@ -522,17 +687,23 @@ function StudyQuest({
                     </label>
                   );
                 })}
-                {ex && (
-                  <div className={`gate-explain${outcome && !outcome.correct ? ' gate-explain-missed' : ''}`} data-testid={`explain-${num}`}>
-                    {ex.answer !== null && (
-                      <p>
-                        <strong>Answer:</strong> <InlineProse text={ex.answer} />
-                      </p>
-                    )}
-                    {ex.rest !== '' && <Prose text={ex.rest} />}
-                  </div>
-                )}
               </fieldset>
+              {/* rv2 S3 (F4): the keyed answer, the explanation, this item's readings and the drawer in ONE panel,
+                  outside the (disabled after submit) fieldset so its controls stay usable */}
+              {ex && (
+                <ExplanationPanel
+                  unitId={unitId}
+                  target={q.itemKey}
+                  subject={`Q${num}`}
+                  answer={ex.answer}
+                  explanation={ex.rest}
+                  readings={notes?.readings.filter((n) => n.target === q.itemKey) ?? []}
+                  missed={outcome !== undefined && !outcome.correct}
+                  testId={`explain-${num}`}
+                  moreTestId={`learn-more-q${num}`}
+                />
+              )}
+              </Fragment>
             );
           })}
           {gateOpen && (
@@ -542,6 +713,7 @@ function StudyQuest({
                   <input type="checkbox" checked={assisted} onChange={(e) => setAssisted(e.target.checked)} disabled={lessonShown} />I had help
                 </label>
               )}
+              {mode === 'graded' && <ConfidencePick value={confidence} onChange={setConfidence} disabled={busy} name={`confidence-${unitId}`} />}
               {fund && (
                 <button
                   ref={backToQuestions}

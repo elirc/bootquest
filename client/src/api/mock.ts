@@ -112,6 +112,9 @@ import {
 import type { XpByTrack } from '@bootquest/shared/api';
 import { G1_MIN_DEFECTS, G1_TARGET_RATE, PROMOTION_MIN_COVERAGE } from '@bootquest/shared/thresholds';
 import { ebMeetsGate, ebTally } from '../lib/eb-weights';
+import { DESIGN_DIMENSIONS } from '@bootquest/shared/api-ext';
+import type { CalibrationResponse, Confidence, ConfidenceResponse, DesignProfileResponse, InterviewMetaResponse, WeekReflectionResponse, WeekResponse } from './types';
+import { WEEK_REFLECTION_QUESTIONS } from '@bootquest/shared/api-ext';
 
 /** Private, fixture-only grading material. Never crosses the API boundary. */
 interface PrivateFixture {
@@ -301,6 +304,9 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
   const writtenAnswers = new Map<number, { attemptId: number; answer: string; at: number }>();
   // rv2 S1: the error notebook, newest first
   const notebook: ErrorNoteDto[] = [];
+  const interviewMeta: InterviewMetaResponse[] = []; // rv2 S3
+  const reflections = new Map<string, { answers: string[]; at: number }>(); // rv2 S3 (F7)
+  const confidences = new Map<number, Confidence>(); // rv2 S3 (F9)
   const studyMissCards = new Set<string>();
   const studyPassed = new Set<number>();
   // "Learn more": units with a graded study-quiz submit, and code units with a verified pass
@@ -1716,6 +1722,66 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
         for (const e of notebook) counts.set(e.category, (counts.get(e.category) ?? 0) + 1);
         return { entries: [...notebook], categories: [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([category, count]) => ({ category, count })) };
       }),
+    // rv2 S3: interview meta (one per attempt, before the self-score) + an empty profile with the interview tally
+    recordInterviewMeta: (id, b) =>
+      wrap((): InterviewMetaResponse => {
+        if (!findUnit(id)) throw err(404, 'NOT_FOUND', `unit ${id} not found`);
+        if (interviewMeta.some((m) => m.attemptId === b.attemptId)) throw err(409, 'ALREADY_ANSWERED', `attempt ${b.attemptId} already has its interview meta`);
+        const out: InterviewMetaResponse = { attemptId: b.attemptId, mode: 'interview', elapsedMs: b.elapsedMs, timeBoxMs: b.timeBoxMs, blind: b.blind, overTime: b.elapsedMs > b.timeBoxMs };
+        interviewMeta.push(out);
+        return out;
+      }),
+    // rv2 S3 (F7): a quiet week around the fixture's today; the reflection is kept per week (newest wins)
+    getWeek: (start) =>
+      wrap((): WeekResponse => {
+        const s = mockWeekStart(start ?? fx.dashboard.today);
+        const r = reflections.get(s);
+        return {
+          start: s,
+          end: mockAddDays(s, 6),
+          today: fx.dashboard.today,
+          time: { activeDays: 0, sittings: 0, estMinutes: 0, rule: 'estimated: activity events less than 15 minutes apart are one sitting; each sitting counts its span plus 5 minutes' },
+          passes: { units: 0, firstTime: 0, byKind: [], selfScored: 0 },
+          xp: 0,
+          reviews: { graded: 0, again: 0 },
+          shakyIdeas: [],
+          notebook: { entries: 0, topCategories: [] },
+          reflection: { questions: [...WEEK_REFLECTION_QUESTIONS], answers: r ? [...r.answers] : null, savedAt: r?.at ?? null },
+        };
+      }),
+    saveWeekReflection: (b) =>
+      wrap((): WeekReflectionResponse => {
+        const s = mockWeekStart(b.start);
+        if (s > mockWeekStart(fx.dashboard.today)) throw err(400, 'VALIDATION', `week ${s} has not started yet`);
+        if (b.answers.length !== 3 || b.answers.every((a) => a.trim() === '')) throw err(400, 'VALIDATION', 'answer at least one question');
+        reflections.set(s, { answers: b.answers.map((a) => a.trim()), at: NOW });
+        return { start: s, savedAt: NOW };
+      }),
+    // rv2 S3 (F9): one tag per attempt; the mock's calibration counts the tags only (no pass join)
+    tagConfidence: (attemptId, confidence) =>
+      wrap((): ConfidenceResponse => {
+        if (confidences.has(attemptId)) throw err(409, 'ALREADY_ANSWERED', `attempt ${attemptId} already has its confidence tag`);
+        confidences.set(attemptId, confidence);
+        return { attemptId, confidence };
+      }),
+    getCalibration: () =>
+      wrap((): CalibrationResponse => ({
+        levels: (['sure', 'unsure', 'guess'] as const).map((c) => ({ confidence: c, answers: 0, passed: 0, passRate: null })),
+        pending: confidences.size,
+        sureButFailed: 0,
+      })),
+    getDesignProfile: () =>
+      wrap((): DesignProfileResponse => {
+        const e = [...interviewMeta].map((m) => m.elapsedMs).sort((a, b) => a - b);
+        const mid = e.length === 0 ? null : e.length % 2 ? e[(e.length - 1) / 2]! : Math.round((e[e.length / 2 - 1]! + e[e.length / 2]!) / 2);
+        return {
+          headlinesLoaded: false,
+          answers: 0,
+          dimensions: DESIGN_DIMENSIONS.map((id) => ({ id, description: null, covered: 0, missed: 0, coverage: null, answers: 0 })),
+          unclassified: { covered: 0, missed: 0 },
+          interview: { answers: e.length, medianElapsedMs: mid, overTime: interviewMeta.filter((m) => m.overTime).length },
+        };
+      }),
   };
 }
 
@@ -1747,3 +1813,15 @@ function noteDto(n: NoteFixture, kinds: ReadonlyMap<string, NoteDto['targetKind'
 }
 
 export const mockApi: BootQuestApi = createMockApi();
+
+// rv2 S3 (F7): local day-key helpers mirroring server/src/api/week-service.ts (Monday-start weeks)
+function mockAddDays(key: string, n: number): string {
+  const [y, m, d] = key.split('-').map(Number) as [number, number, number];
+  const t = new Date(Date.UTC(y, m - 1, d + n));
+  return t.toISOString().slice(0, 10);
+}
+function mockWeekStart(key: string): string {
+  const [y, m, d] = key.split('-').map(Number) as [number, number, number];
+  const dow = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+  return mockAddDays(key, -((dow + 6) % 7));
+}

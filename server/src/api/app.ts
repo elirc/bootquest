@@ -65,6 +65,14 @@ import { emptySeedItemStore, type SeedItemStore } from '../store/seed-items.ts';
 import { ladderUnits } from '../store/ladder.ts';
 import { registerSettingsRoutes } from './settings-routes.ts';
 import { registerPracticeRoutes } from './practice-service.ts';
+// rv2 S3 (F5): interview meta + the DESIGN IT dimension profile
+import { DesignProfileResponse, InterviewMetaBody, InterviewMetaResponse } from '@bootquest/shared/api-ext';
+import { recordInterviewMeta } from './ladder-service.ts';
+import { designProfile } from './stats-service.ts';
+// rv2 S3 (F7): the weekly review
+import { registerWeekRoutes } from './week-service.ts';
+// rv2 S3 (F9, stretch): confidence tags + calibration
+import { registerConfidenceRoutes } from './confidence-service.ts';
 import { EvidenceListResponseExt, FundamentalsResponseExt, HintsResponse, HintTakenResponse, LessonAidsResponse } from '@bootquest/shared/api-ext';
 import { getFundamentals, getLessonAids } from './fundamentals-service.ts';
 import { getHints, takeHint } from './hints-service.ts';
@@ -510,6 +518,20 @@ export function createApp(opts: AppOptions): Express {
   registerNotebookRoutes(router, deps); // rv2 S1: the error notebook (F6)
   registerSettingsRoutes(router, deps); // ab S1: GET/PUT /settings/slate
   registerPracticeRoutes(router, deps, ladder); // rv B: GET /units/:id/gate-status, POST /units/:id/practice, GET /units/:id/source
+
+  // ---- rv2 S3 (F5): interview mode S meta (eb_attempt_meta, never evidence) and the dimension profile (read-only)
+  router.post('/units/:id/explain-back/interview', asyncRoute((req, res) => {
+    const { id } = validate(UnitIdParams, req.params, 'params');
+    validate(EmptyQuery, req.query, 'query');
+    const body = validate(InterviewMetaBody, req.body, 'body');
+    sendJson(res, 200, InterviewMetaResponse.parse(recordInterviewMeta(ladder, id, body)));
+  }));
+  router.get('/stats/design-profile', asyncRoute((req, res) => {
+    validate(EmptyQuery, req.query, 'query');
+    sendJson(res, 200, DesignProfileResponse.parse(designProfile(ladder)));
+  }));
+  registerWeekRoutes(router, deps); // rv2 S3 (F7): GET /week, POST /week/reflection
+  registerConfidenceRoutes(router, deps); // rv2 S3 (F9): POST /attempts/:id/confidence, GET /stats/calibration
 
   app.use('/api', router);
 

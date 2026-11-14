@@ -144,6 +144,15 @@ export type {
   RecapSubmitResponse,
   RedoRunResponse,
 };
+// rv2 S3: interview mode S + the DESIGN IT dimension profile (shared/src/api-ext.ts rv2 S3 section)
+import type { DesignDimension, DesignDimensionDto, DesignProfileResponse, InterviewMetaBody, InterviewMetaResponse } from '@bootquest/shared/api-ext';
+export type { DesignDimension, DesignDimensionDto, DesignProfileResponse, InterviewMetaBody, InterviewMetaResponse };
+// rv2 S3: the weekly review (F7)
+import type { WeekReflectionBody, WeekReflectionResponse, WeekResponse } from '@bootquest/shared/api-ext';
+export type { WeekReflectionBody, WeekReflectionResponse, WeekResponse };
+// rv2 S3: confidence tags + calibration (F9, stretch)
+import type { CalibrationResponse, Confidence, ConfidenceResponse } from '@bootquest/shared/api-ext';
+export type { CalibrationResponse, Confidence, ConfidenceResponse };
 
 /**
  * f52 wave B (app ruling 7): lesson aids of a Fundamentals topic (GET /units/:id/lesson-aids). Declared
@@ -475,6 +484,21 @@ export interface BootQuestApi {
   addNote(body: ErrorNoteBody): Promise<ErrorNoteResponse>;
   /** GET /api/notebook — entries newest first + category counts. */
   getNotebook(): Promise<NotebookResponse>;
+  // ---- rv2 S3: interview mode S (never evidence) + the dimension profile (read-only)
+  /** POST /api/units/:id/explain-back/interview — the timer of a DESIGN IT answer of record, filed before its self-score. */
+  recordInterviewMeta(unitId: number, body: InterviewMetaBody): Promise<InterviewMetaResponse>;
+  /** GET /api/stats/design-profile — covered / missed key points per headlines.json dimension. */
+  getDesignProfile(): Promise<DesignProfileResponse>;
+  // ---- rv2 S3: the weekly review (read-only, except the 0-XP reflection)
+  /** GET /api/week[?start=YYYY-MM-DD] — Monday..Sunday of the week holding `start` (default: this week). */
+  getWeek(start?: string): Promise<WeekResponse>;
+  /** POST /api/week/reflection — the three answers for a week (a later save supersedes; 0 XP). */
+  saveWeekReflection(body: WeekReflectionBody): Promise<WeekReflectionResponse>;
+  // ---- rv2 S3 (F9): confidence tags (never graded) + calibration
+  /** POST /api/attempts/:id/confidence — the tag picked before the result, filed right after the attempt exists. */
+  tagConfidence(attemptId: number, confidence: Confidence): Promise<ConfidenceResponse>;
+  /** GET /api/stats/calibration — tagged answers and passes per confidence level. */
+  getCalibration(): Promise<CalibrationResponse>;
 }
 
 /** Codes the client can raise itself on top of the server's envelope codes. */

@@ -4,7 +4,7 @@ import { errorText } from '../api/errors';
 import { isApiError, type NoteDto, type RefContentResponse, type UnitNotesResponse } from '../api/types';
 import { useKeydown } from '../lib/keys';
 import { shortcutBlocked, typingOrChord } from '../lib/shortcuts';
-import { proseChunks, renderInline } from '../lib/prose';
+import { InlineProse, Prose, proseChunks, renderInline } from '../lib/prose';
 import { Icon } from './Icon';
 import { Kbd } from './ui';
 
@@ -297,7 +297,8 @@ function NotesBody({
 
 const lines = (a: number | null, b: number | null) => (a === null ? '' : a === b || b === null ? `:${a}` : `:${a}-${b}`);
 
-function NoteCard({ note, openRef }: { note: NoteDto; openRef: (refId: number, title: string) => void }) {
+/** `openRef` absent (inline, outside the drawer): every excerpt / read-more is a plain pinned link. */
+function NoteCard({ note, openRef }: { note: NoteDto; openRef?: (refId: number, title: string) => void }) {
   return (
     <article className="note" data-testid={`note-${note.id}`}>
       <h4 className="note-title">{note.title}</h4>
@@ -308,7 +309,7 @@ function NoteCard({ note, openRef }: { note: NoteDto; openRef: (refId: number, t
             <pre>{e.quote}</pre>
           </blockquote>
           <figcaption>
-            {e.refId !== null ? (
+            {e.refId !== null && openRef ? (
               <button type="button" className="link-btn" onClick={() => openRef(e.refId!, e.path)}>
                 <code>
                   {e.path}
@@ -332,7 +333,7 @@ function NoteCard({ note, openRef }: { note: NoteDto; openRef: (refId: number, t
           <ul className="note-links">
             {note.readMore.map((r, i) => (
               <li key={i}>
-                {r.refId !== null ? (
+                {r.refId !== null && openRef ? (
                   <button type="button" className="link-btn" onClick={() => openRef(r.refId!, r.path)}>
                     <code>
                       {r.path}
@@ -392,6 +393,67 @@ function RefViewer({ refId, title, onBack }: { refId: number; title: string; onB
           <NoteMarkdown text={doc.markdown} />
         </>
       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- rv2 S3 (F4): the merged panel
+
+/**
+ * rv2 S3 (PLAN F4): ONE panel per graded item once its explanation is released. It merges what used to be two
+ * places (the explanation under the question and the per-question "Learn more" drawer): the keyed answer and the
+ * explanation first, then the readings about this item inline, then one button for the full drawer (all notes,
+ * material, the refs viewer). It renders only what the caller passes (a released explanation + the item's
+ * 'before' readings from GET /units/:id/notes): nothing here fetches, records or reveals anything.
+ */
+export function ExplanationPanel({
+  unitId,
+  target,
+  subject,
+  answer,
+  explanation,
+  readings = [],
+  missed = false,
+  testId,
+  moreTestId,
+}: {
+  unitId: number;
+  /** the quest item key the panel is about */
+  target: string;
+  /** e.g. "Q3", for the drawer's heading */
+  subject: string;
+  /** the keyed answer, when the explanation names it */
+  answer: string | null;
+  explanation: string;
+  /** the 'before' notes whose target is this item */
+  readings?: readonly NoteDto[];
+  missed?: boolean;
+  testId?: string;
+  moreTestId?: string;
+}) {
+  return (
+    <div className={`gate-explain explain-panel${missed ? ' gate-explain-missed' : ''}`} data-testid={testId} data-merged="true">
+      {answer !== null && (
+        <p>
+          <strong>Answer:</strong> <InlineProse text={answer} />
+        </p>
+      )}
+      {explanation !== '' && <Prose text={explanation} />}
+      {readings.length > 0 && (
+        <details className="explain-readings small" data-testid={testId ? `${testId}-readings` : undefined}>
+          <summary>
+            Read more about {subject} ({readings.length})
+          </summary>
+          {readings.map((n) => (
+            <NoteCard key={n.key} note={n} />
+          ))}
+        </details>
+      )}
+      <p className="explain-more small">
+        <span data-testid={moreTestId}>
+          <LearnMoreButton unitId={unitId} target={target} subject={subject} compact label="All notes" />
+        </span>
+      </p>
     </div>
   );
 }

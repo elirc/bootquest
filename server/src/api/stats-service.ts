@@ -26,6 +26,10 @@ import {
   type XpDayRow,
 } from '../engines/stats.ts';
 import { listTracks, passedUnitIds, unitsForTrack, type TrackRecord } from '../store/queries.ts';
+import { DESIGN_DIMENSIONS, type DesignDimension, type DesignProfileResponse } from '@bootquest/shared/api-ext';
+import { designSide, kpDimension, type DesignSide } from '../store/design-side.ts';
+import { isDesignIt, isG2 } from '../store/ladder.ts';
+import { explainBackKey, seedItemHash, type SeedItemStore } from '../store/seed-items.ts';
 
 /**
  * Campaign 2 B2: read-only stats over the append-only ledgers. Nothing here writes;
@@ -173,5 +177,71 @@ export function campaignProgress({ db }: StatsDeps): CampaignProgressResponse {
           };
         }),
     })),
+  };
+}
+
+// ---------------------------------------------------------------- rv2 S3 (F5): the DESIGN IT dimension profile
+
+export interface DesignProfileDeps extends StatsDeps {
+  seedItems: SeedItemStore;
+}
+
+/**
+ * GET /stats/design-profile: per headlines.json dimension, the key points marked covered / missed on the learner's
+ * self-scored DESIGN IT and G2 answers of record (practice retakes excluded; eb_score_detail.missed_ids is the
+ * record). An answer counts against the set version it answered: a set re-seeded since (hash differs) or no longer
+ * loaded is left out, since its key-point ids may name other points now. A key point with no dimension (no file, a
+ * set the file does not list) is `unclassified`. Read-only.
+ */
+export function designProfile({ db, seedItems }: DesignProfileDeps, side: DesignSide = designSide()): DesignProfileResponse {
+  const rows = db.all<{ attemptId: number; answer: string | null; unitKey: string; missed: string }>(
+    `SELECT a.id AS attemptId, a.answer, u.key AS unitKey, MIN(d.missed_ids) AS missed
+       FROM attempt a
+       JOIN unit u ON u.id = a.unit_id
+       JOIN evidence e ON e.attempt_id = a.id AND e.kind = 'explain-back'
+       JOIN eb_score_detail d ON d.evidence_id = e.id
+      WHERE a.assistance_source <> 'practice'
+      GROUP BY a.id
+      ORDER BY a.id`,
+  );
+  const tally = new Map<DesignDimension, { covered: number; missed: number; answers: Set<number> }>(DESIGN_DIMENSIONS.map((d) => [d, { covered: 0, missed: 0, answers: new Set() }]));
+  const unclassified = { covered: 0, missed: 0 };
+  let answers = 0;
+  for (const r of rows) {
+    let stored: { explainBack?: { questionSetKey?: string; itemSha?: string } };
+    try {
+      stored = JSON.parse(r.answer ?? '{}') as typeof stored;
+    } catch {
+      continue;
+    }
+    const key = stored.explainBack?.questionSetKey;
+    const item = key ? seedItems.explainBack(key) : undefined;
+    if (!item || !(isDesignIt(item) || isG2(item)) || seedItemHash(item) !== stored.explainBack?.itemSha) continue;
+    const missed = new Set<string>((JSON.parse(r.missed) as unknown[]).map(String));
+    answers++;
+    for (const q of explainBackKey(item)) {
+      for (const kp of q.keyPoints) {
+        const hit = !missed.has(kp.id);
+        const dim = kpDimension(side, item.key, r.unitKey, kp.id);
+        const t = dim ? tally.get(dim)! : undefined;
+        if (t) {
+          t[hit ? 'covered' : 'missed']++;
+          t.answers.add(r.attemptId);
+        } else unclassified[hit ? 'covered' : 'missed']++;
+      }
+    }
+  }
+  const meta = db.all<{ e: number; b: number }>('SELECT elapsed_ms AS e, time_box_ms AS b FROM eb_attempt_meta ORDER BY elapsed_ms');
+  const mid = meta.length === 0 ? null : meta.length % 2 === 1 ? meta[(meta.length - 1) / 2]!.e : Math.round((meta[meta.length / 2 - 1]!.e + meta[meta.length / 2]!.e) / 2);
+  return {
+    headlinesLoaded: side.loaded,
+    answers,
+    dimensions: DESIGN_DIMENSIONS.map((id) => {
+      const t = tally.get(id)!;
+      const n = t.covered + t.missed;
+      return { id, description: side.descriptions.get(id) ?? null, covered: t.covered, missed: t.missed, coverage: n === 0 ? null : t.covered / n, answers: t.answers.size };
+    }),
+    unclassified,
+    interview: { answers: meta.length, medianElapsedMs: mid, overTime: meta.filter((m) => m.e > m.b).length },
   };
 }

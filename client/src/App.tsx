@@ -8,6 +8,7 @@ import { KeyIdeasPage } from './pages/KeyIdeas';
 import { ReviewPage } from './pages/Review';
 import { StatsPage } from './pages/Stats';
 import { SettingsPage } from './pages/Settings';
+import { WeekPage } from './pages/Week'; // rv2 S3 (F7)
 
 /** Router-agnostic so tests can mount it inside a MemoryRouter. */
 export function App() {
@@ -22,6 +23,7 @@ export function App() {
         <Route path="/keyideas" element={<KeyIdeasPage />} />
         <Route path="/stats" element={<StatsPage />} />
         <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/week" element={<WeekPage />} />
         <Route path="*" element={<NotFound />} />
       </Routes>
     </AppShell>

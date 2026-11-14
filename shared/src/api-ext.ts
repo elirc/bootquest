@@ -722,3 +722,187 @@ export const NotebookResponse = z
   .object({ entries: z.array(ErrorNoteDto), categories: z.array(z.object({ category: NoteCategory, count: z.number().int().positive() }).strict()) })
   .strict();
 export type NotebookResponse = z.infer<typeof NotebookResponse>;
+
+// ---- rv2 S3: interview mode S + design profile (F5), the weekly review (F7) ----------------------------------
+// Server: api/ladder-service.ts (recordInterviewMeta), store/design-side.ts + api/stats-service.ts (designProfile),
+// api/week-service.ts. Nothing here is evidence: interview meta, the profile and the week page change no grade, pay
+// no XP, write no ladder leg and unlock nothing (a DESIGN IT answer in interview mode is graded exactly like any).
+
+/** Interview mode S: the time box the client's timer runs against (R5 F9: 45 minutes). */
+export const INTERVIEW_TIME_BOX_MS = 45 * 60 * 1000;
+/** The six delivery-framework headings shown in interview mode, in order (PLAN §2.2 design-it, R5 F9). */
+export const INTERVIEW_FRAMEWORK = [
+  'Requirements and numbers',
+  'Entities and API',
+  'High-level design',
+  'Deep dive',
+  'Pre-mortem',
+  'Trade-offs',
+] as const;
+
+/** POST /units/:id/explain-back/interview: the meta of the answer of record just stored (before its self-score). */
+export const InterviewMetaBody = z
+  .object({
+    attemptId: z.number().int().positive(),
+    elapsedMs: z.number().int().min(0).max(86_400_000),
+    timeBoxMs: z.number().int().positive().max(86_400_000),
+    blind: z.boolean(),
+  })
+  .strict();
+export type InterviewMetaBody = z.infer<typeof InterviewMetaBody>;
+export const InterviewMetaResponse = z
+  .object({
+    attemptId: z.number().int().positive(),
+    mode: z.literal('interview'),
+    elapsedMs: z.number().int(),
+    timeBoxMs: z.number().int(),
+    blind: z.boolean(),
+    overTime: z.boolean(),
+  })
+  .strict();
+export type InterviewMetaResponse = z.infer<typeof InterviewMetaResponse>;
+
+/** The eight key-point dimensions of content/design/headlines.json (S2 C2: a fixed list). */
+export const DESIGN_DIMENSIONS = ['requirements', 'data-and-api', 'consistency', 'scaling', 'reliability', 'security', 'operations', 'trade-offs'] as const;
+export const DesignDimension = z.enum(DESIGN_DIMENSIONS);
+export type DesignDimension = z.infer<typeof DesignDimension>;
+
+const Tally = z.object({ covered: z.number().int().min(0), missed: z.number().int().min(0) }).strict();
+export const DesignDimensionDto = Tally.extend({
+  id: DesignDimension,
+  /** the file's own definition of the dimension, when headlines.json is loaded */
+  description: z.string().nullable(),
+  /** covered / (covered + missed); null with no marked key point */
+  coverage: z.number().min(0).max(1).nullable(),
+  /** distinct answers of record that marked a key point of this dimension */
+  answers: z.number().int().min(0),
+}).strict();
+export type DesignDimensionDto = z.infer<typeof DesignDimensionDto>;
+
+/**
+ * GET /stats/design-profile: per dimension, the key points the learner marked covered / missed on their self-scored
+ * DESIGN IT and G2 answers of record (practice retakes excluded). A key point with no headline (no file, or a set
+ * the file does not list) counts under `unclassified`, so a set without headlines still works.
+ */
+export const DesignProfileResponse = z
+  .object({
+    /** content/design/headlines.json was found and parsed */
+    headlinesLoaded: z.boolean(),
+    /** self-scored answers of record counted */
+    answers: z.number().int().min(0),
+    dimensions: z.array(DesignDimensionDto),
+    unclassified: Tally,
+    interview: z
+      .object({
+        answers: z.number().int().min(0),
+        medianElapsedMs: z.number().int().nullable(),
+        overTime: z.number().int().min(0),
+      })
+      .strict(),
+  })
+  .strict();
+export type DesignProfileResponse = z.infer<typeof DesignProfileResponse>;
+
+/** F7: the weekly review. A week is Monday..Sunday in the owner's local days. */
+export const WEEK_REFLECTION_QUESTIONS = [
+  'What did you learn this week that you could explain to a colleague tomorrow?',
+  'What tripped you up most, and why?',
+  'What will you do differently next week?',
+] as const;
+export const WEEK_REFLECTION_MAX_CHARS = 1000;
+/** Activity events closer than this belong to one sitting (the time estimate's rule). */
+export const WEEK_SESSION_GAP_MS = 15 * 60 * 1000;
+/** Each sitting also counts this much before its first recorded event. */
+export const WEEK_SESSION_LEAD_MS = 5 * 60 * 1000;
+
+const dayKeyStr = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD');
+/** GET /week[?start=YYYY-MM-DD] (any day of the wanted week; default: this week) */
+export const WeekQuery = z.object({ start: dayKeyStr.optional() }).strict();
+export type WeekQuery = z.infer<typeof WeekQuery>;
+
+export const WeekResponse = z
+  .object({
+    /** Monday and Sunday of the week (local day keys) */
+    start: dayKeyStr,
+    end: dayKeyStr,
+    today: dayKeyStr,
+    time: z
+      .object({
+        activeDays: z.number().int().min(0),
+        sittings: z.number().int().min(0),
+        /** estimated minutes: per sitting (events < WEEK_SESSION_GAP_MS apart) its span + WEEK_SESSION_LEAD_MS */
+        estMinutes: z.number().int().min(0),
+        rule: z.string(),
+      })
+      .strict(),
+    passes: z
+      .object({
+        /** distinct units with a verified pass (or a reading attest) this week */
+        units: z.number().int().min(0),
+        /** of those, units passed for the first time ever this week */
+        firstTime: z.number().int().min(0),
+        byKind: z.array(z.object({ kind: UnitKind, units: z.number().int().positive() }).strict()),
+        /** explain-back / kata answers self-scored this week (distinct attempts) */
+        selfScored: z.number().int().min(0),
+      })
+      .strict(),
+    xp: z.number().int().min(0),
+    reviews: z.object({ graded: z.number().int().min(0), again: z.number().int().min(0) }).strict(),
+    /** key ideas rated "again" at least twice this week (PLAN §2.1) */
+    shakyIdeas: z.array(z.object({ cardKey: z.string(), section: z.string(), ideaId: z.string(), idea: z.string().nullable(), again: z.number().int().min(2) }).strict()),
+    notebook: z
+      .object({
+        entries: z.number().int().min(0),
+        topCategories: z.array(z.object({ category: NoteCategory, count: z.number().int().positive() }).strict()),
+      })
+      .strict(),
+    reflection: z
+      .object({
+        questions: z.array(z.string()),
+        /** the latest saved answers for this week, null when none */
+        answers: z.array(z.string()).nullable(),
+        savedAt: z.number().int().nullable(),
+      })
+      .strict(),
+  })
+  .strict();
+export type WeekResponse = z.infer<typeof WeekResponse>;
+
+/** POST /week/reflection: the three answers for a week (a later save supersedes, history kept; 0 XP). */
+export const WeekReflectionBody = z
+  .object({
+    start: dayKeyStr,
+    answers: z.array(z.string().trim().max(WEEK_REFLECTION_MAX_CHARS)).length(WEEK_REFLECTION_QUESTIONS.length),
+  })
+  .strict()
+  .refine((b) => b.answers.some((a) => a.trim() !== ''), { message: 'answer at least one question', path: ['answers'] });
+export type WeekReflectionBody = z.infer<typeof WeekReflectionBody>;
+export const WeekReflectionResponse = z.object({ start: dayKeyStr, savedAt: z.number().int() }).strict();
+export type WeekReflectionResponse = z.infer<typeof WeekReflectionResponse>;
+
+/** F9 (stretch): a confidence tag on a graded answer, picked before the result is known (migration 027). */
+export const CONFIDENCE_LEVELS = ['sure', 'unsure', 'guess'] as const;
+export const Confidence = z.enum(CONFIDENCE_LEVELS);
+export type Confidence = z.infer<typeof Confidence>;
+/** The tag is filed right after the attempt row exists; later than this it is refused (it would not be blind). */
+export const CONFIDENCE_WINDOW_MS = 10 * 60 * 1000;
+/** POST /attempts/:id/confidence */
+export const ConfidenceBody = z.object({ confidence: Confidence }).strict();
+export type ConfidenceBody = z.infer<typeof ConfidenceBody>;
+export const ConfidenceResponse = z.object({ attemptId: z.number().int().positive(), confidence: Confidence }).strict();
+export type ConfidenceResponse = z.infer<typeof ConfidenceResponse>;
+/**
+ * GET /stats/calibration: per confidence level, the tagged graded answers and how many passed (a quiz gate / quick
+ * check: a verified pass; an explain-back answer of record: its self-score passed). `pending` = explain-back answers
+ * not self-scored yet (not counted either way). `sureButFailed` names the overconfidence that matters most.
+ */
+export const CalibrationResponse = z
+  .object({
+    levels: z.array(
+      z.object({ confidence: Confidence, answers: z.number().int().min(0), passed: z.number().int().min(0), passRate: z.number().min(0).max(1).nullable() }).strict(),
+    ),
+    pending: z.number().int().min(0),
+    sureButFailed: z.number().int().min(0),
+  })
+  .strict();
+export type CalibrationResponse = z.infer<typeof CalibrationResponse>;

@@ -30,13 +30,13 @@ async function dueSection(): Promise<HTMLElement> {
 }
 
 describe('Due now (GET /due: retests + alternate sets whose gate opened)', () => {
-  it('open retests first, then open alternate sets, then later retests; each links its unit; legs still come from /competencies', async () => {
+  it('open retests first, then open alternate sets, then later retests; each links its unit; the competency legs live on /stats (rv C R4-20)', async () => {
     const base = createMockApi();
     const api: BootQuestApi = {
       ...withDue({ retests, altSets: [{ unitId: 555, title: 'Explain back: the router', label: 'B', group: 'r:docs/router.md', openedAt: NOW - DAY }], nextAltSetAt: NOW + 3 * DAY }, base),
       getCompetencies: async () => ({ ...(await base.getCompetencies()), retests }),
     };
-    renderApp('/', api);
+    const { unmount } = renderApp('/', api);
     const section = await dueSection();
     const panel = within(section).getByTestId('due-now');
     expect(section).toHaveClass('due-now-hot');
@@ -56,12 +56,20 @@ describe('Due now (GET /due: retests + alternate sets whose gate opened)', () =>
     expect(rows[2]).toHaveTextContent(`opens ${fmtShortDate(NOW + 2 * DAY)}`);
     expect(within(panel).getByTestId('due-next-alt')).toHaveTextContent(`Next alternate set opens ${fmtWhen(NOW + 3 * DAY)}`);
 
-    // the competency legs: artifact + retest chips are links; the due retest says so
-    const lf = screen.getByRole('table').querySelector<HTMLElement>('[data-competency="language-fluency"]')!;
+    // rv wave C (R4-20): the competency table left the dashboard for Stats; the open retest is
+    // announced by the Due-now panel above, and the legs (artifact + retest chips are links) live on /stats
+    expect(document.querySelector('[data-competency]')).toBeNull();
+    unmount();
+    renderApp('/stats', api);
+    const table = await waitFor(() => {
+      const el = document.querySelector<HTMLElement>('table.comp-table');
+      expect(el).not.toBeNull();
+      return el!;
+    }, SLOW);
+    const lf = table.querySelector<HTMLElement>('[data-competency="language-fluency"]')!;
     expect(within(lf.querySelector<HTMLElement>('[data-leg="artifact"]')!).getByRole('link')).toHaveAttribute('href', '/play/106');
     const retestLeg = lf.querySelector<HTMLElement>('[data-leg="retest"]')!;
     expect(within(retestLeg).getByRole('link')).toHaveAttribute('href', '/play/102');
-    expect(retestLeg).toHaveTextContent('open now');
   });
 
   it('an alternate set alone makes the panel hot', async () => {
@@ -116,7 +124,8 @@ describe('Due now (GET /due: retests + alternate sets whose gate opened)', () =>
     const { user, container } = renderApp('/', api);
     const due = await within(container).findByTestId('due-now', {}, SLOW);
     await waitFor(() => expect(within(due).getByRole('alert')).toHaveTextContent('boom'), SLOW);
-    const table = within(container).getByRole('table');
+    // the dashboard has no table since rv C (R4-20): the hero stands in for "the rest of the page"
+    const hero = within(container).getByTestId('dash-hero');
     const calls = compCalls;
     fail = false;
     await user.click(within(due).getByRole('button', { name: 'Retry' }));
@@ -125,7 +134,7 @@ describe('Due now (GET /due: retests + alternate sets whose gate opened)', () =>
     expect(within(due).queryByTestId('due-empty')).toBeNull();
     release();
     expect(await within(due).findByTestId('due-empty', {}, SLOW)).toBeInTheDocument();
-    expect(table).toBeInTheDocument();
+    expect(within(container).getByTestId('dash-hero')).toBe(hero);
     expect(compCalls).toBe(calls);
   });
 });

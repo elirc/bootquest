@@ -35,11 +35,15 @@ import { Chip } from '../components/ui';
 import { contentHash, useDirtyGuard, useJsonDraft } from '../lib/draft';
 import { ebMeetsGate, ebTally, kpWeight, stripKpWeight, type EbTally } from '../lib/eb-weights';
 import { answerWords, EB_MAX_W3_MISSED, EB_MIN_ANSWER_WORDS } from '@bootquest/shared/eb-weight';
+import { INTERVIEW_FRAMEWORK, INTERVIEW_TIME_BOX_MS } from '@bootquest/shared/api-ext';
 import { buildClaudePrompt, CopyPromptButton } from '../lib/claude-prompt';
 import { fmtWhen } from '../lib/format';
 import { InlineProse } from '../lib/prose';
 import { useTracksRefresh } from '../lib/tracks';
 import { competencyLabel } from '../lib/view';
+import { NotebookLine } from './Player/NotebookLine';
+import { ConfidencePick } from './StudyQuestPane';
+import type { Confidence } from '../api/types';
 
 const fmtPct = (x: number) => `${Math.round(x * 1000) / 10}%`;
 
@@ -470,6 +474,62 @@ export function blindSplit(prompt: string): { head: string; rest: string } | nul
   return { head: prompt.slice(0, end), rest: prompt.slice(end) };
 }
 
+// ---------------------------------------------------------------- rv2 S3 (F5): interview mode S
+
+/** mm:ss of a duration (negative = 0). */
+export const fmtClock = (ms: number): string => {
+  const t = Math.max(0, Math.floor(ms / 1000));
+  return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
+};
+
+/** A ticking "now" while `on` (one render a second). */
+function useNow(on: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!on) return;
+    setNow(Date.now());
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [on]);
+  return now;
+}
+
+/**
+ * Interview mode S (R4-round2 "do first", PLAN F5) for a DESIGN IT set: a 45-minute time box on screen, blind on
+ * (the section list stays hidden), and the six delivery-framework headings to walk in order. It changes nothing
+ * the server grades: the answer is the same answer of record, stored before any key point is shown; the elapsed
+ * time and the blind flag are filed with it (POST .../interview) before the key is read.
+ */
+function InterviewBar({ startedAt, onStart, disabled }: { startedAt: number | null; onStart: () => void; disabled: boolean }) {
+  const now = useNow(startedAt !== null);
+  if (startedAt === null) {
+    return (
+      <div className="interview-offer small" data-testid="interview-offer">
+        <strong>Interview mode:</strong> <span className="muted">a {INTERVIEW_TIME_BOX_MS / 60_000}-minute time box, blind, the six framework headings. Graded exactly the same; the time is kept with your answer.</span>{' '}
+        <button type="button" className="btn btn-sm" onClick={onStart} disabled={disabled} data-testid="interview-start">
+          Start the interview
+        </button>
+      </div>
+    );
+  }
+  const elapsed = now - startedAt;
+  const over = elapsed > INTERVIEW_TIME_BOX_MS;
+  return (
+    <div className="interview-bar" data-testid="interview-bar" data-over={over ? 'true' : 'false'}>
+      <p className="small" role="timer" aria-live="off" data-testid="interview-timer">
+        <strong>Interview</strong> · {fmtClock(elapsed)} of {fmtClock(INTERVIEW_TIME_BOX_MS)}
+        {over ? <span className="neg"> · over time by {fmtClock(elapsed - INTERVIEW_TIME_BOX_MS)}: wrap up with the trade-offs</span> : <span className="muted"> · {fmtClock(INTERVIEW_TIME_BOX_MS - elapsed)} left</span>}
+      </p>
+      <ol className="interview-framework small" aria-label="Delivery framework" data-testid="interview-framework">
+        {INTERVIEW_FRAMEWORK.map((h) => (
+          <li key={h}>{h}</li>
+        ))}
+      </ol>
+      <p className="muted small">Say an envelope number before you draw, name what you give up in every trade-off. Blind mode stays on.</p>
+    </div>
+  );
+}
+
 export function ExplainBackPane({ detail }: { detail: UnitDetail }) {
   const api = useApi();
   const id = detail.unit.id;
@@ -493,6 +553,12 @@ export function ExplainBackPane({ detail }: { detail: UnitDetail }) {
   const [error, setError] = useState<string | null>(null);
   // rv B (R3-07): blind mode is ON by default for a [senior] DESIGN IT set; showing the sections is assisted
   const [blind, setBlind] = useState(true);
+  // rv2 S3 (F5): interview mode S on a DESIGN IT set (sysdesign track); null = not started
+  const designIt = detail.unit.trackId === 'sysdesign' && detail.unit.kind === 'explain-back';
+  const [interviewAt, setInterviewAt] = useState<number | null>(null);
+  const [metaNote, setMetaNote] = useState<string | null>(null);
+  // rv2 S3 (F9): the optional confidence tag of the answer of record (picked before the key is shown)
+  const [confidence, setConfidence] = useState<Confidence | null>(null);
   const { answers, assisted } = draft.value;
   // rv B (R3-05): a G2 delegation brief is OPEN-BOOK, with the repo tree pinned at the set's sha
   const g2 = detail.unit.key.startsWith('ladder/g2/');
@@ -541,7 +607,23 @@ export function ExplainBackPane({ detail }: { detail: UnitDetail }) {
     setBusy(true);
     setError(null);
     try {
-      await api.answerExplainBack(id, { answers, selfAssisted: assisted });
+      const rec = await api.answerExplainBack(id, { answers, selfAssisted: assisted });
+      // rv2 S3 (F5): the interview's time goes with the answer just stored, BEFORE the key is read; a failure
+      // here never blocks the key (the meta is an extra, not part of the answer of record)
+      if (interviewAt !== null) {
+        try {
+          await api.recordInterviewMeta(id, { attemptId: rec.attemptId, elapsedMs: Math.min(86_400_000, Math.max(0, Date.now() - interviewAt)), timeBoxMs: INTERVIEW_TIME_BOX_MS, blind });
+        } catch (e) {
+          setMetaNote(`The interview time was not saved: ${errorText(e)}`);
+        }
+      }
+      if (confidence !== null) {
+        try {
+          await api.tagConfidence(rec.attemptId, confidence);
+        } catch {
+          // never part of the answer of record: the key opens regardless
+        }
+      }
       setStored(true);
       setConfirming(false);
       draft.clear();
@@ -591,6 +673,11 @@ export function ExplainBackPane({ detail }: { detail: UnitDetail }) {
     return (
       <>
         {strip}
+        {metaNote && (
+          <p className="muted small" role="status" data-testid="interview-meta-error">
+            {metaNote}
+          </p>
+        )}
         <ExplainBackKeyView unitId={id} keyResp={ks.key} gatePct={pub.minCoveragePct ?? PROMOTION_MIN_COVERAGE * 100} altSets={pub.altSets ?? null} onStale={onStale} />
       </>
     );
@@ -635,7 +722,8 @@ export function ExplainBackPane({ detail }: { detail: UnitDetail }) {
                   <button
                     type="button"
                     className="btn btn-sm"
-                    disabled={frozen}
+                    disabled={frozen || interviewAt !== null}
+                    title={interviewAt !== null ? 'Blind mode stays on in interview mode' : undefined}
                     onClick={() => {
                       setBlind(false);
                       draft.set((d) => ({ ...d, assisted: true }));
@@ -648,6 +736,16 @@ export function ExplainBackPane({ detail }: { detail: UnitDetail }) {
                 <span className="muted">Sections shown: this answer is marked &ldquo;I had help&rdquo;.</span>
               )}
             </p>
+          )}
+          {designIt && (
+            <InterviewBar
+              startedAt={interviewAt}
+              disabled={frozen}
+              onStart={() => {
+                setInterviewAt(Date.now());
+                setBlind(true);
+              }}
+            />
           )}
           <ol className="eb-questions">
             {pub.questions.map((q, i) => {
@@ -684,6 +782,7 @@ export function ExplainBackPane({ detail }: { detail: UnitDetail }) {
           </ol>
           <div className="toolbar">
             <HelpBox checked={assisted} onChange={(v) => draft.set((d) => ({ ...d, assisted: v }))} disabled={frozen} />
+            <ConfidencePick value={confidence} onChange={setConfidence} disabled={frozen} name={`eb-confidence-${id}`} />
             <span className="toolbar-spacer" />
             <button type="button" className="btn btn-primary" disabled={!ready || frozen} onClick={() => setConfirming(true)}>
               <Icon name={locked ? 'lock' : 'check'} /> Submit answers
@@ -864,6 +963,8 @@ function ExplainBackKeyView({
       <div className="results" aria-live="polite" data-testid="results">
         <ErrorLine error={error} />
         {result && <ExplainBackResult r={result} keyResp={keyResp} hasAltSets={altSets !== null && altSets.siblings.length > 1} />}
+        {/* rv2 S3 (PLAN F6): after a self-score with a missed key point, the optional notebook line (0 XP, never blocks) */}
+        {result && result.missed.length > 0 && <NotebookLine key={result.attemptId} unitId={unitId} attemptId={result.attemptId} />}
         {!result && scoredBefore && (
           <div className="verdict verdict-todo">
             <Icon name="check" /> Already self-scored: {fmtPct(scoredBefore.score)} {tally.weighted ? 'weighted ' : ''}coverage (evidence #{scoredBefore.evidenceIds.join(', #')}).
