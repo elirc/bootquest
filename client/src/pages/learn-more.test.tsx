@@ -58,7 +58,7 @@ describe('"Learn more" drawer', () => {
     expect(document.activeElement).toBe(opener);
   });
 
-  it('after a FAILED submit: right answers get their explanation button, a missed one stays withheld (its review card comes tomorrow)', async () => {
+  it('rv B (R4-01): after a FAILED submit nothing tells right from wrong: no per-question explanation button, every explanation waits', async () => {
     const { user } = renderApp(`/play/${SQ}`);
     await screen.findByTestId('reading-list');
     // the reading step a reading targets carries its own button
@@ -68,17 +68,12 @@ describe('"Learn more" drawer', () => {
     await answerAll(user, [1, 1, 1, 2, 2]); // Q4, Q5 missed: 60%
     await user.click(screen.getByRole('button', { name: /Submit answers/ }));
     await screen.findByTestId('study-result');
-    const q1 = await screen.findByTestId('learn-more-q1');
-    expect(screen.queryByTestId('learn-more-q4')).not.toBeInTheDocument();
-    await user.click(within(q1).getByRole('button'));
+    for (let q = 1; q <= 5; q++) expect(screen.queryByTestId(`learn-more-q${q}`)).not.toBeInTheDocument();
+    await user.keyboard('i');
     const drawer = await screen.findByRole('dialog', { name: /Learn more/ });
-    expect(await within(drawer).findByText(afterTitle(1))).toBeInTheDocument();
-    expect(drawer).not.toHaveTextContent(afterTitle(2)); // focused on Q1 until "show all"
-    await user.click(within(drawer).getByRole('button', { name: 'Show all notes for this unit' }));
-    expect(drawer).toHaveTextContent(afterTitle(3));
-    expect(drawer).not.toHaveTextContent(afterTitle(4));
-    expect(drawer).not.toHaveTextContent(afterTitle(5));
-    expect(within(drawer).getByTestId('explanations-locked')).toHaveTextContent('unlock when their review cards are due');
+    const locked = await within(drawer).findByTestId('explanations-locked');
+    expect(locked).toHaveTextContent('unlock when you pass the quiz gate');
+    for (let q = 1; q <= 5; q++) expect(drawer).not.toHaveTextContent(afterTitle(q));
   });
 
   it('after a pass every explanation is released', async () => {
