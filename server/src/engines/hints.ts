@@ -79,16 +79,19 @@ export function formulaScore(hint: string): number {
 }
 
 /**
- * The no-formula policy: drop the MOST formula-like hint (on a tie: hint 2 if it is tied, else the last tied
- * one, so an undetected formula still costs one hint, never the first nudge) plus every other hint scoring
- * >= FORMULA_HINT_MIN_SCORE. A lone hint is served only when it reads as prose.
+ * The no-formula policy: drop the MOST formula-like hint (on a tie: the LAST tied one, so an undetected
+ * formula still costs one hint, never the first nudge) plus every other hint scoring >= FORMULA_HINT_MIN_SCORE.
+ * A lone hint is served only when it reads as prose.
+ * rv2 (INTEGRATION §7.1): the tie used to drop hint 2, which matched the ab order (formula at hint 2). E1 flipped
+ * the authored order (hint 2 prose, hint 3 the formula/answer), so the answer-level hint is now the last one: a
+ * tie that dropped hint 2 served the answer as hint 3 (sysdrills/16-data-access-and-integrity/01-soft-delete-unique).
  */
 function withoutFormula(authored: readonly string[]): string[] {
   const scores = authored.map(formulaScore);
   if (authored.length === 1) return scores[0]! < FORMULA_HINT_MIN_SCORE ? [...authored] : [];
   const max = Math.max(...scores);
   const tied = scores.flatMap((s, i) => (s === max ? [i] : []));
-  const drop = tied.includes(1) ? 1 : tied[tied.length - 1]!;
+  const drop = tied[tied.length - 1]!;
   return authored.filter((_, i) => i !== drop && scores[i]! < FORMULA_HINT_MIN_SCORE);
 }
 

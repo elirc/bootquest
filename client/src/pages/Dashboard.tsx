@@ -16,6 +16,7 @@ import type {
   TrackId,
 } from '../api/types';
 import { DueNowPanel } from '../components/DueNow';
+import { KeyIdeasTile } from './KeyIdeas';
 import { Heatmap } from '../components/Heatmap';
 import { Icon } from '../components/Icon';
 import { Chip, Kbd, LoadState, PageHeader, Panel, ProgressBar, RatingPips } from '../components/ui';
@@ -443,6 +444,9 @@ function DashboardBody({
 
       <DueNowPanel />
 
+      {/* rv2 S1: one tile, what the learner owns per track (hidden when no key-ideas section is loaded) */}
+      <KeyIdeasTile />
+
       {/* rv wave C: the Next up panel is gone (R4-10: it contradicted the hero; the hero, the slate and the
           Campaign page cover it) and the competency table moved to Stats until a promotion path exists (R4-20) */}
 
@@ -608,7 +612,8 @@ function TenMinutePlan({ d, fund }: { d: DashboardData; fund: FundStep | null })
     <ol className="ten-minute small" id="ten-minute" data-testid="ten-minute">
       {due > 0 && (
         <li>
-          <Link to="/review">Review {plural(due, 'card')}</Link>
+          {/* F8: the Review page enforces the 20-card stop across paging */}
+          <Link to="/review?ten=1">Review {plural(due, 'card')}</Link>
           {d.reviewQueue.due > TEN_MINUTE_REVIEW_CAP ? <span className="muted"> (stop after {TEN_MINUTE_REVIEW_CAP})</span> : null}
         </li>
       )}

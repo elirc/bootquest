@@ -291,6 +291,38 @@ export function buildProgram(io: CliIo, setExit: (code: number) => void): Comman
     });
 
   program
+    .command('review')
+    .description(
+      'what is due for review: the count and the first cards (fronts only). --keyideas: the interleaved key-ideas session ' +
+        '(due key-idea cards from every section, no two neighbours from one section; --tag narrows it). Read-only: grade in the app ' +
+        '(/review, /review?mode=keyideas). Exit 0 shown, 2 when the server could not be read',
+    )
+    .option('--keyideas', 'the key-ideas session instead of the whole queue')
+    .option('--tag <tag>', 'with --keyideas: only ideas with this tag (the concept index)')
+    .option('--limit <n>', 'cards to list (default 12; the key-ideas session caps at 12)')
+    .action(async (o: { keyideas?: boolean; tag?: string; limit?: string }, cmd: Command) => {
+      const client = new ApiClient(serverUrl(cmd.optsWithGlobals<GlobalOpts>(), io.env), io.fetch);
+      const limit = o.limit === undefined ? 12 : Number(o.limit);
+      if (!Number.isInteger(limit) || limit < 1 || limit > 12) throw new UsageError('--limit must be a whole number 1-12');
+      if (o.tag !== undefined && !o.keyideas) throw new UsageError('--tag needs --keyideas');
+      type Item = { cardKey: string; card?: { front: string }; keyIdea?: { sectionTitle: string } };
+      const params = new URLSearchParams({ limit: String(limit) });
+      if (o.tag !== undefined) params.set('tag', o.tag);
+      const r = o.keyideas
+        ? await client.request<{ count: number; items: Item[]; tags: { tag: string; count: number }[] }>('GET', `/keyideas/queue?${params.toString()}`)
+        : await client.request<{ count: number; items: Item[] }>('GET', `/reviews/queue?limit=${limit}`);
+      const what = o.keyideas ? `key-idea card${r.count === 1 ? '' : 's'}${o.tag ? ` tagged ${o.tag}` : ''}` : `card${r.count === 1 ? '' : 's'}`;
+      io.out(`${r.count} ${what} due${r.count > r.items.length ? ` (showing ${r.items.length})` : ''}.`);
+      r.items.forEach((it, i) => {
+        const front = (it.card?.front ?? it.cardKey).split('\n')[0]!.slice(0, 100);
+        io.out(`  ${String(i + 1).padStart(2)}. ${it.keyIdea ? `[${it.keyIdea.sectionTitle}] ` : ''}${front}`);
+      });
+      if ('tags' in r && r.tags.length > 0) io.out(`Tags: ${r.tags.map((t) => `${t.tag} (${t.count})`).join(', ')}`);
+      if (r.count > 0) io.out(`Grade them in the app: ${client.server}/review${o.keyideas ? `?mode=keyideas${o.tag ? `&tag=${encodeURIComponent(o.tag)}` : ''}` : ''}`);
+      setExit(EXIT.OK);
+    });
+
+  program
     .command('slate')
     .description(
       "show or choose the daily slate: which tracks give a drill set and how many drills each. A change takes effect TOMORROW " +

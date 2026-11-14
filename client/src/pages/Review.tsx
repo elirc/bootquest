@@ -1,9 +1,10 @@
 import { Prose, ProseBlocks, parseProse } from '../lib/prose';
-import { useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useCallback, useRef, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useApi } from '../api/context';
 import { errorText } from '../api/errors';
-import { isApiError, type GradeResponse, type ReviewGrade, type ReviewQueueItem, type ReviewQueueResponse } from '../api/types';
+import { isApiError, type GradeResponse, type KeyIdeaRefDto, type ReviewGrade, type ReviewQueueItem, type ReviewQueueResponse } from '../api/types';
+import { SectionRecap } from '../components/SectionRecap';
 import { useDueReport } from '../components/AppShell';
 import { Icon } from '../components/Icon';
 import { Chip, Kbd, LoadState, PageHeader, ProgressBar } from '../components/ui';
@@ -34,13 +35,64 @@ export function seededItemKey(cardKey: string): string | null {
   return m ? m[1]! : null;
 }
 
+/** rv2 S1: mirrors shared/src/api-ext.ts (the client imports api-ext for types only). */
+export const KEYIDEA_SESSION_CAP = 12;
+export const KEYIDEA_TEN_MINUTE_CAP = 5;
+/** F8: the 10-minute mode's hard cap on cards served in one Review session (holds across paging). */
+export const TEN_MINUTE_CARD_CAP = 20;
+
+/** The concept card kinds the Review page renders in their own way (rv2 S1). */
+export const conceptKind = (cardKey: string): 'keyidea' | 'redo' | 'recheck' | 'other' =>
+  cardKey.startsWith('keyidea:') ? 'keyidea' : cardKey.startsWith('redo:') ? 'redo' : cardKey.startsWith('recheck:') ? 'recheck' : 'other';
+
+type SessionItem = ReviewQueueItem & { keyIdea?: KeyIdeaRefDto };
+type SessionPage = { count: number; items: SessionItem[]; tags?: { tag: string; count: number }[] };
+
+/**
+ * /review                   the whole due queue
+ * /review?ten=1             F8: the 10-minute mode, hard-capped at TEN_MINUTE_CARD_CAP cards across paging
+ * /review?mode=keyideas     rv2: the interleaved key-ideas session (due key-idea cards from every section, no two
+ *                           neighbours from one section; capped at 12, 5 with ten=1); &tag=<tag> = the concept index
+ */
 export function ReviewPage() {
   const api = useApi();
-  const q = useAsync(() => api.getReviewQueue(), [api]);
+  const [params] = useSearchParams();
+  const keyideas = params.get('mode') === 'keyideas';
+  const ten = params.get('ten') === '1';
+  const tag = params.get('tag') ?? undefined;
+  const fetchPage = useCallback(
+    (): Promise<SessionPage> => (keyideas ? api.getKeyIdeaQueue({ ...(tag ? { tag } : {}), ...(ten ? { limit: KEYIDEA_TEN_MINUTE_CAP } : {}) }) : api.getReviewQueue()),
+    [api, keyideas, tag, ten],
+  );
+  const q = useAsync(fetchPage, [fetchPage]);
+  const cap = keyideas ? (ten ? KEYIDEA_TEN_MINUTE_CAP : KEYIDEA_SESSION_CAP) : ten ? TEN_MINUTE_CARD_CAP : undefined;
+  const tags = q.status === 'ready' ? (q.data.tags ?? []) : [];
   return (
     <>
-      <PageHeader eyebrow="Spaced repetition" title="Review session" />
-      {q.status === 'ready' ? <Session first={q.data} /> : <LoadState error={q.error} onRetry={q.reload} minHeight={420} />}
+      <PageHeader eyebrow="Spaced repetition" title={keyideas ? 'Key ideas session' : 'Review session'} />
+      <p className="small review-modes" data-testid="review-modes">
+        {keyideas ? <Link to={`/review${ten ? '?ten=1' : ''}`}>Whole review queue</Link> : <Link to={`/review?mode=keyideas${ten ? '&ten=1' : ''}`}>Key ideas session</Link>}
+        {ten && <span className="muted"> · 10-minute mode: stop after {cap} cards</span>}
+      </p>
+      {keyideas && tags.length > 0 && (
+        <p className="small review-tags" data-testid="review-tags">
+          <Link to={`/review?mode=keyideas${ten ? '&ten=1' : ''}`} aria-current={tag === undefined ? 'true' : undefined}>
+            <Chip tone={tag === undefined ? 'accent' : 'neutral'}>all</Chip>
+          </Link>{' '}
+          {tags.map((t) => (
+            <Link key={t.tag} to={`/review?mode=keyideas&tag=${encodeURIComponent(t.tag)}${ten ? '&ten=1' : ''}`} aria-current={tag === t.tag ? 'true' : undefined}>
+              <Chip tone={tag === t.tag ? 'accent' : 'neutral'}>
+                #{t.tag} {t.count}
+              </Chip>
+            </Link>
+          ))}
+        </p>
+      )}
+      {q.status === 'ready' ? (
+        <Session key={`${keyideas}|${tag ?? ''}|${ten}`} first={q.data} fetchPage={fetchPage} cap={cap} />
+      ) : (
+        <LoadState error={q.error} onRetry={q.reload} minHeight={420} />
+      )}
     </>
   );
 }
@@ -57,9 +109,9 @@ export function ReviewPage() {
  */
 type Paging = 'idle' | 'loading' | 'error' | 'stalled';
 
-function Session({ first }: { first: ReviewQueueResponse }) {
+function Session({ first, fetchPage, cap }: { first: ReviewQueueResponse | SessionPage; fetchPage?: () => Promise<SessionPage>; cap?: number }) {
   const api = useApi();
-  const [cards, setCards] = useState<ReviewQueueItem[]>(first.items);
+  const [cards, setCards] = useState<SessionItem[]>(first.items);
   // the server's due count: the queue response's, then each grade's remainingDue
   const [due, setDue] = useState(first.count);
   // the last fetched page was cut short: more due cards wait beyond it
@@ -80,13 +132,18 @@ function Session({ first }: { first: ReviewQueueResponse }) {
   const [nextDueAt, setNextDueAt] = useState<number | null>(null);
   const busy = useRef(false);
   const reportDue = useDueReport();
-  const card = cards[index];
+  // F8 / rv2: a capped session serves at most `cap` cards, whatever the paging brings
+  const capped = cap !== undefined && index >= cap;
+  const card = capped ? undefined : cards[index];
   const lastOfPage = index + 1 >= cards.length;
+  const atCap = cap !== undefined && index + 1 >= cap;
+  const special = card ? conceptKind(card.cardKey) : 'other';
 
   const fetchMore = async () => {
+    if (atCap) return;
     setPaging('loading');
     try {
-      const r = await api.getReviewQueue();
+      const r = await (fetchPage ? fetchPage() : api.getReviewQueue());
       const fresh = r.items.filter((it) => !refused.current.has(it.id));
       setDue(r.count);
       setMore(r.count > r.items.length);
@@ -100,8 +157,16 @@ function Session({ first }: { first: ReviewQueueResponse }) {
     }
   };
 
+  /** move past a card without a grade (a redo card is graded by its run; a finished re-check by its prompts) */
+  const advance = () => {
+    if (card) refused.current.add(card.id); // a refetch never serves a skipped card again this session
+    setRevealed(false);
+    setIndex((i) => i + 1);
+    if (lastOfPage && more && !atCap) void fetchMore();
+  };
+
   const grade = async (g: ReviewGrade) => {
-    if (!card || !revealed || busy.current) return;
+    if (!card || !revealed || busy.current || special === 'redo' || special === 'recheck') return;
     busy.current = true;
     try {
       const r = await api.gradeReview(card.id, g);
@@ -115,7 +180,7 @@ function Session({ first }: { first: ReviewQueueResponse }) {
       setRevealed(false);
       setIndex((i) => i + 1);
       setError(null);
-      if (lastOfPage && more && r.remainingDue > 0) void fetchMore();
+      if (lastOfPage && more && r.remainingDue > 0 && !atCap) void fetchMore();
     } catch (e) {
       setError(errorText(e));
       // NOT_DUE: the server will not take a grade for this card today; move on.
@@ -123,7 +188,7 @@ function Session({ first }: { first: ReviewQueueResponse }) {
         refused.current.add(card.id);
         setRevealed(false);
         setIndex((i) => i + 1);
-        if (lastOfPage && more) void fetchMore();
+        if (lastOfPage && more && !atCap) void fetchMore();
       }
     } finally {
       busy.current = false;
@@ -131,14 +196,14 @@ function Session({ first }: { first: ReviewQueueResponse }) {
   };
 
   useKeydown((e) => {
-    if (!card || reviewKeyBlocked(e)) return;
+    if (!card || reviewKeyBlocked(e) || special === 'recheck') return;
     if (!revealed && (e.key === ' ' || e.key === 'Enter')) {
       e.preventDefault();
       setRevealed(true);
       return;
     }
     const hit = GRADES.find((g) => g.key === e.key);
-    if (hit && revealed) {
+    if (hit && revealed && special !== 'redo') {
       e.preventDefault();
       void grade(hit.grade);
     }
@@ -173,13 +238,18 @@ function Session({ first }: { first: ReviewQueueResponse }) {
 
   if (cards.length === 0 || !card) {
     // "Queue cleared" only on the server's word: its latest due count is 0
-    const left = cards.length > 0 && due > 0;
+    const left = cards.length > 0 && due > 0 && !capped;
     return (
       <div className="review">
         <Demotions items={demotions} />
         <div className="panel review-done" role="status">
           <Icon name="check" size={24} />
-          <h2>{cards.length === 0 ? 'Nothing due' : left ? 'Session done' : 'Queue cleared'}</h2>
+          <h2>{cards.length === 0 ? 'Nothing due' : due > 0 ? 'Session done' : 'Queue cleared'}</h2>
+          {capped && (
+            <p className="muted small" data-testid="session-cap">
+              Stop here: this session ends after {cap} cards{due > 0 ? ` (${due} still due for another day or a full session)` : ''}.
+            </p>
+          )}
           {cards.length > 0 && (
             <p>
               {cards.length} cards · +{xp} XP · {GRADES.map((g) => `${g.label} ${tally[g.grade]}`).join(' · ')}
@@ -209,8 +279,8 @@ function Session({ first }: { first: ReviewQueueResponse }) {
     );
   }
 
-  // the session total counts the due cards beyond this page too (the queue serves 200 at a time)
-  const total = more ? Math.max(cards.length, index + due) : cards.length;
+  // the session total counts the due cards beyond this page too (the queue serves 200 at a time); a cap bounds it
+  const total = Math.min(more ? Math.max(cards.length, index + due) : cards.length, cap ?? Number.POSITIVE_INFINITY);
 
   return (
     <div className="review">
@@ -230,6 +300,19 @@ function Session({ first }: { first: ReviewQueueResponse }) {
         )}
       </div>
 
+      {special === 'recheck' ? (
+        <SectionRecap
+          key={card.id}
+          recheckItemId={card.id}
+          onDone={(r) => {
+            setXp((x) => x + (r.reviewXp?.amount ?? 0));
+            setDue((d) => Math.max(0, d - 1));
+            reportDue(Math.max(0, due - 1));
+            window.setTimeout(advance, 0);
+          }}
+        />
+      ) : (
+      <>
       <article className={`card${revealed ? ' card-revealed' : ''}`} aria-live="polite">
         <header className="card-meta">
           <Chip>{card.kind}</Chip>
@@ -253,6 +336,7 @@ function Session({ first }: { first: ReviewQueueResponse }) {
                 <div className="card-back" data-testid="card-back">
                   <Prose text={card.card.back} />
                   {card.card.source && <p className="muted small">Source: {card.card.source}</p>}
+                  {special === 'keyidea' && <KeyIdeaLinks itemId={card.id} known={card.keyIdea} />}
                   {card.unitId !== null && seededItemKey(card.cardKey) && (
                     <LearnMoreButton key={card.id} unitId={card.unitId} target={seededItemKey(card.cardKey)!} subject="this card" hotkey />
                   )}
@@ -270,7 +354,9 @@ function Session({ first }: { first: ReviewQueueResponse }) {
       </article>
 
       <div className="grade-bar">
-        {revealed ? (
+        {special === 'redo' ? (
+          <RedoLinks itemId={card.id} onSkip={advance} />
+        ) : revealed ? (
           GRADES.map((g) => (
             <button key={g.grade} type="button" className={`btn grade grade-${g.grade}`} onClick={() => void grade(g.grade)}>
               <Kbd>{g.key}</Kbd>
@@ -284,12 +370,60 @@ function Session({ first }: { first: ReviewQueueResponse }) {
           </button>
         )}
       </div>
+      </>
+      )}
       {error && (
         <p className="error-text" role="alert">
           {error}
         </p>
       )}
     </div>
+  );
+}
+
+/** rv2: a key-idea card's source units and tags (the card text names them; this links them). */
+function KeyIdeaLinks({ itemId, known }: { itemId: number; known?: KeyIdeaRefDto }) {
+  const api = useApi();
+  const q = useAsync(() => (known ? Promise.resolve(known) : api.getConceptCard(itemId).then((c) => c.keyIdea ?? null)), [api, itemId, known]);
+  const k = q.status === 'ready' ? q.data : null;
+  if (!k) return null;
+  const live = k.sources.filter((s) => s.unitId !== null);
+  return (
+    <p className="small" data-testid="keyidea-links">
+      {live.map((s, i) => (
+        <span key={s.key}>
+          {i > 0 && ' · '}
+          <Link to={`/play/${s.unitId}`}>{s.title ?? s.key}</Link>
+        </span>
+      ))}
+      {k.tags.map((t) => (
+        <span key={t}>
+          {' '}
+          <Link to={`/review?mode=keyideas&tag=${encodeURIComponent(t)}`}>#{t}</Link>
+        </span>
+      ))}
+    </p>
+  );
+}
+
+/** rv2: a redo card is done in the Player (practice mode); its run grades it. Here: the link, or skip. */
+function RedoLinks({ itemId, onSkip }: { itemId: number; onSkip: () => void }) {
+  const api = useApi();
+  const q = useAsync(() => api.getConceptCard(itemId), [api, itemId]);
+  const target = q.status === 'ready' ? (q.data.redo ?? null) : null;
+  return (
+    <>
+      {target ? (
+        <Link to={`/play/${target.unitId}?redo=${itemId}`} className="btn btn-primary" data-testid="redo-open">
+          Redo {target.title} in practice mode
+        </Link>
+      ) : q.status === 'ready' ? (
+        <span className="muted small">No drill of this key idea is loaded on this server.</span>
+      ) : null}
+      <button type="button" className="btn" onClick={onSkip}>
+        Skip for now
+      </button>
+    </>
   );
 }
 

@@ -95,6 +95,55 @@ export type { HintLockReason, HintsResponse, HintTakenResponse };
 // rv B: practice vs evidence, gate status, pinned source, hinted evidence (shared/src/api-ext.ts rv B section)
 import type { EvidenceRowDtoExt, GateStatusResponse, PracticeBody, PracticeItemDto, PracticeResponse, UnitSourceResponse } from '@bootquest/shared/api-ext';
 export type { EvidenceRowDtoExt, GateStatusResponse, PracticeBody, PracticeItemDto, PracticeResponse, UnitSourceResponse };
+// rv2 S1: key ideas, recap / re-check, redo runs, the error notebook (shared/src/api-ext.ts rv2 S1 section)
+import type {
+  ConceptCardResponse,
+  ErrorNoteBody,
+  ErrorNoteDto,
+  ErrorNoteResponse,
+  KeyIdeaDto,
+  KeyIdeaQueueItem,
+  KeyIdeaQueueResponse,
+  KeyIdeaRefDto,
+  KeyIdeaSectionDto,
+  KeyIdeaSourceDto,
+  KeyIdeasResponse,
+  KeyIdeaStatus,
+  KeyIdeaTileDto,
+  NoteCategory,
+  NotebookResponse,
+  RecapKind,
+  RecapMark,
+  RecapPromptsResponse,
+  RecapRevealResponse,
+  RecapSubmitBody,
+  RecapSubmitResponse,
+  RedoRunResponse,
+} from '@bootquest/shared/api-ext';
+export type {
+  ConceptCardResponse,
+  ErrorNoteBody,
+  ErrorNoteDto,
+  ErrorNoteResponse,
+  KeyIdeaDto,
+  KeyIdeaQueueItem,
+  KeyIdeaQueueResponse,
+  KeyIdeaRefDto,
+  KeyIdeaSectionDto,
+  KeyIdeaSourceDto,
+  KeyIdeasResponse,
+  KeyIdeaStatus,
+  KeyIdeaTileDto,
+  NoteCategory,
+  NotebookResponse,
+  RecapKind,
+  RecapMark,
+  RecapPromptsResponse,
+  RecapRevealResponse,
+  RecapSubmitBody,
+  RecapSubmitResponse,
+  RedoRunResponse,
+};
 
 /**
  * f52 wave B (app ruling 7): lesson aids of a Fundamentals topic (GET /units/:id/lesson-aids). Declared
@@ -401,6 +450,31 @@ export interface BootQuestApi {
   practiceUnit(unitId: number, body: PracticeBody): Promise<PracticeResponse>;
   /** GET /api/units/:id/source — the pinned repo tree of an explain-back / kata (G2: open-book). Null when none. */
   getUnitSource(unitId: number): Promise<UnitSourceResponse | null>;
+
+  // ---- rv2 S1: key ideas (none of these is evidence; nothing here locks or unlocks a unit)
+  /** GET /api/keyideas[?track&unit] — sections + ideas (prompt / answer / why only once met), tiles, open recaps. */
+  getKeyIdeas(q?: { track?: string; unit?: string }): Promise<KeyIdeasResponse>;
+  /** GET /api/keyideas/queue[?tag&limit] — due key-idea cards, interleaved across sections (cap 12). */
+  getKeyIdeaQueue(q?: { tag?: string; limit?: number }): Promise<KeyIdeaQueueResponse>;
+  /** GET /api/keyideas/cards/:itemId — what a concept card is about (source links, the redo drill). */
+  getConceptCard(itemId: number): Promise<ConceptCardResponse>;
+  /** GET /api/keyideas/recap/:section — 409 NOT_DUE before it opens, 409 ALREADY_SCORED once done. */
+  getRecap(section: string): Promise<RecapPromptsResponse>;
+  /** GET /api/keyideas/recheck/:itemId — a due re-check card's prompts. */
+  getRecheck(itemId: number): Promise<RecapPromptsResponse>;
+  /** POST /api/keyideas/sections/:section/reveal — >= 8 typed words, then one met idea's answer (400 / 403 otherwise). */
+  revealIdea(section: string, body: { ideaId: string; recall: string }): Promise<RecapRevealResponse>;
+  /** POST /api/keyideas/recap/:section — 20 XP once; partly / missed re-enrolled due tomorrow. */
+  submitRecap(section: string, body: RecapSubmitBody): Promise<RecapSubmitResponse>;
+  /** POST /api/keyideas/recheck/:itemId — the re-check card's review grade, then it is done. */
+  submitRecheck(itemId: number, body: RecapSubmitBody): Promise<RecapSubmitResponse>;
+  /** POST /api/redo/:itemId/run — a practice run of the redo drill: grades only the card (Good / Again). */
+  runRedo(itemId: number, code: string): Promise<RedoRunResponse>;
+  // ---- rv2 S1: the error notebook (optional, 0 XP)
+  /** POST /api/notebook — one line + a category; becomes the card note:<id>, due tomorrow. */
+  addNote(body: ErrorNoteBody): Promise<ErrorNoteResponse>;
+  /** GET /api/notebook — entries newest first + category counts. */
+  getNotebook(): Promise<NotebookResponse>;
 }
 
 /** Codes the client can raise itself on top of the server's envelope codes. */

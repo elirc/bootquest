@@ -1,6 +1,7 @@
 import type { Db } from '../db/database.ts';
 import { nowMs, type Clock } from '../engines/clock.ts';
 import { FLASHCARD_CARD_PREFIX, QUIZ_MISS_CARD_PREFIX } from '../engines/study-quest.ts';
+import { conceptCardLive, CONCEPT_PREFIXES } from '../engines/redo.ts';
 import type { SeedItemStore } from './seed-items.ts';
 
 /**
@@ -41,7 +42,44 @@ function sourceExists(store: SeedItemStore, cardKey: string): boolean | null {
   return null; // not a seeded card
 }
 
+/** rv2: the SQL filter for the concept-card prefixes (keyidea:, redo:, ebmiss:, recheck:; note: is never touched). */
+const conceptWhere = CONCEPT_PREFIXES.map((p) => `substr(card_key, 1, ${p.length}) = '${p}'`).join(' OR ');
+
+/**
+ * rv2 S1 (PLAN §2.1): the key-idea layer's concept cards under the same retire-never-delete policy. A card whose
+ * idea left its side file (keyidea:, redo:), whose explain-back key point is gone (ebmiss:), whose section is gone
+ * or whose re-check was done (recheck:) is RETIRED; it is restored when its source returns. engines/redo.ts
+ * conceptCardLive is the one liveness rule. Learner notes (note:) are never retired.
+ */
+export function reconcileConceptCards(db: Db, store: SeedItemStore, clock: Clock): ReviewCardReconcileStats {
+  const t = nowMs(clock);
+  return db.tx(() => {
+    const rows = db.all<{ id: number; key: string; retired: number | null }>(
+      `SELECT id, card_key AS key, retired_at AS retired FROM review_item WHERE kind = 'concept' AND (${conceptWhere}) ORDER BY id`,
+    );
+    const stats: ReviewCardReconcileStats = { seeded: rows.length, retired: [], restored: [] };
+    for (const r of rows) {
+      const live = conceptCardLive(db, store, r.key);
+      if (!live && r.retired === null) {
+        db.run('UPDATE review_item SET retired_at = ? WHERE id = ?', t, r.id);
+        stats.retired.push(r.key);
+      } else if (live && r.retired !== null) {
+        db.run('UPDATE review_item SET retired_at = NULL WHERE id = ?', r.id);
+        stats.restored.push(r.key);
+      }
+    }
+    return stats;
+  });
+}
+
 export function reconcileSeededReviewCards(db: Db, store: SeedItemStore, clock: Clock): ReviewCardReconcileStats {
+  const seeded = reconcileSeededOnly(db, store, clock);
+  // rv2: the concept cards of the key-ideas layer, against the same load (one stats object for serve.ts)
+  const concept = reconcileConceptCards(db, store, clock);
+  return { seeded: seeded.seeded + concept.seeded, retired: [...seeded.retired, ...concept.retired], restored: [...seeded.restored, ...concept.restored] };
+}
+
+function reconcileSeededOnly(db: Db, store: SeedItemStore, clock: Clock): ReviewCardReconcileStats {
   const t = nowMs(clock);
   return db.tx(() => {
     const rows = db.all<{ id: number; key: string; retired: number | null }>(

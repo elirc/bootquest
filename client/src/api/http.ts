@@ -46,6 +46,15 @@ import {
   type GateStatusResponse,
   type PracticeResponse,
   type UnitSourceResponse,
+  type ConceptCardResponse,
+  type ErrorNoteResponse,
+  type KeyIdeaQueueResponse,
+  type KeyIdeasResponse,
+  type NotebookResponse,
+  type RecapPromptsResponse,
+  type RecapRevealResponse,
+  type RecapSubmitResponse,
+  type RedoRunResponse,
   type LessonAids,
   NO_LESSON_AIDS,
 } from './types';
@@ -188,5 +197,32 @@ export function createHttpApi(baseUrl = '/api', fetchImpl: typeof fetch = (...a)
     getGateStatus: (id) => call<GateStatusResponse>(`${unit(id)}/gate-status`).catch(() => null),
     practiceUnit: (id, body) => post<PracticeResponse>(`${unit(id)}/practice`, body),
     getUnitSource: (id) => call<UnitSourceResponse>(`${unit(id)}/source`).catch(() => null),
+    // rv2 S1: key ideas + the error notebook (whitelisted bodies)
+    getKeyIdeas: (q = {}) => {
+      const p = new URLSearchParams();
+      if (q.track !== undefined) p.set('track', q.track);
+      if (q.unit !== undefined) p.set('unit', q.unit);
+      const qs = p.toString();
+      return call<KeyIdeasResponse>(`/keyideas${qs ? `?${qs}` : ''}`);
+    },
+    getKeyIdeaQueue: (q = {}) => {
+      const p = new URLSearchParams();
+      if (q.tag !== undefined) p.set('tag', q.tag);
+      if (q.limit !== undefined) p.set('limit', String(q.limit));
+      const qs = p.toString();
+      return call<KeyIdeaQueueResponse>(`/keyideas/queue${qs ? `?${qs}` : ''}`);
+    },
+    getConceptCard: (itemId) => call<ConceptCardResponse>(`/keyideas/cards/${encodeURIComponent(String(itemId))}`),
+    getRecap: (section) => call<RecapPromptsResponse>(`/keyideas/recap/${encodeURIComponent(section)}`),
+    getRecheck: (itemId) => call<RecapPromptsResponse>(`/keyideas/recheck/${encodeURIComponent(String(itemId))}`),
+    revealIdea: (section, b) => post<RecapRevealResponse>(`/keyideas/sections/${encodeURIComponent(section)}/reveal`, { ideaId: b.ideaId, recall: b.recall }),
+    submitRecap: (section, b) =>
+      post<RecapSubmitResponse>(`/keyideas/recap/${encodeURIComponent(section)}`, { items: b.items.map((i) => ({ ideaId: i.ideaId, recall: i.recall, mark: i.mark })) }),
+    submitRecheck: (itemId, b) =>
+      post<RecapSubmitResponse>(`/keyideas/recheck/${encodeURIComponent(String(itemId))}`, { items: b.items.map((i) => ({ ideaId: i.ideaId, recall: i.recall, mark: i.mark })) }),
+    runRedo: (itemId, code) => post<RedoRunResponse>(`/redo/${encodeURIComponent(String(itemId))}/run`, { code }),
+    addNote: (b) =>
+      post<ErrorNoteResponse>('/notebook', { unitId: b.unitId, ...(b.attemptId !== undefined ? { attemptId: b.attemptId } : {}), line: b.line, category: b.category }),
+    getNotebook: () => call<NotebookResponse>('/notebook'),
   };
 }

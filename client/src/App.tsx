@@ -4,6 +4,7 @@ import { PageHeader } from './components/ui';
 import { CampaignPage } from './pages/Campaign';
 import { DashboardPage } from './pages/Dashboard';
 import { PlayerPage } from './pages/Player';
+import { KeyIdeasPage } from './pages/KeyIdeas';
 import { ReviewPage } from './pages/Review';
 import { StatsPage } from './pages/Stats';
 import { SettingsPage } from './pages/Settings';
@@ -18,6 +19,7 @@ export function App() {
         <Route path="/campaign/:trackId" element={<CampaignPage />} />
         <Route path="/play/:unitId" element={<PlayerPage />} />
         <Route path="/review" element={<ReviewPage />} />
+        <Route path="/keyideas" element={<KeyIdeasPage />} />
         <Route path="/stats" element={<StatsPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="*" element={<NotFound />} />
