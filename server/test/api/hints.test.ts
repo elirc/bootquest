@@ -60,12 +60,27 @@ describe('hint rules (engine)', () => {
     expect(servableHints([h1, formula, prose], key)).toEqual([h1, prose]);
     // after the planned content swap (formula at hint 3): serve hints 1 and 2, still never the formula
     expect(servableHints([h1, prose, formula], key)).toEqual([h1, prose]);
-    // an undetected formula (all prose-scored) still withholds hint 2, never the first nudge
-    expect(servableHints(['one', 'two', 'three'], key)).toEqual(['one', 'three']);
+    // an undetected formula (all prose-scored) still withholds one hint: the last tied one, never the first nudge
+    expect(servableHints(['one', 'two', 'three'], key)).toEqual(['one', 'two']);
     // a second formula-level hint is withheld too
     expect(servableHints([formula, `x = ${formula}`, prose], key)).toEqual([prose]);
     expect(servableHints([prose], key)).toEqual([prose]);
     expect(servableHints([formula], key)).toEqual([]);
+  });
+
+  it('rv2 0b: a tied formula score withholds the LAST hint (E1 order: hint 2 prose, hint 3 the answer)', () => {
+    // sysdrills/16-data-access-and-integrity/01-soft-delete-unique as authored after E1's flip: hints 2 and 3
+    // tie on the formula score, and hint 3 is the answer. The old tie rule withheld hint 2 and served hint 3.
+    const key = 'sysdrills/16-data-access-and-integrity/01-soft-delete-unique';
+    const hints = [
+      'Ask which existing rows the index looks at, and remember that NULL never equals NULL inside a unique index.',
+      'Decide per design which existing rows can collide with a live row carrying the email, and for a restore leave the restored row itself out of the comparison',
+      'unique-email: any row with the email blocks; (email, deleted_at): a new live row never collides; partial: only live rows with the email block.',
+    ];
+    const scores = hints.map(formulaScore);
+    expect(scores[2]).toBe(Math.max(...scores));
+    expect(scores[1]).toBe(scores[2]);
+    expect(servableHints(hints, key)).toEqual([hints[0], hints[1]]);
   });
 
   it('XP multiplier: 100% / 75% / 50%, floored at 50%', () => {
