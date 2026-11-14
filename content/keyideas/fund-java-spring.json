@@ -1,0 +1,123 @@
+{
+ "format": "bootquest-keyideas@1",
+ "section": "fund-java-spring",
+ "title": "Java: Spring and JPA (topics 17-20)",
+ "track": "java",
+ "_note": "rv2 S2 (PLAN §2.2 fund-java-spring row). Scope = Fundamentals Java topic gates 17-20; the rv2 C7 topics (21+) and their ideas are appended when they land. Server-local side file, never stamped.",
+ "scope": [
+  "fund/java/17-spring-ioc-and-dependency-injection",
+  "fund/java/18-spring-web-controllers-and-errors",
+  "fund/java/19-spring-data-jpa-entities-and-repositories",
+  "fund/java/20-jpa-transactions-lazy-loading-and-n-plus-1"
+ ],
+ "recapAfter": 0.8,
+ "ideas": [
+  {
+   "id": "constructor-injection-stateless",
+   "idea": "Inject dependencies through the constructor, and keep singleton beans (Spring's default scope) free of per-request state.",
+   "why": "Field injection hides dependencies and blocks plain unit tests, and a mutable field in a singleton is shared by every concurrent request.",
+   "prompt": "A @Service keeps `private Customer current;` set at the start of each request and uses @Autowired fields. Under load, users see each other's names, and its unit test needs a whole Spring context. What do you change?",
+   "answer": "There is one instance of the bean for the whole app, so every request writes the same field at once. Pass per-request data as method arguments instead of fields. Take the collaborators as final constructor parameters, which makes the class testable with plain new and fakes, and keeps its dependencies visible.",
+   "tags": [
+    "java",
+    "spring",
+    "dependency-injection"
+   ],
+   "sources": [
+    "fund/java/17-spring-ioc-and-dependency-injection",
+    "fund-java/17-spring-ioc-and-dependency-injection/01-mini-container"
+   ],
+   "siblings": [
+    "fund-java/17-spring-ioc-and-dependency-injection/02-bug-hunt-mini-container",
+    "javabootcamp/16-design-patterns/01-strategy-shipping",
+    "javabootcamp/16-design-patterns/03-factory-notifiers"
+   ]
+  },
+  {
+   "id": "validate-and-one-advice",
+   "idea": "Validate request bodies at the controller with @Valid, and map exceptions to status codes in one @RestControllerAdvice so every endpoint answers errors the same way.",
+   "why": "try/catch blocks copied into each controller drift apart, and unvalidated input or unmapped exceptions reach clients as 500s with stack traces.",
+   "prompt": "Three controllers each catch NotFoundException differently: one returns 404, one 400, one a 200 with an error field. Missing request fields cause 500s. Describe the fix.",
+   "answer": "Annotate the request body with @Valid and constraint annotations, so missing fields become a 400 before the method runs. Remove the per-controller catches and add one @RestControllerAdvice with @ExceptionHandler methods: NotFoundException to 404, validation failures to 400 with field errors, conflicts to 409, in one consistent error body.",
+   "tags": [
+    "java",
+    "spring",
+    "validation-at-boundaries"
+   ],
+   "sources": [
+    "fund/java/18-spring-web-controllers-and-errors",
+    "fund-java/18-spring-web-controllers-and-errors/01-resolve-exception-handler"
+   ],
+   "siblings": [
+    "fund-java/18-spring-web-controllers-and-errors/02-exception-handler-precedence",
+    "fund-java/18-spring-web-controllers-and-errors/03-status-codes-spring-picks",
+    "javabootcamp/07-money-and-validation/05-validate-amount"
+   ]
+  },
+  {
+   "id": "entity-identity-and-derived-queries",
+   "idea": "Base entity equality on a stable identity, not on mutable fields or an id that is null before persist; and know the SQL a derived query method really generates.",
+   "why": "Entities in HashSets vanish when their hash changes after save, and a long derived method name can run a different query than its name suggests.",
+   "prompt": "An Order entity's equals and hashCode use its generated id. Orders added to a HashSet before saving cannot be found or removed afterwards. Separately, findByStatusOrCustomerIdAndActive returns unexpected rows. Explain both.",
+   "answer": "Before persist the id is null, after save it changes, so the hash code changes while the entity sits in the set; base equality on a business key or keep hashCode constant for the entity's life. In the derived query AND binds tighter than OR, so it means status, or customer and active; write @Query when precedence matters.",
+   "tags": [
+    "java",
+    "jpa"
+   ],
+   "sources": [
+    "fund/java/19-spring-data-jpa-entities-and-repositories",
+    "fund-java/19-spring-data-jpa-entities-and-repositories/01-parse-derived-query",
+    "fund/java/08-equals-hashcode-and-comparable"
+   ],
+   "siblings": [
+    "fund-java/19-spring-data-jpa-entities-and-repositories/02-entity-equals-and-hashcode",
+    "fund-java/19-spring-data-jpa-entities-and-repositories/03-save-is-persist-or-merge",
+    "javabootcamp/14-generics-and-interfaces/06-generic-repository"
+   ]
+  },
+  {
+   "id": "transactional-proxy",
+   "idea": "@Transactional works through a proxy around the bean, so a call from one method to another in the same class bypasses it.",
+   "why": "Code that looks transactional runs without a transaction, so a failure halfway leaves partial writes that a rollback was supposed to undo.",
+   "prompt": "`placeOrder()` (no annotation) calls `this.saveOrderAndPayment()`, annotated @Transactional. When the payment insert fails, the order row stays in the database. Why, and how do you fix it?",
+   "answer": "The annotation is applied by a proxy that wraps calls coming from outside the bean; this.saveOrderAndPayment() calls the real object directly, so no transaction starts. Put @Transactional on the public method that external callers use, or move the transactional method into a separate bean and call it through its injected reference.",
+   "tags": [
+    "java",
+    "spring",
+    "transactions"
+   ],
+   "sources": [
+    "fund/java/20-jpa-transactions-lazy-loading-and-n-plus-1",
+    "fund-java/20-jpa-transactions-lazy-loading-and-n-plus-1/01-batched-customer-loading",
+    "fund-java/20-jpa-transactions-lazy-loading-and-n-plus-1/02-transactional-self-invocation"
+   ],
+   "siblings": [
+    "fund-java/20-jpa-transactions-lazy-loading-and-n-plus-1/03-lazy-load-outside-the-session",
+    "javabootcamp/13-storage-and-consistency/01-versioned-writes",
+    "javabootcamp/12-messaging-and-events/05-transactional-outbox"
+   ]
+  },
+  {
+   "id": "lazy-loading-and-n-plus-one",
+   "idea": "Lazy associations load on first access and need an open persistence context; fetch what a use case needs in its query with a fetch join or an entity graph.",
+   "why": "Touching a lazy collection after the transaction throws LazyInitializationException, and touching it per row inside one runs one query per row.",
+   "prompt": "A REST endpoint returns orders and serialises each order's items. It throws LazyInitializationException; a colleague 'fixes' it by enabling open-session-in-view, and the endpoint now runs 301 queries. What is the right fix?",
+   "answer": "Load what the endpoint returns inside the service's transaction: a repository query with JOIN FETCH or an @EntityGraph for items, or a DTO projection, so one query returns orders with their items. Open-session-in-view only hides the problem by lazy-loading during serialisation, one query per order.",
+   "tags": [
+    "java",
+    "jpa",
+    "performance"
+   ],
+   "sources": [
+    "fund/java/20-jpa-transactions-lazy-loading-and-n-plus-1",
+    "fund-java/20-jpa-transactions-lazy-loading-and-n-plus-1/01-batched-customer-loading",
+    "fund-java/20-jpa-transactions-lazy-loading-and-n-plus-1/03-lazy-load-outside-the-session"
+   ],
+   "siblings": [
+    "fund-java/20-jpa-transactions-lazy-loading-and-n-plus-1/02-transactional-self-invocation",
+    "javabootcamp/13-storage-and-consistency/01-versioned-writes",
+    "javabootcamp/12-messaging-and-events/05-transactional-outbox"
+   ]
+  }
+ ]
+}

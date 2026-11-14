@@ -1,0 +1,140 @@
+{
+ "format": "bootquest-keyideas@1",
+ "section": "fund-cs-web",
+ "title": "C#: ASP.NET Core and EF Core (topics 15-20)",
+ "track": "csharp",
+ "_note": "rv2 S2 (PLAN §2.2 fund-cs-web row). Scope = Fundamentals C# topic gates 15-20; the rv2 C7 topics (21+) and their ideas are appended when they land. Topic 16 (routing) has no row of its own on the binding list. Server-local side file, never stamped.",
+ "scope": [
+  "fund/csharp/15-dependency-injection-and-configuration",
+  "fund/csharp/16-aspnet-core-routing-and-minimal-apis",
+  "fund/csharp/17-middleware-pipeline",
+  "fund/csharp/18-validation-and-problem-details",
+  "fund/csharp/19-ef-core-basics",
+  "fund/csharp/20-ef-core-queries-n-plus-1-and-transactions"
+ ],
+ "recapAfter": 0.8,
+ "ideas": [
+  {
+   "id": "di-lifetimes-captive",
+   "idea": "Pick each service's lifetime on purpose (singleton, scoped, transient), and never let a longer-lived service hold a shorter-lived one: that is a captive dependency.",
+   "why": "A singleton that captures a scoped DbContext shares one context across every request and thread, which corrupts change tracking and leaks data between users.",
+   "prompt": "A singleton cache service takes AppDbContext in its constructor. It works in tests, then production shows 'a second operation was started on this context' errors and occasionally another user's data. Explain and fix.",
+   "answer": "The singleton is built once, so the scoped context it captured lives for the whole app and is used by many requests at once. Inject IServiceScopeFactory or IDbContextFactory and create a short-lived context per operation, or make the cache scoped. Scope validation in development reports this mistake at startup.",
+   "tags": [
+    "csharp",
+    "dependency-injection"
+   ],
+   "sources": [
+    "fund/csharp/15-dependency-injection-and-configuration",
+    "fund-csharp/15-dependency-injection-and-configuration/01-mini-container"
+   ],
+   "siblings": [
+    "jstrain-cs/21-testing-web-apps/01-seams-and-fakes",
+    "jstrain-cs/21-testing-web-apps/02-testing-time",
+    "csdrills/09-thread-safety/07-atomic-reload"
+   ]
+  },
+  {
+   "id": "middleware-order",
+   "idea": "Middleware runs in the order it is registered, inbound and then outbound, so order is behaviour: exception handling first, routing before authentication and authorization.",
+   "why": "An exception handler registered late cannot catch errors from earlier middleware, and authorization placed before routing cannot see the endpoint's policy.",
+   "prompt": "In Program.cs the order is UseAuthorization, UseRouting, then UseExceptionHandler. Endpoints marked [Authorize] are reachable anonymously, and some errors return a raw stack trace page. Reorder it and explain.",
+   "answer": "Put UseExceptionHandler first so it wraps everything after it. Then UseRouting, so the endpoint and its metadata are selected, then UseAuthentication and UseAuthorization, which read that metadata to enforce [Authorize]. Each middleware only sees what earlier middleware produced and only catches what runs inside it.",
+   "tags": [
+    "csharp",
+    "aspnet-core"
+   ],
+   "sources": [
+    "fund/csharp/17-middleware-pipeline",
+    "fund-csharp/17-middleware-pipeline/01-build-a-pipeline"
+   ],
+   "siblings": [
+    "fund-csharp/17-middleware-pipeline/02-exception-handler-goes-first",
+    "fund-csharp/17-middleware-pipeline/03-authorize-after-routing",
+    "csbootcamp/02-methods-and-delegates/05-composing-functions"
+   ]
+  },
+  {
+   "id": "validate-with-problem-details",
+   "idea": "Validate the bound model before any work and answer failures with ProblemDetails: a standard body naming the status, the problem and each invalid field.",
+   "why": "Ad-hoc error bodies force every client to parse a different shape, and unvalidated models fail deep inside the service as a 500.",
+   "prompt": "A signup endpoint returns 500 with a NullReferenceException when the password is missing, and a custom { error: 'bad' } body when the email is malformed. What should it return instead?",
+   "answer": "Validate the request model at the edge (data annotations or a validator; [ApiController] does it automatically) and return 400 with a ValidationProblemDetails body that lists each field and its message. Use the same ProblemDetails shape for other errors, so clients read status, title and detail the same way everywhere.",
+   "tags": [
+    "csharp",
+    "validation-at-boundaries"
+   ],
+   "sources": [
+    "fund/csharp/18-validation-and-problem-details",
+    "fund-csharp/18-validation-and-problem-details/01-validate-signup"
+   ],
+   "siblings": [
+    "jstrain-cs/16-validation-and-binding/01-data-annotations",
+    "jstrain-cs/16-validation-and-binding/02-custom-validators",
+    "jstrain-cs/07-nullability-and-errors/05-collecting-errors"
+   ]
+  },
+  {
+   "id": "dbcontext-unit-of-work",
+   "idea": "A DbContext is a short-lived, scoped unit of work: it tracks the entities it loaded and writes their detected changes when you call SaveChanges.",
+   "why": "Without that model, updates to detached objects silently do nothing, two loads of one row surprise you by being the same instance, and long-lived contexts grow stale.",
+   "prompt": "A service builds a new Customer object with an existing Id from a request body, sets its Name and calls SaveChanges. Nothing is updated and no error is raised. Explain what EF Core saw.",
+   "answer": "The new object was never attached, so the context is not tracking it and SaveChanges finds no changes to write. Load the entity through the context and change the loaded instance, or attach the object and mark it modified on purpose. The context writes only what it tracks.",
+   "tags": [
+    "csharp",
+    "ef-core"
+   ],
+   "sources": [
+    "fund/csharp/19-ef-core-basics",
+    "fund-csharp/19-ef-core-basics/01-detect-changes"
+   ],
+   "siblings": [
+    "fund-csharp/19-ef-core-basics/02-tracked-versus-detached-update",
+    "fund-csharp/19-ef-core-basics/03-find-and-identity-resolution"
+   ]
+  },
+  {
+   "id": "efcore-read-paths",
+   "idea": "For read-only queries, project to the shape you need with Select and use AsNoTracking; load related data in the query, never inside a loop.",
+   "why": "Tracking everything you only display costs memory and time, and touching a navigation per row turns one list into hundreds of queries.",
+   "prompt": "An orders page loads 200 orders with their customers by looping and calling the customer lookup per order. The SQL log shows 201 queries and memory climbs. Rewrite the query.",
+   "answer": "Issue one query: context.Orders.AsNoTracking() with a Select that pulls the order fields and the customer name you display, so EF builds a single SQL join and returns plain objects. If related entities are needed in full, Include them, or load all their ids in one query, instead of one query per row.",
+   "tags": [
+    "csharp",
+    "ef-core",
+    "performance"
+   ],
+   "sources": [
+    "fund/csharp/20-ef-core-queries-n-plus-1-and-transactions",
+    "fund-csharp/20-ef-core-queries-n-plus-1-and-transactions/01-batch-load-customers"
+   ],
+   "siblings": [
+    "fund-csharp/20-ef-core-queries-n-plus-1-and-transactions/02-concurrency-token-to-409",
+    "fund-csharp/20-ef-core-queries-n-plus-1-and-transactions/03-transaction-across-two-saves",
+    "csdrills/10-crud-endpoint-logic/04-optional-filters"
+   ]
+  },
+  {
+   "id": "one-savechanges-one-transaction",
+   "idea": "One SaveChanges call commits its changes in one transaction; work split across several SaveChanges calls needs an explicit transaction to stay all-or-nothing.",
+   "why": "Two separate saves can leave half the work committed when the second one fails, such as money debited but never credited.",
+   "prompt": "A transfer debits one account and calls SaveChanges, then credits the other and calls SaveChanges again. The second save fails on a concurrency check. What state is left, and how do you fix it?",
+   "answer": "The debit is committed and the credit is not, so money has disappeared. Make both changes and call SaveChanges once, which wraps them in a single transaction, or open an explicit transaction around both saves and commit only after the second. Map the concurrency failure to a retry or a conflict response.",
+   "tags": [
+    "csharp",
+    "ef-core",
+    "transactions"
+   ],
+   "sources": [
+    "fund/csharp/20-ef-core-queries-n-plus-1-and-transactions",
+    "fund-csharp/20-ef-core-queries-n-plus-1-and-transactions/01-batch-load-customers",
+    "fund-csharp/20-ef-core-queries-n-plus-1-and-transactions/03-transaction-across-two-saves"
+   ],
+   "siblings": [
+    "fund-csharp/20-ef-core-queries-n-plus-1-and-transactions/02-concurrency-token-to-409",
+    "csdrills/10-crud-endpoint-logic/04-optional-filters",
+    "csdrills/10-crud-endpoint-logic/03-sort-whitelist"
+   ]
+  }
+ ]
+}
