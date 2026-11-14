@@ -28,7 +28,7 @@ const FIX = join(import.meta.dirname, 'fixtures', 'keyideas');
 const CONTENT = join(FIX, 'content');
 const EMPTY = join(FIX, 'empty');
 
-const count = (db: TempDb['db'], sql: string, ...p: unknown[]): number => db.get<{ n: number }>(sql, ...p)!.n;
+const count = (db: TempDb['db'], sql: string, ...p: (string | number)[]): number => db.get<{ n: number }>(sql, ...p)!.n;
 const keyideaCards = (db: TempDb['db']) =>
   db.all<{ key: string; due: number; kind: string; unit: number | null; competency: string | null }>(
     "SELECT card_key AS key, due_at AS due, kind, unit_id AS unit, competency_id AS competency FROM review_item WHERE card_key LIKE 'keyidea:%' ORDER BY id",

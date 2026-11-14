@@ -28,7 +28,7 @@ describe('interleave (pure)', () => {
   const cards = (spec: Record<string, number>) => Object.entries(spec).flatMap(([s, k]) => Array.from({ length: k }, (_, i) => ({ section: s, i })));
   const noNeighbours = (xs: { section: string }[]) => xs.every((x, i) => i === 0 || xs[i - 1]!.section !== x.section);
   it('never puts two cards of one section side by side when >= 2 sections are due, and caps', () => {
-    for (const spec of [{ a: 6, b: 6 }, { a: 9, b: 2, c: 1 }, { a: 1, b: 1 }, { a: 5, b: 4, c: 4, d: 3 }]) {
+    for (const spec of [{ a: 6, b: 6 }, { a: 9, b: 2, c: 1 }, { a: 1, b: 1 }, { a: 5, b: 4, c: 4, d: 3 }] as Record<string, number>[]) {
       for (const cap of [5, 12]) {
         const out = interleave(cards(spec), cap, '2026-11-14');
         expect(noNeighbours(out)).toBe(true);

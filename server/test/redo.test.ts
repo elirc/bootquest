@@ -30,7 +30,7 @@ import { localNoon, makeTempDb, makeUnit, submit, type TempDb } from './helpers.
 const CONTENT = join(import.meta.dirname, 'fixtures', 'keyideas', 'content');
 const RIGHT = 'export const add = (a, b) => a + b;';
 const WRONG = 'export const add = (a, b) => a - b;';
-const n = (db: TempDb['db'], sql: string, ...p: unknown[]): number => db.get<{ n: number }>(sql, ...p)!.n;
+const n = (db: TempDb['db'], sql: string, ...p: (string | number)[]): number => db.get<{ n: number }>(sql, ...p)!.n;
 const ledger = (db: TempDb['db']) => ({
   attempt: n(db, 'SELECT COUNT(*) AS n FROM attempt'),
   run: n(db, 'SELECT COUNT(*) AS n FROM run'),
