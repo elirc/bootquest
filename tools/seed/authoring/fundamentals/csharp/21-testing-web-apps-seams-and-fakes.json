@@ -1,0 +1,201 @@
+{
+  "format": "fundamentals-authoring@1",
+  "track": "csharp",
+  "topic": "21-testing-web-apps-seams-and-fakes",
+  "title": "Testing ASP.NET Core: seams, fakes & WebApplicationFactory",
+  "level": "advanced",
+  "summary": "Seams for the clock, ids and outbound calls, fakes versus mocks, WebApplicationFactory hosting the real pipeline in memory, swapping only the edges in ConfigureTestServices, an isolated real database, test authentication, and asserting on HTTP behaviour.",
+  "lesson": "## Seams: inject what the test must control\n\nA handler that calls `DateTimeOffset.UtcNow`, `Guid.NewGuid()` or a real HTTP client has hidden inputs, so a test cannot pin its output and ends up asserting \"roughly a week from now\". Take those inputs as dependencies instead: `TimeProvider` (the base library's clock abstraction) for time, an id generator, and an interface such as `IEmailSender` or `IWebhookSender` for every call that leaves the process. Production registers `TimeProvider.System`; a test passes a clock it can set and advance.\n\n```csharp\npublic sealed class InviteService(TimeProvider clock, IInviteStore store)\n{\n    public Invite Create(string email)\n    {\n        var now = clock.GetUtcNow();                 // read once per operation\n        return store.Add(new Invite(email, now, now.AddDays(7)));\n    }\n}\n```\n\nRead the clock once per operation, so `CreatedAt` and `ExpiresAt` come from the same instant.\n\n## Fakes, stubs and mocks\n\nA **stub** returns canned answers. A **fake** is a small working implementation: an in-memory store that assigns ids and refuses a duplicate email, a clock you can advance, a sender that keeps an outbox. A **mock** records calls so the test can assert on them. Prefer fakes for stores, clocks and senders: the test then checks outcomes, and a refactor that keeps the behaviour keeps the tests green. Assert on an interaction only when the interaction is the behaviour (\"exactly one webhook was sent\").\n\nA fake must keep the rules of the thing it replaces. A dictionary-backed store that accepts `Ana@x.io` and `ana@x.io` lets the tests pass while production returns 500 when the unique index fires.\n\n## WebApplicationFactory runs the real pipeline in memory\n\n`WebApplicationFactory<Program>` (package `Microsoft.AspNetCore.Mvc.Testing`) boots the app's real `Program` on an in-memory `TestServer`. `factory.CreateClient()` returns an `HttpClient` whose requests never open a socket, yet still run routing, middleware, model binding, validation, authentication, authorization, the endpoint and JSON serialization. That is the right level for \"POST /invites returns 201 with a Location header\" or \"an anonymous DELETE gets 401\".\n\n```csharp\npublic sealed class ApiFactory : WebApplicationFactory<Program>\n{\n    public FakeEmailSender Email { get; } = new();\n    public ManualClock Clock { get; } = new(DateTimeOffset.Parse(\"2026-03-01T09:00:00Z\"));\n\n    protected override void ConfigureWebHost(IWebHostBuilder builder)\n    {\n        builder.UseEnvironment(\"Testing\");\n        builder.ConfigureTestServices(services =>\n        {\n            services.RemoveAll<IEmailSender>();\n            services.AddSingleton<IEmailSender>(Email);\n            services.RemoveAll<TimeProvider>();\n            services.AddSingleton<TimeProvider>(Clock);\n        });\n    }\n}\n```\n\n## Swap only the edges\n\n`ConfigureTestServices` runs after the app's own registrations. When a constructor asks for one `IEmailSender`, the container hands it the LAST registration, so an added fake wins there; but anything that takes `IEnumerable<IEmailSender>` still receives the real sender as well. Call `RemoveAll` before adding the fake. A `TryAdd...` call in the override changes nothing when the app already registered the service. Keep the real routing, validation, serialization and queries; replace only what leaves the process (email, payments, webhooks) and what the test must control (the clock).\n\n## A real database, isolated per test\n\nEF Core's InMemory provider is not a relational database: it runs no SQL and does not enforce relational constraints such as unique indexes, so it can pass a test that the real database would fail. Use the real engine instead. A SQLite `:memory:` database lives only as long as its connection, so keep one connection open for the factory's lifetime and create the schema at startup; or start a throwaway PostgreSQL container. Give each test class its own database, or reset the rows each test touches: tests that lean on each other's rows pass alone and fail in another order.\n\n## Authenticate as a test user\n\nRegister a test authentication handler that builds the `ClaimsPrincipal` from a request header (for example `X-Test-User` and `X-Test-Role`), so the real authorization rules still run. Then assert at the HTTP level: anonymous gets 401, the wrong role gets 403, the owner gets 200. Check status codes, headers such as `Location`, the ProblemDetails body and what the fakes recorded, not the private methods behind the endpoint.",
+  "quiz": [
+    {
+      "prompt": "A handler sets `CreatedAt = DateTimeOffset.UtcNow` and `ExpiresAt = DateTimeOffset.UtcNow.AddDays(7)`. What makes it testable to the exact second?",
+      "choices": [
+        "Compare the two stamps in the test with a tolerance of a few seconds",
+        "Inject a TimeProvider and read it once per operation",
+        "Switch to `DateTime.Now` so the stamps follow the server's own time zone",
+        "Make the handler static, so the test can call it without a clock"
+      ],
+      "answer": 1,
+      "explanation": "The clock is a hidden input. Taking a TimeProvider lets the test fix the instant, and one read per operation keeps both stamps on the same instant; a tolerance only hides the problem."
+    },
+    {
+      "prompt": "What does `factory.CreateClient()` give a test that uses `WebApplicationFactory<Program>`?",
+      "choices": [
+        "An HttpClient aimed at the app on a random free localhost port",
+        "A client that calls the controller methods directly, skipping middleware",
+        "An HttpClient whose requests run the app's real pipeline in memory",
+        "A mock HttpClient that returns what the test stubs per route"
+      ],
+      "answer": 2,
+      "explanation": "The factory hosts the real Program on an in-memory TestServer. No socket is opened, but routing, middleware, binding, authorization, the endpoint and serialization all run."
+    },
+    {
+      "prompt": "The app registers `SmtpNotifier` as `INotifier`, and a dispatcher takes `IEnumerable<INotifier>` and calls each one. The test override only adds `services.AddSingleton<INotifier>(fake)`. What happens when a test triggers a notification?",
+      "choices": [
+        "Only the fake runs, because the last registration replaces the first",
+        "Startup fails: one service type has two registrations",
+        "Both run, so the real SMTP notifier still sends mail",
+        "Only SmtpNotifier runs, because the app's registration came first"
+      ],
+      "answer": 2,
+      "explanation": "A single resolve gets the last registration, but IEnumerable resolves every registration in order. Call RemoveAll for the service before adding the fake."
+    },
+    {
+      "prompt": "Email has a unique index. A test that uses EF Core's InMemory provider signs up the same email twice and gets 201 both times, while production returns 500 the second time. Why?",
+      "choices": [
+        "The InMemory provider runs no SQL and enforces no unique index, so both inserts succeed",
+        "The test client replays the first response from a cache",
+        "Model validation skips duplicate checks in the Testing environment",
+        "The two requests share one DbContext, so the second insert merges into the first"
+      ],
+      "answer": 0,
+      "explanation": "InMemory is not a relational database, so constraints such as unique indexes are not checked. Test against the real engine (SQLite or a container) to see what production does."
+    },
+    {
+      "prompt": "A test factory uses SQLite with `DataSource=:memory:` and opens a new connection for each DbContext. The second request fails with \"no such table\". Why?",
+      "choices": [
+        "SQLite drops every table after each committed transaction",
+        "EnsureCreated must run again for each request in the Testing environment",
+        "The in-memory database becomes read-only once the first connection closes",
+        "Each new connection opens its own empty in-memory database"
+      ],
+      "answer": 3,
+      "explanation": "An in-memory SQLite database belongs to its connection. Keep one connection open for the factory's lifetime and create the schema on it."
+    },
+    {
+      "prompt": "Which test is the most likely to break after a refactor that keeps the endpoint's behaviour the same?",
+      "choices": [
+        "Posting a signup, then asserting the fake outbox holds one email",
+        "Verifying that the repository's Save method ran before its GetById",
+        "Asserting a 409 when the fake store already holds that email",
+        "Freezing the clock, then checking ExpiresAt in the response"
+      ],
+      "answer": 1,
+      "explanation": "Asserting the call order of internal methods ties the test to one implementation. The other three check outcomes that any correct implementation produces."
+    },
+    {
+      "prompt": "Two integration tests pass when run alone but fail together in a different order. What is the likely cause?",
+      "choices": [
+        "The client from CreateClient caches responses between tests",
+        "The factory rebuilds Program for each test and loses state",
+        "They share one database and depend on each other's rows",
+        "The test server's port is reused before it is released"
+      ],
+      "answer": 2,
+      "explanation": "Shared data couples tests to their order. Give each test class its own database, or reset what each test touches."
+    },
+    {
+      "prompt": "How do integration tests call `[Authorize]` endpoints as different users without a real identity provider?",
+      "choices": [
+        "Turn authorization off in the Testing environment and test the handlers alone",
+        "Sign a real JWT with the production signing key inside every test",
+        "Call the endpoint method directly with a hand-built User property",
+        "Register a test auth handler that reads the user from a header"
+      ],
+      "answer": 3,
+      "explanation": "A test authentication scheme builds the ClaimsPrincipal from a header, so the real authorization rules still decide 401, 403 or 200."
+    },
+    {
+      "prompt": "A service reads `clock.GetUtcNow()` once for CreatedAt and again for ExpiresAt. What can go wrong?",
+      "choices": [
+        "The stamps can differ, so ExpiresAt is not CreatedAt plus 7 days",
+        "TimeProvider throws when it is read twice in one request scope",
+        "The second read returns local time instead of UTC",
+        "Nothing: every read inside one request returns the same instant"
+      ],
+      "answer": 0,
+      "explanation": "Each read returns the time of that read. One read per operation gives every timestamp of the action the same instant."
+    },
+    {
+      "prompt": "In a WebApplicationFactory test of the signup endpoint, what should be replaced with fakes?",
+      "choices": [
+        "Routing, model binding and validation, to keep the test fast",
+        "The JSON serializer, so the response can be compared as an object",
+        "The email sender and the clock, the edges the test must control",
+        "Everything except the endpoint under test"
+      ],
+      "answer": 2,
+      "explanation": "Replace what leaves the process and what the test must control. Everything else stays real, because that is what the test is meant to prove."
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "What is a seam?",
+      "back": "A place where a test can change behaviour without editing the code there, such as an injected clock, id generator or outbound client."
+    },
+    {
+      "front": "Stub, fake, mock",
+      "back": "A stub returns canned answers, a fake is a small working implementation, and a mock records calls so a test can assert on them."
+    },
+    {
+      "front": "What does WebApplicationFactory<Program> do?",
+      "back": "It boots the app's real Program on an in-memory TestServer and hands out HttpClients whose requests go through the whole pipeline."
+    },
+    {
+      "front": "Where do test doubles go in a WebApplicationFactory test?",
+      "back": "In ConfigureTestServices, which runs after the app's own registrations: remove the real service, then add the fake."
+    },
+    {
+      "front": "Single resolve versus IEnumerable<T>",
+      "back": "One resolve returns the last registration, while IEnumerable<T> returns all of them, so a fake added without RemoveAll leaves the real one active there."
+    },
+    {
+      "front": "Why keep a SQLite :memory: connection open?",
+      "back": "The in-memory database lives only as long as its connection, and every new connection starts with an empty database."
+    },
+    {
+      "front": "What should an integration test assert?",
+      "back": "HTTP behaviour: the status code, headers such as Location, the response body, and the side effects the fakes recorded."
+    },
+    {
+      "front": "Why must a fake keep the real store's rules?",
+      "back": "A fake that allows what the database forbids, such as a duplicate unique key, lets tests pass for code that fails in production."
+    }
+  ],
+  "drills": [
+    {
+      "slug": "01-clock-seam-and-invite-expiry",
+      "title": "Put the clock behind a seam",
+      "difficulty": 2,
+      "skills": [
+        "TimeProvider",
+        "seams",
+        "boundary instants"
+      ],
+      "instructions": "**Interview prompt.** \"Invites expire 7 days after they are created. The code calls `DateTimeOffset.UtcNow` twice and its tests assert 'about a week'. Make it testable to the exact instant.\"\n\n**Why it matters.** `TimeProvider` is the clock seam of the base library: production passes `TimeProvider.System`, a test passes a clock it controls (test factories swap it in `ConfigureTestServices`). Reading the clock once per operation keeps every timestamp of one action on the same instant.\n\n**Your task.**\n- Complete `ManualClock` in the types section: a `TimeProvider` whose `GetUtcNow()` returns the instant it was created with; `Advance(TimeSpan by)` moves it forward, and advances add up. A negative `by` throws `ArgumentOutOfRangeException` (this clock never runs backwards).\n- `Invite Create(TimeProvider clock, string email)`: `CreatedAt` is now and `ExpiresAt` is exactly 7 days later. Read the clock ONCE.\n- `int Accept(TimeProvider clock, Invite invite)`: 200 while now is before `ExpiresAt`, 410 (Gone) from `ExpiresAt` on.\n\nUse only the `clock` you are given. The tests also use a `TickingClock` (types section) that moves 1 ms forward on every read, to catch a second read.\n\n**Worked example.** A clock at 1 March 09:00 creates an invite expiring 8 March 09:00; at 8 March 08:59:59 `Accept` gives 200, at 09:00:00 it gives 410.",
+      "starterHead": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · clock seam and invite expiry★★☆ core\n//  concepts: TimeProvider · one read per operation · the expiry instant\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  The clock is an input: take it as a parameter and read it once.\n\nusing static Bootcamp.Check;\n\nInvite Create(TimeProvider clock, string email)\n{\n    // TODO: one read of the clock; ExpiresAt is exactly 7 days after CreatedAt\n    throw new NotImplementedException();\n}\n\nint Accept(TimeProvider clock, Invite invite)\n{\n    // TODO: 200 before ExpiresAt, 410 from ExpiresAt on\n    throw new NotImplementedException();\n}\n\nvar T0 = new DateTimeOffset(2026, 3, 1, 9, 0, 0, TimeSpan.Zero);\nstring Iso(DateTimeOffset t) => t.ToString(\"O\");   // compare instants as ISO-8601 text\n\n\n",
+      "solutionHead": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · clock seam and invite expiry★★☆ core\n//  concepts: TimeProvider · one read per operation · the expiry instant\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  The clock is an input: take it as a parameter and read it once.\n\nusing static Bootcamp.Check;\n\nInvite Create(TimeProvider clock, string email)\n{\n    var now = clock.GetUtcNow();\n    return new Invite(email, now, now.AddDays(7));\n}\n\nint Accept(TimeProvider clock, Invite invite) =>\n    clock.GetUtcNow() < invite.ExpiresAt ? 200 : 410;\n\nvar T0 = new DateTimeOffset(2026, 3, 1, 9, 0, 0, TimeSpan.Zero);\nstring Iso(DateTimeOffset t) => t.ToString(\"O\");   // compare instants as ISO-8601 text\n\n\n",
+      "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"the manual clock returns its start, and advances add up\", () =>\n{\n    var clock = new ManualClock(T0);\n    Eq(Iso(clock.GetUtcNow()), Iso(T0));\n    clock.Advance(TimeSpan.FromHours(1));\n    clock.Advance(TimeSpan.FromMinutes(30));\n    Eq(Iso(clock.GetUtcNow()), Iso(T0.AddMinutes(90)));\n});\n\nTest(\"a negative advance throws\", () =>\n    Throws<ArgumentOutOfRangeException>(() => new ManualClock(T0).Advance(TimeSpan.FromSeconds(-1))));\n\nTest(\"Create reads the clock once, so ExpiresAt is exactly 7 days after CreatedAt\", () =>\n{\n    var clock = new TickingClock(T0);\n    var invite = Create(clock, \"ana@x.io\");\n    Eq((invite.Email, Iso(invite.CreatedAt), invite.ExpiresAt - invite.CreatedAt, clock.Reads), (\"ana@x.io\", Iso(T0), TimeSpan.FromDays(7), 1));\n});\n\nTest(\"Create uses the clock it is given, never the system clock\", () =>\n{\n    var past = new DateTimeOffset(2001, 1, 1, 0, 0, 0, TimeSpan.Zero);\n    Eq(Iso(Create(new ManualClock(past), \"bo@x.io\").ExpiresAt), Iso(past.AddDays(7)));\n});\n\nTest(\"one second before expiry the invite is accepted\", () =>\n{\n    var clock = new ManualClock(T0);\n    var invite = Create(clock, \"ana@x.io\");\n    clock.Advance(TimeSpan.FromDays(7) - TimeSpan.FromSeconds(1));\n    Eq(Accept(clock, invite), 200);\n});\n\nTest(\"at the expiry instant the invite is gone (boundary)\", () =>\n{\n    var clock = new ManualClock(T0);\n    var invite = Create(clock, \"ana@x.io\");\n    clock.Advance(TimeSpan.FromDays(7));\n    Eq(Accept(clock, invite), 410);\n});\n\n",
+      "tail": "// ──────────────────────────── types ──────────────────────────────────────\n\nrecord Invite(string Email, DateTimeOffset CreatedAt, DateTimeOffset ExpiresAt);\n\n/// <summary>A clock the test sets and moves forward.</summary>\nsealed class ManualClock : TimeProvider\n{\n    public ManualClock(DateTimeOffset start)\n    {\n        // TODO: remember the start instant\n        throw new NotImplementedException();\n    }\n\n    public override DateTimeOffset GetUtcNow() => throw new NotImplementedException();\n\n    public void Advance(TimeSpan by)\n    {\n        // TODO: move forward; a negative step throws ArgumentOutOfRangeException\n        throw new NotImplementedException();\n    }\n}\n\n/// <summary>Given: moves 1 ms forward on every read and counts the reads.</summary>\nsealed class TickingClock(DateTimeOffset start) : TimeProvider\n{\n    DateTimeOffset now = start;\n    public int Reads { get; private set; }\n    public override DateTimeOffset GetUtcNow()\n    {\n        Reads++;\n        var t = now;\n        now = now.AddMilliseconds(1);\n        return t;\n    }\n}\n",
+      "solutionTail": "// ──────────────────────────── types ──────────────────────────────────────\n\nrecord Invite(string Email, DateTimeOffset CreatedAt, DateTimeOffset ExpiresAt);\n\n/// <summary>A clock the test sets and moves forward.</summary>\nsealed class ManualClock : TimeProvider\n{\n    DateTimeOffset now;\n\n    public ManualClock(DateTimeOffset start) => now = start;\n\n    public override DateTimeOffset GetUtcNow() => now;\n\n    public void Advance(TimeSpan by)\n    {\n        if (by < TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(by), \"the clock does not run backwards\");\n        now += by;\n    }\n}\n\n/// <summary>Given: moves 1 ms forward on every read and counts the reads.</summary>\nsealed class TickingClock(DateTimeOffset start) : TimeProvider\n{\n    DateTimeOffset now = start;\n    public int Reads { get; private set; }\n    public override DateTimeOffset GetUtcNow()\n    {\n        Reads++;\n        var t = now;\n        now = now.AddMilliseconds(1);\n        return t;\n    }\n}\n",
+      "explanation": "The clock is just another dependency. The fake keeps one instant and moves it only when told:\n\n```csharp\npublic override DateTimeOffset GetUtcNow() => now;\npublic void Advance(TimeSpan by)\n{\n    if (by < TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(by));\n    now += by;\n}\n```\n\nThe service reads it once and compares with `<`:\n\n```csharp\nvar now = clock.GetUtcNow();\nreturn new Invite(email, now, now.AddDays(7));\n// Accept:\nclock.GetUtcNow() < invite.ExpiresAt ? 200 : 410;\n```\n\nThe tests catch three plausible wrong versions: two reads of the clock (the ticking clock makes `ExpiresAt - CreatedAt` one millisecond too long), `DateTimeOffset.UtcNow` anywhere (the 2001 clock is ignored), and `<=` in `Accept` (the invite is still accepted at the exact expiry instant).",
+      "hints": [
+        "A test can only pin what the code takes as input, so the time must come from the clock parameter.",
+        "Keep the current instant in a field of the fake and move it in Advance after refusing a negative step. In Create take the time once and derive both stamps from it, and in Accept treat the expiry instant itself as already expired.",
+        "Store one instant in the fake and add each step to it, read the given clock a single time when creating, and compare strictly before the expiry when accepting."
+      ]
+    },
+    {
+      "slug": "02-fake-repository-keeps-the-constraints",
+      "title": "A fake store that keeps the database's rules",
+      "difficulty": 2,
+      "skills": [
+        "fakes",
+        "unique constraints",
+        "copies, not references"
+      ],
+      "instructions": "**Interview prompt.** \"Our signup tests use a plain dictionary as the user store. They are green, yet production answers 500 when `Ana@x.io` and then `ana@x.io` sign up. Write a fake the tests can trust.\"\n\n**Why it matters.** A fake is only as good as the rules it keeps. The real store has a case-insensitive unique index on email and hands back a fresh row on every read; a fake that skips either rule lets tests pass for code that breaks in production.\n\n**Your task.** Complete `InMemoryUserStore : IUserStore` in the types section:\n- `User Add(string email, string name)`: give the new user the next id (1, 2, 3, ...) and store it. Emails are unique IGNORING CASE: a duplicate throws `DuplicateEmailException` (what the unique index does) and stores nothing.\n- `User? Find(int id)`: a COPY of the stored user, or `null`. Changing the returned object must not change the store.\n- `IReadOnlyList<User> All()`: copies of every user, in id order.\n\n`Signup` (given) is the endpoint logic under test: 201 with the id, 409 on a duplicate email.\n\n**Worked example.** `Add(\"Ana@x.io\", \"Ana\")` returns id 1; `Add(\"ana@x.io\", \"Other\")` throws and `All()` still holds one user.",
+      "starterHead": "// ─────────────────────────────────────────────────────────────────────────\n//  02 · fake repository keeps the constraints★★☆ core\n//  concepts: fakes · unique index · rows are copies\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  A fake must refuse what the database refuses and hand out copies.\n\nusing static Bootcamp.Check;\n\n// TODO: complete InMemoryUserStore in the types section.\n\n// Given: the endpoint logic under test.\n(int Status, int? Id) Signup(IUserStore store, string email, string name)\n{\n    try { return (201, store.Add(email, name).Id); }\n    catch (DuplicateEmailException) { return (409, null); }\n}\n\n\n",
+      "solutionHead": "// ─────────────────────────────────────────────────────────────────────────\n//  02 · fake repository keeps the constraints★★☆ core\n//  concepts: fakes · unique index · rows are copies\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  A fake must refuse what the database refuses and hand out copies.\n\nusing static Bootcamp.Check;\n\n// Given: the endpoint logic under test.\n(int Status, int? Id) Signup(IUserStore store, string email, string name)\n{\n    try { return (201, store.Add(email, name).Id); }\n    catch (DuplicateEmailException) { return (409, null); }\n}\n\n\n",
+      "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"users get ids 1, 2, 3 in order\", () =>\n{\n    var store = new InMemoryUserStore();\n    Eq(new[] { store.Add(\"ana@x.io\", \"Ana\").Id, store.Add(\"bo@x.io\", \"Bo\").Id, store.Add(\"cy@x.io\", \"Cy\").Id }, new[] { 1, 2, 3 });\n});\n\nTest(\"signup answers 201 and then 409 for the same email in another case\", () =>\n{\n    var store = new InMemoryUserStore();\n    Eq(Signup(store, \"Ana@x.io\", \"Ana\"), (201, (int?)1));\n    Eq(Signup(store, \"ana@X.IO\", \"Other\"), (409, (int?)null));\n});\n\nTest(\"a refused add stores nothing\", () =>\n{\n    var store = new InMemoryUserStore();\n    store.Add(\"ana@x.io\", \"Ana\");\n    Throws<DuplicateEmailException>(() => store.Add(\"ANA@x.io\", \"Other\"));\n    Eq(store.All().Select(u => (u.Id, u.Email, u.Name)), new[] { (1, \"ana@x.io\", \"Ana\") });\n});\n\nTest(\"Find hands out a copy: changing it does not change the store\", () =>\n{\n    var store = new InMemoryUserStore();\n    store.Add(\"ana@x.io\", \"Ana\");\n    var user = store.Find(1)!;\n    user.Name = \"Changed in the test\";\n    Eq(store.Find(1)!.Name, \"Ana\");\n});\n\nTest(\"All hands out copies in id order\", () =>\n{\n    var store = new InMemoryUserStore();\n    store.Add(\"bo@x.io\", \"Bo\");\n    store.Add(\"ana@x.io\", \"Ana\");\n    var all = store.All();\n    all[0].Name = \"Changed\";\n    Eq(store.All().Select(u => (u.Id, u.Name)), new[] { (1, \"Bo\"), (2, \"Ana\") });\n});\n\nTest(\"Find of an unknown id is null (boundary)\", () =>\n    Eq(new InMemoryUserStore().Find(1), null));\n\n",
+      "tail": "// ──────────────────────────── types ──────────────────────────────────────\n\nsealed class User(int id, string email, string name)\n{\n    public int Id { get; } = id;\n    public string Email { get; } = email;\n    public string Name { get; set; } = name;\n}\n\nsealed class DuplicateEmailException(string email) : Exception($\"duplicate key value violates unique index on Email: {email}\");\n\ninterface IUserStore\n{\n    User Add(string email, string name);\n    User? Find(int id);\n    IReadOnlyList<User> All();\n}\n\nsealed class InMemoryUserStore : IUserStore\n{\n    // TODO: keep the rows; refuse a duplicate email ignoring case; hand out copies\n    public User Add(string email, string name) => throw new NotImplementedException();\n    public User? Find(int id) => throw new NotImplementedException();\n    public IReadOnlyList<User> All() => throw new NotImplementedException();\n}\n",
+      "solutionTail": "// ──────────────────────────── types ──────────────────────────────────────\n\nsealed class User(int id, string email, string name)\n{\n    public int Id { get; } = id;\n    public string Email { get; } = email;\n    public string Name { get; set; } = name;\n}\n\nsealed class DuplicateEmailException(string email) : Exception($\"duplicate key value violates unique index on Email: {email}\");\n\ninterface IUserStore\n{\n    User Add(string email, string name);\n    User? Find(int id);\n    IReadOnlyList<User> All();\n}\n\nsealed class InMemoryUserStore : IUserStore\n{\n    readonly List<User> rows = new();\n\n    static User Copy(User u) => new(u.Id, u.Email, u.Name);\n\n    public User Add(string email, string name)\n    {\n        if (rows.Any(u => string.Equals(u.Email, email, StringComparison.OrdinalIgnoreCase)))\n            throw new DuplicateEmailException(email);\n        var user = new User(rows.Count + 1, email, name);\n        rows.Add(user);\n        return Copy(user);\n    }\n\n    public User? Find(int id) => rows.FirstOrDefault(u => u.Id == id) is { } u ? Copy(u) : null;\n\n    public IReadOnlyList<User> All() => rows.OrderBy(u => u.Id).Select(Copy).ToList();\n}\n",
+      "explanation": "Keep the rows private, check the unique rule before storing, and copy on the way out:\n\n```csharp\nif (rows.Any(u => string.Equals(u.Email, email, StringComparison.OrdinalIgnoreCase)))\n    throw new DuplicateEmailException(email);\nvar user = new User(rows.Count + 1, email, name);\nrows.Add(user);\nreturn Copy(user);\n```\n\n`Find` and `All` return `new User(u.Id, u.Email, u.Name)` for each row, the way every database read builds fresh objects.\n\nThe tests catch the two fakes that make suites lie: a `Dictionary<string, User>` keyed by the raw email (the case-only duplicate gets 201, so the 409 path is never tested), and a fake that returns its stored objects (a test that edits a returned user silently changes the \"database\", so a missing save goes unnoticed).",
+      "hints": [
+        "A fake earns trust by refusing what the real store refuses and by never sharing its own objects with callers.",
+        "Look for an existing user whose email matches ignoring case before storing anything, and build a new User object for every value you hand out, both from Find and from All.",
+        "Keep a private list of users, refuse an email that already exists in any letter case, number new users from one upward, and give callers fresh copies rather than the stored objects."
+      ]
+    }
+  ]
+}

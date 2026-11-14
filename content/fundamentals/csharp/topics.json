@@ -3524,6 +3524,182 @@
     "fund-csharp/20-ef-core-queries-n-plus-1-and-transactions/02-concurrency-token-to-409",
     "fund-csharp/20-ef-core-queries-n-plus-1-and-transactions/03-transaction-across-two-saves"
    ]
+  },
+  {
+   "id": "21-testing-web-apps-seams-and-fakes",
+   "order": 21,
+   "title": "Testing ASP.NET Core: seams, fakes & WebApplicationFactory",
+   "level": "advanced",
+   "summary": "Seams for the clock, ids and outbound calls, fakes versus mocks, WebApplicationFactory hosting the real pipeline in memory, swapping only the edges in ConfigureTestServices, an isolated real database, test authentication, and asserting on HTTP behaviour.",
+   "lesson": "## Seams: inject what the test must control\n\nA handler that calls `DateTimeOffset.UtcNow`, `Guid.NewGuid()` or a real HTTP client has hidden inputs, so a test cannot pin its output and ends up asserting \"roughly a week from now\". Take those inputs as dependencies instead: `TimeProvider` (the base library's clock abstraction) for time, an id generator, and an interface such as `IEmailSender` or `IWebhookSender` for every call that leaves the process. Production registers `TimeProvider.System`; a test passes a clock it can set and advance.\n\n```csharp\npublic sealed class InviteService(TimeProvider clock, IInviteStore store)\n{\n    public Invite Create(string email)\n    {\n        var now = clock.GetUtcNow();                 // read once per operation\n        return store.Add(new Invite(email, now, now.AddDays(7)));\n    }\n}\n```\n\nRead the clock once per operation, so `CreatedAt` and `ExpiresAt` come from the same instant.\n\n## Fakes, stubs and mocks\n\nA **stub** returns canned answers. A **fake** is a small working implementation: an in-memory store that assigns ids and refuses a duplicate email, a clock you can advance, a sender that keeps an outbox. A **mock** records calls so the test can assert on them. Prefer fakes for stores, clocks and senders: the test then checks outcomes, and a refactor that keeps the behaviour keeps the tests green. Assert on an interaction only when the interaction is the behaviour (\"exactly one webhook was sent\").\n\nA fake must keep the rules of the thing it replaces. A dictionary-backed store that accepts `Ana@x.io` and `ana@x.io` lets the tests pass while production returns 500 when the unique index fires.\n\n## WebApplicationFactory runs the real pipeline in memory\n\n`WebApplicationFactory<Program>` (package `Microsoft.AspNetCore.Mvc.Testing`) boots the app's real `Program` on an in-memory `TestServer`. `factory.CreateClient()` returns an `HttpClient` whose requests never open a socket, yet still run routing, middleware, model binding, validation, authentication, authorization, the endpoint and JSON serialization. That is the right level for \"POST /invites returns 201 with a Location header\" or \"an anonymous DELETE gets 401\".\n\n```csharp\npublic sealed class ApiFactory : WebApplicationFactory<Program>\n{\n    public FakeEmailSender Email { get; } = new();\n    public ManualClock Clock { get; } = new(DateTimeOffset.Parse(\"2026-03-01T09:00:00Z\"));\n\n    protected override void ConfigureWebHost(IWebHostBuilder builder)\n    {\n        builder.UseEnvironment(\"Testing\");\n        builder.ConfigureTestServices(services =>\n        {\n            services.RemoveAll<IEmailSender>();\n            services.AddSingleton<IEmailSender>(Email);\n            services.RemoveAll<TimeProvider>();\n            services.AddSingleton<TimeProvider>(Clock);\n        });\n    }\n}\n```\n\n## Swap only the edges\n\n`ConfigureTestServices` runs after the app's own registrations. When a constructor asks for one `IEmailSender`, the container hands it the LAST registration, so an added fake wins there; but anything that takes `IEnumerable<IEmailSender>` still receives the real sender as well. Call `RemoveAll` before adding the fake. A `TryAdd...` call in the override changes nothing when the app already registered the service. Keep the real routing, validation, serialization and queries; replace only what leaves the process (email, payments, webhooks) and what the test must control (the clock).\n\n## A real database, isolated per test\n\nEF Core's InMemory provider is not a relational database: it runs no SQL and does not enforce relational constraints such as unique indexes, so it can pass a test that the real database would fail. Use the real engine instead. A SQLite `:memory:` database lives only as long as its connection, so keep one connection open for the factory's lifetime and create the schema at startup; or start a throwaway PostgreSQL container. Give each test class its own database, or reset the rows each test touches: tests that lean on each other's rows pass alone and fail in another order.\n\n## Authenticate as a test user\n\nRegister a test authentication handler that builds the `ClaimsPrincipal` from a request header (for example `X-Test-User` and `X-Test-Role`), so the real authorization rules still run. Then assert at the HTTP level: anonymous gets 401, the wrong role gets 403, the owner gets 200. Check status codes, headers such as `Location`, the ProblemDetails body and what the fakes recorded, not the private methods behind the endpoint.\n",
+   "quiz": [
+    {
+     "key": "fund:csharp/21-testing-web-apps-seams-and-fakes/q01",
+     "prompt": "A handler sets `CreatedAt = DateTimeOffset.UtcNow` and `ExpiresAt = DateTimeOffset.UtcNow.AddDays(7)`. What makes it testable to the exact second?",
+     "choices": [
+      "Compare the two stamps in the test with a tolerance of a few seconds",
+      "Inject a TimeProvider and read it once per operation",
+      "Switch to `DateTime.Now` so the stamps follow the server's own time zone",
+      "Make the handler static, so the test can call it without a clock"
+     ],
+     "answer": 1,
+     "explanation": "The clock is a hidden input. Taking a TimeProvider lets the test fix the instant, and one read per operation keeps both stamps on the same instant; a tolerance only hides the problem."
+    },
+    {
+     "key": "fund:csharp/21-testing-web-apps-seams-and-fakes/q02",
+     "prompt": "What does `factory.CreateClient()` give a test that uses `WebApplicationFactory<Program>`?",
+     "choices": [
+      "An HttpClient aimed at the app on a random free localhost port",
+      "A client that calls the controller methods directly, skipping middleware",
+      "An HttpClient whose requests run the app's real pipeline in memory",
+      "A mock HttpClient that returns what the test stubs per route"
+     ],
+     "answer": 2,
+     "explanation": "The factory hosts the real Program on an in-memory TestServer. No socket is opened, but routing, middleware, binding, authorization, the endpoint and serialization all run."
+    },
+    {
+     "key": "fund:csharp/21-testing-web-apps-seams-and-fakes/q03",
+     "prompt": "The app registers `SmtpNotifier` as `INotifier`, and a dispatcher takes `IEnumerable<INotifier>` and calls each one. The test override only adds `services.AddSingleton<INotifier>(fake)`. What happens when a test triggers a notification?",
+     "choices": [
+      "Only the fake runs, because the last registration replaces the first",
+      "Startup fails: one service type has two registrations",
+      "Both run, so the real SMTP notifier still sends mail",
+      "Only SmtpNotifier runs, because the app's registration came first"
+     ],
+     "answer": 2,
+     "explanation": "A single resolve gets the last registration, but IEnumerable resolves every registration in order. Call RemoveAll for the service before adding the fake."
+    },
+    {
+     "key": "fund:csharp/21-testing-web-apps-seams-and-fakes/q04",
+     "prompt": "Email has a unique index. A test that uses EF Core's InMemory provider signs up the same email twice and gets 201 both times, while production returns 500 the second time. Why?",
+     "choices": [
+      "The InMemory provider runs no SQL and enforces no unique index, so both inserts succeed",
+      "The test client replays the first response from a cache",
+      "Model validation skips duplicate checks in the Testing environment",
+      "The two requests share one DbContext, so the second insert merges into the first"
+     ],
+     "answer": 0,
+     "explanation": "InMemory is not a relational database, so constraints such as unique indexes are not checked. Test against the real engine (SQLite or a container) to see what production does."
+    },
+    {
+     "key": "fund:csharp/21-testing-web-apps-seams-and-fakes/q05",
+     "prompt": "A test factory uses SQLite with `DataSource=:memory:` and opens a new connection for each DbContext. The second request fails with \"no such table\". Why?",
+     "choices": [
+      "SQLite drops every table after each committed transaction",
+      "EnsureCreated must run again for each request in the Testing environment",
+      "The in-memory database becomes read-only once the first connection closes",
+      "Each new connection opens its own empty in-memory database"
+     ],
+     "answer": 3,
+     "explanation": "An in-memory SQLite database belongs to its connection. Keep one connection open for the factory's lifetime and create the schema on it."
+    },
+    {
+     "key": "fund:csharp/21-testing-web-apps-seams-and-fakes/q06",
+     "prompt": "Which test is the most likely to break after a refactor that keeps the endpoint's behaviour the same?",
+     "choices": [
+      "Posting a signup, then asserting the fake outbox holds one email",
+      "Verifying that the repository's Save method ran before its GetById",
+      "Asserting a 409 when the fake store already holds that email",
+      "Freezing the clock, then checking ExpiresAt in the response"
+     ],
+     "answer": 1,
+     "explanation": "Asserting the call order of internal methods ties the test to one implementation. The other three check outcomes that any correct implementation produces."
+    },
+    {
+     "key": "fund:csharp/21-testing-web-apps-seams-and-fakes/q07",
+     "prompt": "Two integration tests pass when run alone but fail together in a different order. What is the likely cause?",
+     "choices": [
+      "The client from CreateClient caches responses between tests",
+      "The factory rebuilds Program for each test and loses state",
+      "They share one database and depend on each other's rows",
+      "The test server's port is reused before it is released"
+     ],
+     "answer": 2,
+     "explanation": "Shared data couples tests to their order. Give each test class its own database, or reset what each test touches."
+    },
+    {
+     "key": "fund:csharp/21-testing-web-apps-seams-and-fakes/q08",
+     "prompt": "How do integration tests call `[Authorize]` endpoints as different users without a real identity provider?",
+     "choices": [
+      "Turn authorization off in the Testing environment and test the handlers alone",
+      "Sign a real JWT with the production signing key inside every test",
+      "Call the endpoint method directly with a hand-built User property",
+      "Register a test auth handler that reads the user from a header"
+     ],
+     "answer": 3,
+     "explanation": "A test authentication scheme builds the ClaimsPrincipal from a header, so the real authorization rules still decide 401, 403 or 200."
+    },
+    {
+     "key": "fund:csharp/21-testing-web-apps-seams-and-fakes/q09",
+     "prompt": "A service reads `clock.GetUtcNow()` once for CreatedAt and again for ExpiresAt. What can go wrong?",
+     "choices": [
+      "The stamps can differ, so ExpiresAt is not CreatedAt plus 7 days",
+      "TimeProvider throws when it is read twice in one request scope",
+      "The second read returns local time instead of UTC",
+      "Nothing: every read inside one request returns the same instant"
+     ],
+     "answer": 0,
+     "explanation": "Each read returns the time of that read. One read per operation gives every timestamp of the action the same instant."
+    },
+    {
+     "key": "fund:csharp/21-testing-web-apps-seams-and-fakes/q10",
+     "prompt": "In a WebApplicationFactory test of the signup endpoint, what should be replaced with fakes?",
+     "choices": [
+      "Routing, model binding and validation, to keep the test fast",
+      "The JSON serializer, so the response can be compared as an object",
+      "The email sender and the clock, the edges the test must control",
+      "Everything except the endpoint under test"
+     ],
+     "answer": 2,
+     "explanation": "Replace what leaves the process and what the test must control. Everything else stays real, because that is what the test is meant to prove."
+    }
+   ],
+   "flashcards": [
+    {
+     "key": "fund:csharp/21-testing-web-apps-seams-and-fakes/c01",
+     "front": "What is a seam?",
+     "back": "A place where a test can change behaviour without editing the code there, such as an injected clock, id generator or outbound client."
+    },
+    {
+     "key": "fund:csharp/21-testing-web-apps-seams-and-fakes/c02",
+     "front": "Stub, fake, mock",
+     "back": "A stub returns canned answers, a fake is a small working implementation, and a mock records calls so a test can assert on them."
+    },
+    {
+     "key": "fund:csharp/21-testing-web-apps-seams-and-fakes/c03",
+     "front": "What does WebApplicationFactory<Program> do?",
+     "back": "It boots the app's real Program on an in-memory TestServer and hands out HttpClients whose requests go through the whole pipeline."
+    },
+    {
+     "key": "fund:csharp/21-testing-web-apps-seams-and-fakes/c04",
+     "front": "Where do test doubles go in a WebApplicationFactory test?",
+     "back": "In ConfigureTestServices, which runs after the app's own registrations: remove the real service, then add the fake."
+    },
+    {
+     "key": "fund:csharp/21-testing-web-apps-seams-and-fakes/c05",
+     "front": "Single resolve versus IEnumerable<T>",
+     "back": "One resolve returns the last registration, while IEnumerable<T> returns all of them, so a fake added without RemoveAll leaves the real one active there."
+    },
+    {
+     "key": "fund:csharp/21-testing-web-apps-seams-and-fakes/c06",
+     "front": "Why keep a SQLite :memory: connection open?",
+     "back": "The in-memory database lives only as long as its connection, and every new connection starts with an empty database."
+    },
+    {
+     "key": "fund:csharp/21-testing-web-apps-seams-and-fakes/c07",
+     "front": "What should an integration test assert?",
+     "back": "HTTP behaviour: the status code, headers such as Location, the response body, and the side effects the fakes recorded."
+    },
+    {
+     "key": "fund:csharp/21-testing-web-apps-seams-and-fakes/c08",
+     "front": "Why must a fake keep the real store's rules?",
+     "back": "A fake that allows what the database forbids, such as a duplicate unique key, lets tests pass for code that fails in production."
+    }
+   ],
+   "drillKeys": [
+    "fund-csharp/21-testing-web-apps-seams-and-fakes/01-clock-seam-and-invite-expiry",
+    "fund-csharp/21-testing-web-apps-seams-and-fakes/02-fake-repository-keeps-the-constraints"
+   ]
   }
  ]
 }
