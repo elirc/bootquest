@@ -172,6 +172,27 @@
         "Filter first, group the orders by customer and total each group, sort by total descending with the name as tie-breaker, keep the first n, and materialise the query before returning it.",
         "Keep only the paid orders, combine each customer's orders into one total, rank the totals from highest down with the name as a tie-breaker, keep the first few, and run the query right away into a list."
       ]
+    },
+    {
+      "slug": "02-bug-hunt-top-customers",
+      "title": "Bug hunt: top customers with GroupBy and a snapshot",
+      "difficulty": 2,
+      "skills": [
+        "GroupBy",
+        "deferred execution",
+        "code review"
+      ],
+      "instructions": "**Bug hunt.** The code in the editor is a plausible first attempt at drill 1, \"Top customers with GroupBy and a snapshot\". It compiles and passes some of the tests, but it has one real bug, the kind a reviewer should catch before it ships.\n\n**Your task.** Find the bug and fix it, changing as little as you can; the tests are the same as drill 1's. The spec is unchanged: Implement the stubbed local function `IReadOnlyList<CustomerTotal> TopCustomers(IEnumerable<Order> orders, int n)`:\n- only orders with `Status == \"paid\"` count\n- one `CustomerTotal(Customer, Total)` per customer, `Total` being the sum of that customer's paid order totals\n- sorted by `Total` descending, ties broken by `Customer` ascending (ordinal)\n- at most `n` results\n- the result is a materialised snapshot: changing the source list afterwards does not change it",
+      "starterHead": "// ─────────────────────────────────────────────────────────────────────────\n//  02 · bug hunt: top customers★★☆ core\n//  concepts: Where · GroupBy · OrderBy/ThenBy · ToList\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Filter, group, order, take: then materialise once.\n\nusing static Bootcamp.Check;\n\n// TODO: one real bug hides in this code: find it and fix it with the smallest change.\n\nIReadOnlyList<CustomerTotal> TopCustomers(IEnumerable<Order> orders, int n) =>\n    orders\n        .Where(o => o.Status == \"paid\")\n        .GroupBy(o => o.Customer)\n        .Select(g => new CustomerTotal(g.Key, g.Sum(o => o.Total)))\n        .OrderByDescending(c => c.Total)\n        .Take(n)\n        .ToList();\n\n",
+      "solutionHead": "// ─────────────────────────────────────────────────────────────────────────\n//  02 · bug hunt: top customers★★☆ core\n//  concepts: Where · GroupBy · OrderBy/ThenBy · ToList\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Filter, group, order, take: then materialise once.\n\nusing static Bootcamp.Check;\n\nIReadOnlyList<CustomerTotal> TopCustomers(IEnumerable<Order> orders, int n) =>\n    orders\n        .Where(o => o.Status == \"paid\")\n        .GroupBy(o => o.Customer)\n        .Select(g => new CustomerTotal(g.Key, g.Sum(o => o.Total)))\n        .OrderByDescending(c => c.Total)\n        .ThenBy(c => c.Customer, StringComparer.Ordinal)\n        .Take(n)\n        .ToList();\n\n",
+      "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"sums paid orders per customer\", () =>\n{\n    var orders = new List<Order> { new(\"ana\", 50m, \"paid\"), new(\"bo\", 70m, \"paid\"), new(\"ana\", 30m, \"paid\"), new(\"bo\", 999m, \"refunded\") };\n    Eq(TopCustomers(orders, 10), new[] { new CustomerTotal(\"ana\", 80m), new CustomerTotal(\"bo\", 70m) });\n});\n\nTest(\"ties are broken by customer name\", () =>\n{\n    var orders = new List<Order> { new(\"cy\", 10m, \"paid\"), new(\"al\", 10m, \"paid\"), new(\"bo\", 20m, \"paid\") };\n    Eq(TopCustomers(orders, 3).Select(c => c.Customer).ToList(), new[] { \"bo\", \"al\", \"cy\" });\n});\n\nTest(\"at most n results\", () =>\n{\n    var orders = new List<Order> { new(\"a\", 1m, \"paid\"), new(\"b\", 2m, \"paid\"), new(\"c\", 3m, \"paid\") };\n    Eq(TopCustomers(orders, 2).Count, 2);\n});\n\nTest(\"the result is a snapshot of the source\", () =>\n{\n    var orders = new List<Order> { new(\"ana\", 50m, \"paid\") };\n    var top = TopCustomers(orders, 5);\n    orders.Add(new Order(\"zed\", 500m, \"paid\"));\n    Eq(top.Count, 1);\n});\n\nTest(\"no paid orders gives an empty list (boundary)\", () =>\n    Eq(TopCustomers(new List<Order> { new(\"ana\", 5m, \"open\") }, 3).Count, 0));\n\n",
+      "tail": "// ──────────────────────────── types ──────────────────────────────────────\n\nrecord Order(string Customer, decimal Total, string Status);\nrecord CustomerTotal(string Customer, decimal Total);\n",
+      "explanation": "`OrderByDescending` is stable, so customers with equal totals keep the order their groups appeared in (`cy` before `al`), and the tie test expects name order. A secondary key, `ThenBy(c => c.Customer, StringComparer.Ordinal)`, breaks ties deterministically.",
+      "hints": [
+        "Run the tie test by hand: two customers with the same total, the later one alphabetically first in the input.",
+        "A stable sort keeps equal elements in input order; the spec asks for name order among equals.",
+        "Add a secondary ordering by customer name, ordinal, after the total."
+      ]
     }
   ]
 }
