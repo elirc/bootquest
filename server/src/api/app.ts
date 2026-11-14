@@ -57,7 +57,7 @@ import { reviewCardText } from './study-service.ts';
 import { conceptCardText, registerKeyIdeaRoutes, syncKeyIdeas } from './keyideas-service.ts';
 import { registerNotebookRoutes } from './notebook-service.ts';
 import { HonestyRuleError } from '../engines/attempts.ts';
-import { RECHECK_PREFIX, REDO_PREFIX } from '../engines/keyideas.ts';
+import { RECHECK_PREFIX, REDO_PREFIX, resolveSections, type ResolvedSection } from '../engines/keyideas.ts';
 import { campaignProgress, passRates, reviewStats, xpStats } from './stats-service.ts';
 import { registerS3Routes } from './s3-routes.ts';
 import { defaultRunners, type RunnerRegistry } from './runners.ts';
@@ -450,8 +450,11 @@ export function createApp(opts: AppOptions): Express {
     syncKeyIdeas(deps); // rv2: enrol what the passes earned, release today's redo card
     // W8: seeded cards (study-quest misses, flashcards) carry their text, resolved from the stamped pack;
     // rv2: concept cards (key ideas, redo, ebmiss, re-check, notebook) from the side files / their tables
+    // rv3 MF-6: the key-idea sections are resolved at most once for the whole page (never per concept card)
+    let sections: ResolvedSection[] | undefined;
+    const resolved = (): ResolvedSection[] => (sections ??= resolveSections(deps.db));
     const items = reviewQueue(deps.db, nowMs(deps.clock), q.limit ?? DEFAULT_QUEUE_LIMIT).map((it) => {
-      const card = reviewCardText(deps.seedItems, it.cardKey) ?? (it.kind === 'concept' ? conceptCardText(deps.db, deps.seedItems, it.cardKey) : undefined);
+      const card = reviewCardText(deps.seedItems, it.cardKey) ?? (it.kind === 'concept' ? conceptCardText(deps.db, deps.seedItems, it.cardKey, resolved()) : undefined);
       return card ? { ...it, card } : it;
     });
     sendJson(res, 200, ReviewQueueResponse.parse({ count: dueCount(deps.db, deps.clock), items }));

@@ -167,6 +167,32 @@ describe('key-concept cards (F1)', () => {
     const warn = vi.mocked(console.warn);
     warn.mockClear();
     await request(app).get('/api/keyideas');
+  it('rv3 MF-6: /reviews/queue resolves the key-idea sections at most once per request (never per concept card), and not at all when nothing changed', async () => {
+    for (const k of ['kx/a/01', 'kx/a/02', 'kx/b/01', 'kx/b/02', 'kx/b/03']) submit(tmp.db, clock, ids[k]!);
+    syncKeyIdeaCards(tmp.db, clock);
+    clock.advance(3 * DAY_MS);
+    const FULL = 'SELECT id, key, kind, title FROM unit WHERE retired_at IS NULL';
+    const all = vi.spyOn(tmp.db, 'all');
+    const fullResolves = (): number => all.mock.calls.filter((c) => String(c[0]).startsWith(FULL)).length;
+    const q = await request(app).get('/api/reviews/queue');
+    const concept = (q.body.items as { cardKey: string; card?: { front: string } }[]).filter((i) => i.cardKey.startsWith('keyidea:'));
+    expect(concept).toHaveLength(5);
+    for (const c of concept) expect(c.card?.front).toBeTruthy();
+    // nothing changed since the sync above: the memoised resolution serves the sync and all five cards
+    expect(fullResolves()).toBe(0);
+    // a new unit changes the unit table: exactly one fresh resolution for the next request
+    makeUnit(tmp.db, clock, { key: 'kx/a/03', kind: 'quiz' });
+    all.mockClear();
+    expect((await request(app).get('/api/reviews/queue')).body.items.filter((i: { cardKey: string }) => i.cardKey.startsWith('keyidea:'))).toHaveLength(5);
+    expect(fullResolves()).toBe(1);
+    // and the key-ideas page, the queue and the dashboard after it: none
+    all.mockClear();
+    await request(app).get('/api/keyideas');
+    await request(app).get('/api/keyideas/queue');
+    await request(app).get('/api/dashboard');
+    expect(fullResolves()).toBe(0);
+  });
+
     await request(app).get('/api/keyideas');
     const unknown = warn.mock.calls.filter((c) => String(c[0]).includes('kx/does-not-exist'));
     expect(unknown).toHaveLength(1);
