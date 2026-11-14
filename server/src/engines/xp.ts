@@ -206,7 +206,15 @@ export function awardXp(db: Db, input: XpAwardInput, now: Clock): XpAward {
       note = undefined;
     } else if (FIRST_TRY_ONLY_KINDS.has(x.kind) && firstTryMissed(db, unit.id, attempt.id)) {
       amount = 0;
-      note = 'first-try-missed';
+      // rv2 (smoke 0a): a REPEAT pass after the 0-XP first-try-missed pass says why it paid 0 ('already-awarded':
+      // the unit's pass was already accounted), as a repeat pass did before R4-09; only the first such pass
+      // carries the note
+      if (db.get('SELECT 1 AS x FROM xp_event WHERE unit_id = ? AND kind = ? LIMIT 1', unit.id, x.kind)) {
+        reason = 'already-awarded';
+        note = undefined;
+      } else {
+        note = 'first-try-missed';
+      }
     }
     const award = insertXp(db, { kind: x.kind, amount, reason, unitId: unit.id, attemptId: attempt.id, trackId: unit.track_id }, t);
     return note ? { ...award, note } : award;

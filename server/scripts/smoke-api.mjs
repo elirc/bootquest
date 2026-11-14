@@ -410,14 +410,21 @@ async function main() {
         JSON.stringify(c2),
       );
 
-      // 5. submit right: XP row
+      // 5. submit right after the failed first try: a pass, an XP row of 0 (rv B R4-09: a quick check pays only
+      //    when its FIRST graded submit passes; xp_event.reason is bound, so the row is 0 / null + note)
       const ok1 = await api(base, 'POST', `/api/units/${quizId}/submit`, { answer: quizRightServed });
       const c3 = counts();
-      step('submit right: XP row (+2)', ok1.json?.verdict === 'pass' && ok1.json.xp?.amount === 2 && c3.xp_event === c2.xp_event + 1, JSON.stringify(ok1.json?.xp));
+      step(
+        'submit right after a failed first try: pass, XP row of 0 (first-try-missed, R4-09)',
+        ok1.json?.verdict === 'pass' && ok1.json.xp?.amount === 0 && ok1.json.xp.reason === null && c3.xp_event === c2.xp_event + 1,
+        JSON.stringify(ok1.json?.xp),
+      );
 
-      // 6. submit right again: already-awarded 0
+      // 6. submit right again: already-awarded 0 (rv2: a repeat pass names its reason even when the first pass paid 0)
       const ok2 = await api(base, 'POST', `/api/units/${quizId}/submit`, { answer: quizRightServed });
       step('submit right again: 0 XP already-awarded', ok2.json?.xp?.amount === 0 && ok2.json.xp.reason === 'already-awarded', JSON.stringify(ok2.json?.xp));
+      // the ledger so far: the quiz paid 0 (R4-09); the review below pays 1
+      const XP0 = 1;
 
       // 6b. local-only lockdown (server/src/api/guard.ts): the cross-site CSRF shapes and a
       // DNS-rebinding Host are refused BEFORE any route runs: the irreversible reveal writes nothing
@@ -475,8 +482,8 @@ async function main() {
       // 10. dashboard reflects the ledger
       const d = await api(base, 'GET', '/api/dashboard');
       step(
-        'dashboard: xp total 3, 8 competencies, 120-day heatmap',
-        d.status === 200 && d.json?.xp?.total === 3 && d.json.competencies.length === 8 && d.json.heatmap.length === 120,
+        `dashboard: xp total ${XP0}, 8 competencies, 120-day heatmap`,
+        d.status === 200 && d.json?.xp?.total === XP0 && d.json.competencies.length === 8 && d.json.heatmap.length === 120,
         `xp=${d.json?.xp?.total}`,
       );
 
@@ -508,9 +515,11 @@ async function main() {
       const readingStep = cj.json?.acts?.[0]?.quests?.find((q) => q.kind === 'reading' && q.state === 'available');
       const att = readingStep ? await api(base, 'POST', `/api/units/${readingStep.unitId}/self-attest`, {}) : null;
       const dCamp = await api(base, 'GET', '/api/dashboard');
+      // rv C (D3): the default day has no campaign step (learner setting, migration 022, off until switched on;
+      // a switch is effective tomorrow); the act-1 reading still pays its 5 XP
       step(
-        'campaign slate slot: present, ticked by an act-1 reading self-attest (5 XP)',
-        slateNow.includes('campaign') && att?.status === 200 && att.json.xp.amount === 5 && dCamp.json?.slate?.items?.find((i) => i.slot === 'campaign')?.done === true,
+        'default slate: no campaign slot (rv C D3); an act-1 reading self-attest still pays 5 XP',
+        !slateNow.includes('campaign') && att?.status === 200 && att.json.xp.amount === 5 && !(dCamp.json?.slate?.items ?? []).some((i) => i.slot === 'campaign'),
         `slots ${slateNow.join(',')}; attest ${att?.status}`,
       );
       const lockedStep = cj.json?.acts?.[1]?.quests?.find((q) => q.kind === 'reading');
@@ -603,8 +612,8 @@ async function main() {
 
       const d2 = await api(base, 'GET', '/api/dashboard');
       step(
-        `dashboard xp total ${3 + 5 + wantXp + 2 + 4} after the BootForge submissions`,
-        d2.status === 200 && d2.json?.xp?.total === 3 + 5 + wantXp + 2 + 4,
+        `dashboard xp total ${XP0 + 5 + wantXp + 2 + 4} after the BootForge submissions`,
+        d2.status === 200 && d2.json?.xp?.total === XP0 + 5 + wantXp + 2 + 4,
         `xp=${d2.json?.xp?.total}`,
       );
 
@@ -679,7 +688,7 @@ async function main() {
         `xp=${JSON.stringify(csr.json?.xp)} ${csr.json?.result?.durationMs}ms warm`,
       );
       const d3 = await api(base, 'GET', '/api/dashboard');
-      step(`dashboard xp total ${3 + 5 + wantXp + 2 + 4 + csXp} after the C# submission`, d3.json?.xp?.total === 3 + 5 + wantXp + 2 + 4 + csXp, `xp=${d3.json?.xp?.total}`);
+      step(`dashboard xp total ${XP0 + 5 + wantXp + 2 + 4 + csXp} after the C# submission`, d3.json?.xp?.total === XP0 + 5 + wantXp + 2 + 4 + csXp, `xp=${d3.json?.xp?.total}`);
 
       // 10c-java. javabootcamp on the java track, graded by the REAL Java runner (javac + java per attempt)
       const jvTu = await api(base, 'GET', '/api/tracks/java/units');
@@ -786,8 +795,8 @@ async function main() {
       );
       const jvDash = await api(base, 'GET', '/api/dashboard');
       step(
-        `dashboard xp total ${3 + 5 + wantXp + 2 + 4 + csXp + javaXp} after the Java submission; drill:java slate slot present (now completable: javabootcamp drills exist)`,
-        jvDash.json?.xp?.total === 3 + 5 + wantXp + 2 + 4 + csXp + javaXp && (jvDash.json?.slate?.items ?? []).some((i) => i.slot === 'drill:java'),
+        `dashboard xp total ${XP0 + 5 + wantXp + 2 + 4 + csXp + javaXp} after the Java submission; no drill:java slate slot (rv C D3: drill sets are off by default)`,
+        jvDash.json?.xp?.total === XP0 + 5 + wantXp + 2 + 4 + csXp + javaXp && !(jvDash.json?.slate?.items ?? []).some((i) => i.slot === 'drill:java'),
         `xp=${jvDash.json?.xp?.total}`,
       );
 
@@ -841,10 +850,14 @@ async function main() {
         `xp=${JSON.stringify(sdR.json?.xp)} row=${JSON.stringify(sdXpRow)}`,
       );
       const sdDash = await api(base, 'GET', '/api/dashboard');
+      const sdSettings = await api(base, 'GET', '/api/settings/slate');
+      const sdCapable = (sdSettings.json?.todayTracks ?? []).find((t) => t.trackId === 'sysdesign');
+      // rv C (D3): every drill set is off on the default day; sysdesign stays slate-capable (migration 016 + the
+      // sysdrills bank) and is one setting away
       step(
-        'dashboard: drill:sysdesign slate slot present (migration 016 + the sysdrills bank)',
-        (sdDash.json?.slate?.items ?? []).some((i) => i.slot === 'drill:sysdesign'),
-        `slots ${(sdDash.json?.slate?.items ?? []).map((i) => i.slot).join(',')}`,
+        'default slate: no drill:sysdesign slot (rv C D3); sysdesign is slate-capable in /settings/slate, off',
+        !(sdDash.json?.slate?.items ?? []).some((i) => i.slot === 'drill:sysdesign') && sdSettings.status === 200 && sdCapable?.enabled === false,
+        `slots ${(sdDash.json?.slate?.items ?? []).map((i) => i.slot).join(',')}; sysdesign ${JSON.stringify(sdCapable ?? null)}`,
       );
 
       // 10d. W3c: the http-check lesson, graded by the REAL http runner against a fixture server
@@ -920,12 +933,12 @@ async function main() {
       const ebD = await api(base, 'GET', `/api/units/${ebUnit?.id}`);
       const ebLeak = ebItem.questions.flatMap((q) => q.keyPoints).some((kp) => ebD.text.includes(kp.text));
       const ebKey0 = await api(base, 'GET', `/api/units/${ebUnit?.id}/explain-back/key`);
-      const ebAns = await api(base, 'POST', `/api/units/${ebUnit?.id}/explain-back/answers`, { answers: ebItem.questions.map((_, i) => `smoke answer ${i + 1}`) });
+      const ebAns = await api(base, 'POST', `/api/units/${ebUnit?.id}/explain-back/answers`, { answers: ebItem.questions.map((_, i) => `smoke answer ${i + 1}: an answer of record needs at least fifteen words per question, so this one is long enough to be stored`) });
       const ebKey = await api(base, 'GET', `/api/units/${ebUnit?.id}/explain-back/key`);
       const allIds = ebItem.questions.flatMap((q, qi) => q.keyPoints.map((_, ki) => `q${qi + 1}k${ki + 1}`));
       const ebScore = await api(base, 'POST', `/api/units/${ebUnit?.id}/explain-back/self-score`, { perKeyPoint: Object.fromEntries(allIds.map((k) => [k, 'covered'])) });
       step(
-        'ladder flow (real explain-back, jstrain2.2): questions only, key 403 before the answer, immutable answer -> key -> self-score 100% (+20 XP, evidence)',
+        'ladder flow (real explain-back, jstrain2.2): questions only, key 403 before the answer, immutable answer (>= 15 words each, rv B R4-07) -> key -> self-score 100% (+20 XP, evidence)',
         ebD.status === 200 && ebD.json.explainBack?.questions?.length === ebItem.questions.length && !ebLeak &&
           ebKey0.status === 403 && ebAns.status === 200 && ebKey.status === 200 &&
           ebScore.status === 200 && ebScore.json.passed === true && ebScore.json.xp?.amount === 20 && ebScore.json.evidenceIds.length > 0,
@@ -941,12 +954,14 @@ async function main() {
       const kK = await api(base, 'GET', `/api/units/${kUnit?.id}/kata/key`);
       const kS = kK.json?.defects ? await api(base, 'POST', `/api/units/${kUnit?.id}/kata/self-score`, { perDefect: Object.fromEntries(kK.json.defects.map((d) => [d.id, 'caught'])) }) : null;
       const kStats = await api(base, 'GET', '/api/stats/katas');
+      // rv B (R3-04): G1 counts only the defects evidenced in the patched lines
+      const kPatched = (kK.json?.defects ?? []).filter((d) => d.evidence?.in === 'patched').length;
       step(
-        'ladder flow (real kata, tenantadmin): diff + context without a defect count -> findings -> key -> catch rate 100% (+15 XP) -> G1 stats count it (solo)',
+        'ladder flow (real kata, tenantadmin): diff + context without a defect count -> findings -> key -> catch rate 100% (+15 XP) -> G1 stats count its patched-line defects (solo)',
         kD.status === 200 && typeof kD.json.kata?.diff === 'string' && !kD.text.includes('defectCount') &&
           kF.status === 200 && kK.status === 200 && kS?.status === 200 && kS.json.catchRate === 1 && kS.json.xp?.amount === 15 &&
-          kStats.json?.katasScored === 1 && kStats.json.assistedCount === 0 && kStats.json.defectsCaught === kK.json.defects.length,
-        `unit ${kUnit?.key}, ${kK.json?.defects?.length} defect(s)`,
+          kPatched > 0 && kStats.json?.katasScored === 1 && kStats.json.assistedCount === 0 && kStats.json.defectsCaught === kPatched && kStats.json.defectsTotal === kPatched,
+        `unit ${kUnit?.key}, ${kK.json?.defects?.length} defect(s), ${kPatched} in the patched lines; stats ${JSON.stringify(kStats.json ?? null)}`,
       );
 
       // 10i. W7: campaign-act link of a ladder unit (display only; ladder units never inherit an act lock)
@@ -1221,10 +1236,10 @@ async function main() {
         const n1 = await api(nBase, 'GET', `/api/units/${nUnit?.id}/notes`);
         const missedKeys = new Set(qs.slice(0, 3).map((q) => q.itemKey));
         step(
-          'notes gate: /run (409) releases nothing; after a FAILED submit the 9 questions answered right are explained, the 3 missed stay withheld until their review cards are due (no key the day it was missed)',
+          'notes gate: /run (409) releases nothing; after a FAILED submit nothing tells right from wrong (rv B R4-01): all 12 explanations wait, the missed ones for their review cards (due tomorrow)',
           nRun.status === 409 && nAfterRun.json?.explanations?.state === 'locked' &&
-            nFail.json?.verdict === 'fail' && n1.json?.explanations?.state === 'partial' && n1.json.explanations.withheld === 3 && n1.json.explanations.released.length === 9 &&
-            n1.json.explanations.released.every((x) => !missedKeys.has(x.target)) && typeof n1.json.explanations.nextAt === 'number' && n1.json.explanations.nextAt > Date.now(),
+            nFail.json?.verdict === 'fail' && n1.json?.explanations?.state === 'locked' && n1.json.explanations.withheld === 12 && n1.json.explanations.released.length === 0 &&
+            missedKeys.size === 3 && typeof n1.json.explanations.nextAt === 'number' && n1.json.explanations.nextAt > Date.now(),
           n1.json?.explanations?.message,
         );
         const nPass = await api(nBase, 'POST', `/api/units/${nUnit?.id}/submit`, { answers: right });
