@@ -59,45 +59,6 @@
      "ConcurrentHashMap.merge"
     ]
    }
-  },
-  {
-   "unit": {
-    "key": "fund-java/14-threads-executors-and-synchronization/02-bug-hunt-parallel-word-count",
-    "track": "java",
-    "kind": "drill",
-    "title": "Bug hunt: count words on several threads without losing updates",
-    "phase": "14-threads-executors-and-synchronization",
-    "difficulty": 3,
-    "competencies": [
-     "language-fluency"
-    ],
-    "prerequisites": [],
-    "checks": [
-     {
-      "spec": {
-       "type": "drill-java",
-       "files": {
-        "tests": "    // ─── tests ───────────────────────────────────────────────────────────\n    public static void main(String[] args) {\n        test(\"small input is counted exactly\", () -> eq(new TreeMap<>(countWords(List.of(\"a b\", \"B c\", \"a\"), 2)), new TreeMap<>(Map.of(\"a\", 2, \"b\", 2, \"c\", 1))));\n        test(\"many lines on many threads lose no updates\", () -> {\n            var lines = new ArrayList<String>();\n            for (int i = 0; i < 4000; i++) lines.add(\"alpha beta alpha\");\n            var m = countWords(lines, 8);\n            eq(m.get(\"alpha\"), 8000);\n            eq(m.get(\"beta\"), 4000);\n        });\n        test(\"one thread works too\", () -> eq(countWords(List.of(\"x  x\\tY\"), 1), Map.of(\"x\", 2, \"y\", 1)));\n        test(\"no lines gives an empty map (boundary)\", () -> ok(countWords(List.of(), 3).isEmpty(), \"expected empty\"));\n        test(\"fewer than one thread is rejected\", () -> raises(IllegalArgumentException.class, () -> countWords(List.of(\"a\"), 0)));\n        System.exit(report());\n    }\n    // ─── end tests ───────────────────────────────────────────────────────\n",
-        "tail": "}\n"
-       },
-       "className": "Exercise",
-       "timeoutMs": 10000
-      }
-     }
-    ]
-   },
-   "origin": {
-    "id": "14-threads-executors-and-synchronization/02-bug-hunt-parallel-word-count",
-    "type": "code",
-    "module": "14-threads-executors-and-synchronization",
-    "lesson": "drills",
-    "position": 1,
-    "skills": [
-     "debugging",
-     "ExecutorService",
-     "ConcurrentHashMap.merge"
-    ]
-   }
   }
  ],
  "content": {
@@ -110,17 +71,6 @@
     "All tasks may write to the same map, so the map and each update must be safe for concurrent use.",
     "Give all tasks one thread-safe map and update each count atomically rather than reading and then writing, run one task per line on a fixed pool, wait on every result, and shut the pool down whatever happens.",
     "Give every task the same thread-safe map and update counts with its atomic combine operation, wait for each task so failures are noticed, and always close the pool afterwards, whatever happened."
-   ]
-  },
-  "fund-java/14-threads-executors-and-synchronization/02-bug-hunt-parallel-word-count": {
-   "instructions": "**Skills:** debugging · ExecutorService · ConcurrentHashMap.merge  \n**Level:** ★★★\n\n**Bug hunt.** The code in the editor is a plausible first attempt at drill 1, \"Count words on several threads without losing updates\". It passes some of the tests, but it has one real bug, the kind a reviewer should catch before it ships.\n\n**Your task.** Find the bug and fix it, changing as little as you can; the tests are the same as drill 1's. The spec is unchanged: Implement `static Map<String, Integer> countWords(List<String> lines, int threads)`:\n- split each line on runs of whitespace; words are lower-cased with `Locale.ROOT`; empty pieces are ignored\n- the lines are processed by an `ExecutorService` with `threads` threads, each task handling some of the lines\n- the result maps each word to its total count and must be exact\n- the executor is shut down before the method returns, also when a task fails (a task failure is rethrown as an unchecked exception)\n- `threads` below 1 throws `IllegalArgumentException`\n",
-   "starter": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · parallel word count★★★\n//  concepts: ExecutorService · ConcurrentHashMap · shutdown in finally\n// ─────────────────────────────────────────────────────────────────────────\n\nimport static bootcamp.Check.*;\n\nimport java.util.*;\nimport java.util.concurrent.*;\n\nclass Exercise {\n    // TODO: one bug hides in this code. Run the tests, find it and fix it.\n\n    /** Exact word counts computed on a pool of threads; the pool never leaks. */\n    static Map<String, Integer> countWords(List<String> lines, int threads) {\n        if (threads < 1) throw new IllegalArgumentException(\"threads must be >= 1\");\n        var counts = new HashMap<String, Integer>();\n        ExecutorService pool = Executors.newFixedThreadPool(threads);\n        try {\n            var futures = new ArrayList<Future<?>>();\n            for (var line : lines) {\n                futures.add(pool.submit(() -> {\n                    for (var w : line.strip().split(\"\\\\s+\")) {\n                        if (!w.isEmpty()) counts.merge(w.toLowerCase(Locale.ROOT), 1, Integer::sum);\n                    }\n                }));\n            }\n            for (var f : futures) f.get();\n        } catch (ExecutionException e) {\n            throw new IllegalStateException(\"counting failed\", e.getCause());\n        } catch (InterruptedException e) {\n            Thread.currentThread().interrupt();\n            throw new IllegalStateException(\"interrupted\", e);\n        } finally {\n            pool.shutdown();\n        }\n        return counts;\n    }\n\n    // ─── tests ───────────────────────────────────────────────────────────\n    public static void main(String[] args) {\n        test(\"small input is counted exactly\", () -> eq(new TreeMap<>(countWords(List.of(\"a b\", \"B c\", \"a\"), 2)), new TreeMap<>(Map.of(\"a\", 2, \"b\", 2, \"c\", 1))));\n        test(\"many lines on many threads lose no updates\", () -> {\n            var lines = new ArrayList<String>();\n            for (int i = 0; i < 4000; i++) lines.add(\"alpha beta alpha\");\n            var m = countWords(lines, 8);\n            eq(m.get(\"alpha\"), 8000);\n            eq(m.get(\"beta\"), 4000);\n        });\n        test(\"one thread works too\", () -> eq(countWords(List.of(\"x  x\\tY\"), 1), Map.of(\"x\", 2, \"y\", 1)));\n        test(\"no lines gives an empty map (boundary)\", () -> ok(countWords(List.of(), 3).isEmpty(), \"expected empty\"));\n        test(\"fewer than one thread is rejected\", () -> raises(IllegalArgumentException.class, () -> countWords(List.of(\"a\"), 0)));\n        System.exit(report());\n    }\n    // ─── end tests ───────────────────────────────────────────────────────\n}\n",
-   "solution": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · parallel word count★★★\n//  concepts: ExecutorService · ConcurrentHashMap · shutdown in finally\n// ─────────────────────────────────────────────────────────────────────────\n\nimport static bootcamp.Check.*;\n\nimport java.util.*;\nimport java.util.concurrent.*;\n\nclass Exercise {\n\n    /** Exact word counts computed on a pool of threads; the pool never leaks. */\n    static Map<String, Integer> countWords(List<String> lines, int threads) {\n        if (threads < 1) throw new IllegalArgumentException(\"threads must be >= 1\");\n        var counts = new ConcurrentHashMap<String, Integer>();\n        ExecutorService pool = Executors.newFixedThreadPool(threads);\n        try {\n            var futures = new ArrayList<Future<?>>();\n            for (var line : lines) {\n                futures.add(pool.submit(() -> {\n                    for (var w : line.strip().split(\"\\\\s+\")) {\n                        if (!w.isEmpty()) counts.merge(w.toLowerCase(Locale.ROOT), 1, Integer::sum);\n                    }\n                }));\n            }\n            for (var f : futures) f.get();\n        } catch (ExecutionException e) {\n            throw new IllegalStateException(\"counting failed\", e.getCause());\n        } catch (InterruptedException e) {\n            Thread.currentThread().interrupt();\n            throw new IllegalStateException(\"interrupted\", e);\n        } finally {\n            pool.shutdown();\n        }\n        return counts;\n    }\n\n    // ─── tests ───────────────────────────────────────────────────────────\n    public static void main(String[] args) {\n        test(\"small input is counted exactly\", () -> eq(new TreeMap<>(countWords(List.of(\"a b\", \"B c\", \"a\"), 2)), new TreeMap<>(Map.of(\"a\", 2, \"b\", 2, \"c\", 1))));\n        test(\"many lines on many threads lose no updates\", () -> {\n            var lines = new ArrayList<String>();\n            for (int i = 0; i < 4000; i++) lines.add(\"alpha beta alpha\");\n            var m = countWords(lines, 8);\n            eq(m.get(\"alpha\"), 8000);\n            eq(m.get(\"beta\"), 4000);\n        });\n        test(\"one thread works too\", () -> eq(countWords(List.of(\"x  x\\tY\"), 1), Map.of(\"x\", 2, \"y\", 1)));\n        test(\"no lines gives an empty map (boundary)\", () -> ok(countWords(List.of(), 3).isEmpty(), \"expected empty\"));\n        test(\"fewer than one thread is rejected\", () -> raises(IllegalArgumentException.class, () -> countWords(List.of(\"a\"), 0)));\n        System.exit(report());\n    }\n    // ─── end tests ───────────────────────────────────────────────────────\n}\n",
-   "explanation": "A HashMap updated by several threads at once loses increments (and can corrupt its buckets), so the totals come out short. ConcurrentHashMap's `merge` is atomic per key; waiting on every future and shutting the pool down in `finally` were already right.",
-   "hints": [
-    "Count many lines on many threads and compare the total with the number of words.",
-    "Several tasks update the same map at once, and HashMap gives no guarantee under concurrent writes.",
-    "Use a map designed for concurrent updates whose merge is atomic per key."
    ]
   }
  }
