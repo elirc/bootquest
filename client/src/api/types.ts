@@ -150,6 +150,9 @@ export type { DesignDimension, DesignDimensionDto, DesignProfileResponse, Interv
 // rv2 S3: the weekly review (F7)
 import type { WeekReflectionBody, WeekReflectionResponse, WeekResponse } from '@bootquest/shared/api-ext';
 export type { WeekReflectionBody, WeekReflectionResponse, WeekResponse };
+// rv2 S3: confidence tags + calibration (F9, stretch)
+import type { CalibrationResponse, Confidence, ConfidenceResponse } from '@bootquest/shared/api-ext';
+export type { CalibrationResponse, Confidence, ConfidenceResponse };
 
 /**
  * f52 wave B (app ruling 7): lesson aids of a Fundamentals topic (GET /units/:id/lesson-aids). Declared
@@ -491,6 +494,11 @@ export interface BootQuestApi {
   getWeek(start?: string): Promise<WeekResponse>;
   /** POST /api/week/reflection — the three answers for a week (a later save supersedes; 0 XP). */
   saveWeekReflection(body: WeekReflectionBody): Promise<WeekReflectionResponse>;
+  // ---- rv2 S3 (F9): confidence tags (never graded) + calibration
+  /** POST /api/attempts/:id/confidence — the tag picked before the result, filed right after the attempt exists. */
+  tagConfidence(attemptId: number, confidence: Confidence): Promise<ConfidenceResponse>;
+  /** GET /api/stats/calibration — tagged answers and passes per confidence level. */
+  getCalibration(): Promise<CalibrationResponse>;
 }
 
 /** Codes the client can raise itself on top of the server's envelope codes. */

@@ -55,6 +55,8 @@ import {
   type InterviewMetaResponse,
   type WeekReflectionResponse,
   type WeekResponse,
+  type CalibrationResponse,
+  type ConfidenceResponse,
   type RecapPromptsResponse,
   type RecapRevealResponse,
   type RecapSubmitResponse,
@@ -235,5 +237,8 @@ export function createHttpApi(baseUrl = '/api', fetchImpl: typeof fetch = (...a)
     // rv2 S3: the weekly review
     getWeek: (start) => call<WeekResponse>(`/week${start ? `?start=${encodeURIComponent(start)}` : ''}`),
     saveWeekReflection: (b) => post<WeekReflectionResponse>('/week/reflection', { start: b.start, answers: b.answers }),
+    // rv2 S3 (F9)
+    tagConfidence: (attemptId, confidence) => post<ConfidenceResponse>(`/attempts/${attemptId}/confidence`, { confidence }),
+    getCalibration: () => call<CalibrationResponse>('/stats/calibration'),
   };
 }

@@ -8,6 +8,7 @@ import {
   type GateStatusResponse,
   type LessonAids,
   type LessonCheck,
+  type Confidence,
   type PracticeResponse,
   type StudyQuestPublic,
   type SubmitResponse,
@@ -107,6 +108,29 @@ function LessonHidden({ onShow }: { onShow: () => void }) {
 }
 
 type Mode = 'graded' | 'practice';
+
+// ---------------------------------------------------------------- rv2 S3 (F9): the confidence tag
+
+export const CONFIDENCE_LABEL: Record<Confidence, string> = { sure: 'Sure', unsure: 'Unsure', guess: 'Guessing' };
+
+/**
+ * rv2 S3 (PLAN F9, stretch): "how sure are you?" on a graded answer, picked BEFORE the result is known and filed
+ * right after the attempt exists (POST /attempts/:id/confidence). Optional, never graded, 0 XP: it feeds the
+ * calibration panel on Stats only.
+ */
+export function ConfidencePick({ value, onChange, disabled, name }: { value: Confidence | null; onChange: (c: Confidence | null) => void; disabled?: boolean; name: string }) {
+  return (
+    <span className="seg confidence-pick" role="radiogroup" aria-label="How sure are you? (optional)" data-testid="confidence-pick">
+      <span className="muted small">How sure?</span>
+      {(Object.keys(CONFIDENCE_LABEL) as Confidence[]).map((c) => (
+        <label key={c} className={`seg-opt${value === c ? ' on' : ''}`}>
+          <input type="radio" name={name} checked={value === c} disabled={disabled} onChange={() => onChange(c)} aria-label={`Confidence: ${CONFIDENCE_LABEL[c]}`} />
+          {CONFIDENCE_LABEL[c]}
+        </label>
+      ))}
+    </span>
+  );
+}
 
 // ---------------------------------------------------------------- rv2 S3 (F4): the pretest
 
@@ -249,6 +273,8 @@ function StudyQuest({
   const [mode, setMode] = useState<Mode>('graded');
   const [answers, setAnswers] = useState<(number | null)[]>(() => sq.questions.map(() => null));
   const [assisted, setAssisted] = useState(false);
+  // rv2 S3 (F9): the optional confidence tag of this graded try
+  const [confidence, setConfidence] = useState<Confidence | null>(null);
   // U2: the learner opened the lesson during this try (locks "I had help" on until the try ends)
   const [lessonShown, setLessonShown] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -341,6 +367,8 @@ function StudyQuest({
         setPractice(await api.practiceUnit(unitId, { answers: answers as number[] }));
       } else {
         const r = await api.submitUnit(unitId, { answers: answers as number[], selfAssisted: assisted });
+        // rv2 S3 (F9): the tag was picked before the result; a failed save is silent (it is never part of the grade)
+        if (confidence !== null) void api.tagConfidence(r.attempt.id, confidence).catch(() => undefined);
         setSubmit(r);
         if (r.verdict === 'pass') setDone(true);
         loadNotes(); // explanations may have been released by this answer
@@ -370,6 +398,7 @@ function StudyQuest({
     // a new graded try is closed-book again
     setLessonShown(false);
     setAssisted(false);
+    setConfidence(null);
     setStarted(true);
   };
 
@@ -684,6 +713,7 @@ function StudyQuest({
                   <input type="checkbox" checked={assisted} onChange={(e) => setAssisted(e.target.checked)} disabled={lessonShown} />I had help
                 </label>
               )}
+              {mode === 'graded' && <ConfidencePick value={confidence} onChange={setConfidence} disabled={busy} name={`confidence-${unitId}`} />}
               {fund && (
                 <button
                   ref={backToQuestions}

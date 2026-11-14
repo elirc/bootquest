@@ -71,6 +71,8 @@ import { recordInterviewMeta } from './ladder-service.ts';
 import { designProfile } from './stats-service.ts';
 // rv2 S3 (F7): the weekly review
 import { registerWeekRoutes } from './week-service.ts';
+// rv2 S3 (F9, stretch): confidence tags + calibration
+import { registerConfidenceRoutes } from './confidence-service.ts';
 import { EvidenceListResponseExt, FundamentalsResponseExt, HintsResponse, HintTakenResponse, LessonAidsResponse } from '@bootquest/shared/api-ext';
 import { getFundamentals, getLessonAids } from './fundamentals-service.ts';
 import { getHints, takeHint } from './hints-service.ts';
@@ -529,6 +531,7 @@ export function createApp(opts: AppOptions): Express {
     sendJson(res, 200, DesignProfileResponse.parse(designProfile(ladder)));
   }));
   registerWeekRoutes(router, deps); // rv2 S3 (F7): GET /week, POST /week/reflection
+  registerConfidenceRoutes(router, deps); // rv2 S3 (F9): POST /attempts/:id/confidence, GET /stats/calibration
 
   app.use('/api', router);
 

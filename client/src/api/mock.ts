@@ -113,7 +113,7 @@ import type { XpByTrack } from '@bootquest/shared/api';
 import { G1_MIN_DEFECTS, G1_TARGET_RATE, PROMOTION_MIN_COVERAGE } from '@bootquest/shared/thresholds';
 import { ebMeetsGate, ebTally } from '../lib/eb-weights';
 import { DESIGN_DIMENSIONS } from '@bootquest/shared/api-ext';
-import type { DesignProfileResponse, InterviewMetaResponse, WeekReflectionResponse, WeekResponse } from './types';
+import type { CalibrationResponse, Confidence, ConfidenceResponse, DesignProfileResponse, InterviewMetaResponse, WeekReflectionResponse, WeekResponse } from './types';
 import { WEEK_REFLECTION_QUESTIONS } from '@bootquest/shared/api-ext';
 
 /** Private, fixture-only grading material. Never crosses the API boundary. */
@@ -306,6 +306,7 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
   const notebook: ErrorNoteDto[] = [];
   const interviewMeta: InterviewMetaResponse[] = []; // rv2 S3
   const reflections = new Map<string, { answers: string[]; at: number }>(); // rv2 S3 (F7)
+  const confidences = new Map<number, Confidence>(); // rv2 S3 (F9)
   const studyMissCards = new Set<string>();
   const studyPassed = new Set<number>();
   // "Learn more": units with a graded study-quiz submit, and code units with a verified pass
@@ -1756,6 +1757,19 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
         reflections.set(s, { answers: b.answers.map((a) => a.trim()), at: NOW });
         return { start: s, savedAt: NOW };
       }),
+    // rv2 S3 (F9): one tag per attempt; the mock's calibration counts the tags only (no pass join)
+    tagConfidence: (attemptId, confidence) =>
+      wrap((): ConfidenceResponse => {
+        if (confidences.has(attemptId)) throw err(409, 'ALREADY_ANSWERED', `attempt ${attemptId} already has its confidence tag`);
+        confidences.set(attemptId, confidence);
+        return { attemptId, confidence };
+      }),
+    getCalibration: () =>
+      wrap((): CalibrationResponse => ({
+        levels: (['sure', 'unsure', 'guess'] as const).map((c) => ({ confidence: c, answers: 0, passed: 0, passRate: null })),
+        pending: confidences.size,
+        sureButFailed: 0,
+      })),
     getDesignProfile: () =>
       wrap((): DesignProfileResponse => {
         const e = [...interviewMeta].map((m) => m.elapsedMs).sort((a, b) => a - b);

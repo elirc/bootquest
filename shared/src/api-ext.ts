@@ -879,3 +879,30 @@ export const WeekReflectionBody = z
 export type WeekReflectionBody = z.infer<typeof WeekReflectionBody>;
 export const WeekReflectionResponse = z.object({ start: dayKeyStr, savedAt: z.number().int() }).strict();
 export type WeekReflectionResponse = z.infer<typeof WeekReflectionResponse>;
+
+/** F9 (stretch): a confidence tag on a graded answer, picked before the result is known (migration 027). */
+export const CONFIDENCE_LEVELS = ['sure', 'unsure', 'guess'] as const;
+export const Confidence = z.enum(CONFIDENCE_LEVELS);
+export type Confidence = z.infer<typeof Confidence>;
+/** The tag is filed right after the attempt row exists; later than this it is refused (it would not be blind). */
+export const CONFIDENCE_WINDOW_MS = 10 * 60 * 1000;
+/** POST /attempts/:id/confidence */
+export const ConfidenceBody = z.object({ confidence: Confidence }).strict();
+export type ConfidenceBody = z.infer<typeof ConfidenceBody>;
+export const ConfidenceResponse = z.object({ attemptId: z.number().int().positive(), confidence: Confidence }).strict();
+export type ConfidenceResponse = z.infer<typeof ConfidenceResponse>;
+/**
+ * GET /stats/calibration: per confidence level, the tagged graded answers and how many passed (a quiz gate / quick
+ * check: a verified pass; an explain-back answer of record: its self-score passed). `pending` = explain-back answers
+ * not self-scored yet (not counted either way). `sureButFailed` names the overconfidence that matters most.
+ */
+export const CalibrationResponse = z
+  .object({
+    levels: z.array(
+      z.object({ confidence: Confidence, answers: z.number().int().min(0), passed: z.number().int().min(0), passRate: z.number().min(0).max(1).nullable() }).strict(),
+    ),
+    pending: z.number().int().min(0),
+    sureButFailed: z.number().int().min(0),
+  })
+  .strict();
+export type CalibrationResponse = z.infer<typeof CalibrationResponse>;

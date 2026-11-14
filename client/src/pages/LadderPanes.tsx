@@ -42,6 +42,8 @@ import { InlineProse } from '../lib/prose';
 import { useTracksRefresh } from '../lib/tracks';
 import { competencyLabel } from '../lib/view';
 import { NotebookLine } from './Player/NotebookLine';
+import { ConfidencePick } from './StudyQuestPane';
+import type { Confidence } from '../api/types';
 
 const fmtPct = (x: number) => `${Math.round(x * 1000) / 10}%`;
 
@@ -555,6 +557,8 @@ export function ExplainBackPane({ detail }: { detail: UnitDetail }) {
   const designIt = detail.unit.trackId === 'sysdesign' && detail.unit.kind === 'explain-back';
   const [interviewAt, setInterviewAt] = useState<number | null>(null);
   const [metaNote, setMetaNote] = useState<string | null>(null);
+  // rv2 S3 (F9): the optional confidence tag of the answer of record (picked before the key is shown)
+  const [confidence, setConfidence] = useState<Confidence | null>(null);
   const { answers, assisted } = draft.value;
   // rv B (R3-05): a G2 delegation brief is OPEN-BOOK, with the repo tree pinned at the set's sha
   const g2 = detail.unit.key.startsWith('ladder/g2/');
@@ -611,6 +615,13 @@ export function ExplainBackPane({ detail }: { detail: UnitDetail }) {
           await api.recordInterviewMeta(id, { attemptId: rec.attemptId, elapsedMs: Math.min(86_400_000, Math.max(0, Date.now() - interviewAt)), timeBoxMs: INTERVIEW_TIME_BOX_MS, blind });
         } catch (e) {
           setMetaNote(`The interview time was not saved: ${errorText(e)}`);
+        }
+      }
+      if (confidence !== null) {
+        try {
+          await api.tagConfidence(rec.attemptId, confidence);
+        } catch {
+          // never part of the answer of record: the key opens regardless
         }
       }
       setStored(true);
@@ -771,6 +782,7 @@ export function ExplainBackPane({ detail }: { detail: UnitDetail }) {
           </ol>
           <div className="toolbar">
             <HelpBox checked={assisted} onChange={(v) => draft.set((d) => ({ ...d, assisted: v }))} disabled={frozen} />
+            <ConfidencePick value={confidence} onChange={setConfidence} disabled={frozen} name={`eb-confidence-${id}`} />
             <span className="toolbar-spacer" />
             <button type="button" className="btn btn-primary" disabled={!ready || frozen} onClick={() => setConfirming(true)}>
               <Icon name={locked ? 'lock' : 'check'} /> Submit answers

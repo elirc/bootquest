@@ -4,6 +4,7 @@ import { useApi } from '../api/context';
 import { errorText } from '../api/errors';
 import type {
   AttemptDetailResponse,
+  CalibrationResponse,
   CampaignProgressResponse,
   CheckType,
   CompetencyId,
@@ -50,9 +51,10 @@ export function StatsPage() {
   const katas = useAsync(() => api.getKataStats(), [api]);
   const weak = useAsync(() => api.getWeakSpots(), [api]);
   const design = useAsync(() => api.getDesignProfile(), [api]); // rv2 S3 (F5)
+  const calib = useAsync(() => api.getCalibration(), [api]); // rv2 S3 (F9)
   // settled once = laid out for good (a later Retry puts that one panel back into loading, in place)
   const [panelsSettled, setPanelsSettled] = useState(false);
-  const allSettled = [xp, rates, reviews, campaign, katas, weak, design].every((x) => x.status !== 'loading');
+  const allSettled = [xp, rates, reviews, campaign, katas, weak, design, calib].every((x) => x.status !== 'loading');
   if (allSettled && !panelsSettled) setPanelsSettled(true);
   const grid = q.data ? buildHeatGrid(q.data.heatmap, q.data.today) : null;
   const days = q.data?.heatmap ?? [];
@@ -103,6 +105,7 @@ export function StatsPage() {
             <CampaignProgressPanel q={campaign} />
             <CatchRatePanel q={katas} />
             <DesignProfilePanel q={design} />
+            <CalibrationPanel q={calib} />
             {/* rv wave C (R4-20): the competency ladder lives here, off the dashboard, until a promotion path exists */}
             <div className="span-all">
               <CompetencyPanel rows={q.data.competencies} today={q.data.today} dueRetestUnits={new Set<number>()} />
@@ -561,6 +564,52 @@ function DesignProfileBody({ p }: { p: DesignProfileResponse }) {
       )}
       {interview}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------- rv2 S3 (F9): calibration
+
+const CONF_LABEL: Record<CalibrationResponse['levels'][number]['confidence'], string> = { sure: 'Sure', unsure: 'Unsure', guess: 'Guessing' };
+
+function CalibrationPanel({ q }: { q: Loaded<CalibrationResponse> }) {
+  return (
+    <Panel title="Calibration">
+      {q.status !== 'ready' ? (
+        <LoadState error={q.error} onRetry={q.reload} minHeight={120} />
+      ) : q.data.levels.every((l) => l.answers === 0) ? (
+        <p className="muted" data-testid="calibration-empty">
+          No tagged answer graded yet. Pick &ldquo;How sure?&rdquo; before you submit a quiz gate or an explain-back: this panel then compares how sure you
+          were with how often you passed.{q.data.pending > 0 ? ` ${q.data.pending} tagged explain-back answer${q.data.pending === 1 ? '' : 's'} not self-scored yet.` : ''}
+        </p>
+      ) : (
+        <div data-testid="calibration">
+          <table className="table small">
+            <thead>
+              <tr>
+                <th scope="col">You said</th>
+                <th scope="col">Answers</th>
+                <th scope="col">Passed</th>
+              </tr>
+            </thead>
+            <tbody>
+              {q.data.levels.map((l) => (
+                <tr key={l.confidence} data-confidence={l.confidence}>
+                  <th scope="row">{CONF_LABEL[l.confidence]}</th>
+                  <td>{l.answers}</td>
+                  <td>{l.passRate === null ? '' : `${l.passed} (${Math.round(l.passRate * 100)}%)`}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {q.data.sureButFailed > 0 && (
+            <p className="small" data-testid="calibration-sure-failed">
+              {q.data.sureButFailed} answer{q.data.sureButFailed === 1 ? '' : 's'} you were sure of did not pass: those are the ones to re-read first.
+            </p>
+          )}
+          {q.data.pending > 0 && <p className="muted small">{q.data.pending} tagged explain-back answer{q.data.pending === 1 ? '' : 's'} not self-scored yet.</p>}
+        </div>
+      )}
+    </Panel>
   );
 }
 
