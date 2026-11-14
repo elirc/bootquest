@@ -10,6 +10,8 @@ import { ConfigError, loadConfig, resolveSubmissionFile, type ProjectConfig } fr
 import { formatDashboard, formatError, formatProject, formatRun, formatSlateSettings, formatSubmit, formatSync, formatToday } from './format.ts';
 import { classifyUnit, resolveUnit, type Delivery } from './units.ts';
 import { formatMutation, MutateError, mutateProject, spawnTool, type ToolRunner } from './mutate.ts';
+import type { WeekResponse } from '@bootquest/shared/api-ext';
+import { formatWeek } from './week.ts';
 
 /**
  * Exit codes (scripts depend on these):
@@ -319,6 +321,23 @@ export function buildProgram(io: CliIo, setExit: (code: number) => void): Comman
       });
       if ('tags' in r && r.tags.length > 0) io.out(`Tags: ${r.tags.map((t) => `${t.tag} (${t.count})`).join(', ')}`);
       if (r.count > 0) io.out(`Grade them in the app: ${client.server}/review${o.keyideas ? `?mode=keyideas${o.tag ? `&tag=${encodeURIComponent(o.tag)}` : ''}` : ''}`);
+      setExit(EXIT.OK);
+    });
+
+  // rv2 S3 (F7): the weekly review, read-only (the reflection is written in the app)
+  program
+    .command('week')
+    .description(
+      'the weekly review (Monday to Sunday): estimated time, units passed, XP, reviews, key ideas rated again twice, ' +
+        'notebook categories and whether the reflection is written. --start <YYYY-MM-DD>: any day of another week. ' +
+        'Read-only (one GET). Exit 0 shown, 2 when the server could not be read',
+    )
+    .option('--start <day>', 'any day (YYYY-MM-DD) of the week to show (default: this week)')
+    .action(async (o: { start?: string }, cmd: Command) => {
+      if (o.start !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(o.start)) throw new UsageError('--start must be a day, YYYY-MM-DD');
+      const client = new ApiClient(serverUrl(cmd.optsWithGlobals<GlobalOpts>(), io.env), io.fetch);
+      const w = await client.request<WeekResponse>('GET', `/week${o.start ? `?start=${o.start}` : ''}`);
+      io.out(formatWeek(w, client.server));
       setExit(EXIT.OK);
     });
 

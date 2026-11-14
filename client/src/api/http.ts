@@ -53,6 +53,8 @@ import {
   type NotebookResponse,
   type DesignProfileResponse,
   type InterviewMetaResponse,
+  type WeekReflectionResponse,
+  type WeekResponse,
   type RecapPromptsResponse,
   type RecapRevealResponse,
   type RecapSubmitResponse,
@@ -230,5 +232,8 @@ export function createHttpApi(baseUrl = '/api', fetchImpl: typeof fetch = (...a)
     recordInterviewMeta: (id, b) =>
       post<InterviewMetaResponse>(`${unit(id)}/explain-back/interview`, { attemptId: b.attemptId, elapsedMs: b.elapsedMs, timeBoxMs: b.timeBoxMs, blind: b.blind }),
     getDesignProfile: () => call<DesignProfileResponse>('/stats/design-profile'),
+    // rv2 S3: the weekly review
+    getWeek: (start) => call<WeekResponse>(`/week${start ? `?start=${encodeURIComponent(start)}` : ''}`),
+    saveWeekReflection: (b) => post<WeekReflectionResponse>('/week/reflection', { start: b.start, answers: b.answers }),
   };
 }

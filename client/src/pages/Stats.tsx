@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useLocation, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import { useApi } from '../api/context';
 import { errorText } from '../api/errors';
 import type {
@@ -60,7 +60,16 @@ export function StatsPage() {
 
   return (
     <>
-      <PageHeader eyebrow="Stats" title="Progress & evidence" />
+      <PageHeader
+        eyebrow="Stats"
+        title="Progress & evidence"
+        actions={
+          // rv2 S3 (F7): the weekly review lives one click away
+          <Link to="/week" className="btn btn-sm" data-testid="stats-week-link">
+            Weekly review
+          </Link>
+        }
+      />
       {q.status !== 'ready' || !grid || !panelsSettled ? (
         <LoadState error={q.error} onRetry={q.reload} minHeight={400} />
       ) : (

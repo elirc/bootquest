@@ -69,6 +69,8 @@ import { registerPracticeRoutes } from './practice-service.ts';
 import { DesignProfileResponse, InterviewMetaBody, InterviewMetaResponse } from '@bootquest/shared/api-ext';
 import { recordInterviewMeta } from './ladder-service.ts';
 import { designProfile } from './stats-service.ts';
+// rv2 S3 (F7): the weekly review
+import { registerWeekRoutes } from './week-service.ts';
 import { EvidenceListResponseExt, FundamentalsResponseExt, HintsResponse, HintTakenResponse, LessonAidsResponse } from '@bootquest/shared/api-ext';
 import { getFundamentals, getLessonAids } from './fundamentals-service.ts';
 import { getHints, takeHint } from './hints-service.ts';
@@ -526,6 +528,7 @@ export function createApp(opts: AppOptions): Express {
     validate(EmptyQuery, req.query, 'query');
     sendJson(res, 200, DesignProfileResponse.parse(designProfile(ladder)));
   }));
+  registerWeekRoutes(router, deps); // rv2 S3 (F7): GET /week, POST /week/reflection
 
   app.use('/api', router);
 
