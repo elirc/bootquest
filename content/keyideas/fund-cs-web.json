@@ -1,16 +1,19 @@
 {
  "format": "bootquest-keyideas@1",
  "section": "fund-cs-web",
- "title": "C#: ASP.NET Core and EF Core (topics 15-20)",
+ "title": "C#: ASP.NET Core, EF Core, testing, outbound calls and auth (topics 15-23)",
  "track": "csharp",
- "_note": "rv2 S2 (PLAN §2.2 fund-cs-web row). Scope = Fundamentals C# topic gates 15-20; the rv2 C7 topics (21+) and their ideas are appended when they land. Topic 16 (routing) has no row of its own on the binding list. Server-local side file, never stamped.",
+ "_note": "rv2 S2 (PLAN §2.2 fund-cs-web row). Scope = Fundamentals C# topic gates 15-23: the six binding-list topics 15-20 plus the rv2 C7 topics 21-23 (S2b appended one idea each). Topic 16 (routing) has no row of its own on the binding list. Server-local side file, never stamped.",
  "scope": [
   "fund/csharp/15-dependency-injection-and-configuration",
   "fund/csharp/16-aspnet-core-routing-and-minimal-apis",
   "fund/csharp/17-middleware-pipeline",
   "fund/csharp/18-validation-and-problem-details",
   "fund/csharp/19-ef-core-basics",
-  "fund/csharp/20-ef-core-queries-n-plus-1-and-transactions"
+  "fund/csharp/20-ef-core-queries-n-plus-1-and-transactions",
+  "fund/csharp/21-testing-web-apps-seams-and-fakes",
+  "fund/csharp/22-httpclient-timeouts-retries-and-cancellation",
+  "fund/csharp/23-authentication-authorization-and-resource-checks"
  ],
  "recapAfter": 0.8,
  "ideas": [
@@ -134,6 +137,66 @@
     "fund-csharp/20-ef-core-queries-n-plus-1-and-transactions/02-concurrency-token-to-409",
     "csdrills/10-crud-endpoint-logic/04-optional-filters",
     "csdrills/10-crud-endpoint-logic/03-sort-whitelist"
+   ]
+  },
+  {
+   "id": "test-the-pipeline-swap-the-edges",
+   "idea": "Test endpoints through the real pipeline in memory and replace only the edges: whatever leaves the process, and the clock.",
+   "why": "Mocking routing, validation or queries proves nothing about what clients will see, while a real email sender or clock makes tests slow, flaky or impossible to pin.",
+   "prompt": "A team's endpoint tests call controller methods directly with every dependency mocked. They pass, yet a broken [Authorize] policy and a JSON casing change both reached production. What should the tests look like?",
+   "answer": "Host the app with WebApplicationFactory and send real HTTP requests, so routing, binding, validation, authorization and serialization all run. In ConfigureTestServices remove and replace only the outbound senders and the TimeProvider, keep a real database engine, and assert on status codes, bodies and what the fakes recorded.",
+   "tags": [
+    "csharp",
+    "testing"
+   ],
+   "sources": [
+    "fund/csharp/21-testing-web-apps-seams-and-fakes",
+    "fund-csharp/21-testing-web-apps-seams-and-fakes/01-clock-seam-and-invite-expiry"
+   ],
+   "siblings": [
+    "fund-csharp/21-testing-web-apps-seams-and-fakes/02-fake-repository-keeps-the-constraints",
+    "jstrain-cs/21-testing-web-apps/01-seams-and-fakes",
+    "jstrain-cs/21-testing-web-apps/04-test-isolation"
+   ]
+  },
+  {
+   "id": "outbound-calls-timeout-and-safe-retries",
+   "idea": "Give every outbound call a timeout inside your caller's deadline, and retry only transient failures of requests that are safe to repeat, with jittered backoff and a budget.",
+   "why": "An unbounded call ties up requests for the 100-second default, and blind retries charge customers twice, add latency on 4xx answers and multiply load during an outage.",
+   "prompt": "An order service calls payments with a default HttpClient and retries every failure three times at once. During a payments brownout, orders hang for minutes and some customers are charged twice. What changes?",
+   "answer": "Set a timeout below the order request's own deadline and pass the caller's token through. Retry only connection errors, 408, 429 and 5xx, and only idempotent requests or a POST that carries an idempotency key. Wait a jittered, capped exponential delay, honour Retry-After, and stop when attempts or the time budget run out.",
+   "tags": [
+    "csharp",
+    "retries-timeouts"
+   ],
+   "sources": [
+    "fund/csharp/22-httpclient-timeouts-retries-and-cancellation",
+    "fund-csharp/22-httpclient-timeouts-retries-and-cancellation/02-retry-safe-requests-within-a-budget"
+   ],
+   "siblings": [
+    "fund-csharp/22-httpclient-timeouts-retries-and-cancellation/01-attempt-timeout-or-caller-cancelled",
+    "jstrain-cs/28-http-client-resilience/01-retry-and-backoff",
+    "jstrain-cs/28-http-client-resilience/02-circuit-breaker"
+   ]
+  },
+  {
+   "id": "authorize-the-resource-not-the-role",
+   "idea": "A role says what kind of user someone is; whether they may touch this object needs the object: load it, check its tenant, then apply role and ownership rules.",
+   "why": "Endpoint-level role checks let an approver of one tenant act on another tenant's records by changing the id, and a 403 for foreign ids confirms they exist.",
+   "prompt": "An invoice endpoint has [Authorize(Roles = \"approver\")] and nothing else. A pen test approves another company's invoice by editing the id, and a clerk approves their own invoice after being made an approver. What do you change?",
+   "answer": "Load the invoice and compare its tenant with the caller's tenant claim before anything else, answering 404 for another tenant just as for a missing id. Then require the approver role and a different creator, ideally as a resource-based policy called through IAuthorizationService, and filter list queries by tenant inside the query.",
+   "tags": [
+    "csharp",
+    "authz-tenancy"
+   ],
+   "sources": [
+    "fund/csharp/23-authentication-authorization-and-resource-checks",
+    "fund-csharp/23-authentication-authorization-and-resource-checks/02-resource-based-invoice-access"
+   ],
+   "siblings": [
+    "fund-csharp/23-authentication-authorization-and-resource-checks/01-evaluate-a-policy",
+    "csdrills/03-enums-and-flags/08-role-matrix",
+    "csdrills/06-text-at-the-edge/07-auth-headers"
    ]
   }
  ]

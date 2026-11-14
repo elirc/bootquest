@@ -1,0 +1,199 @@
+{
+  "format": "fundamentals-authoring@1",
+  "track": "csharp",
+  "topic": "23-authentication-authorization-and-resource-checks",
+  "title": "Authentication vs authorization & resource-based checks",
+  "level": "advanced",
+  "summary": "401 versus 403, what authentication middleware does and does not do, claims and roles on a ClaimsPrincipal, how a policy's requirements and handlers combine, resource-based checks with IAuthorizationService, deny-by-default fallback policies, and tenant filters that live in the query.",
+  "lesson": "## Authentication says who, authorization says what\n\nAuthentication turns credentials (a cookie, a bearer token) into a `ClaimsPrincipal` on `HttpContext.User`. It does not reject anyone: a request without credentials simply carries an anonymous user. Authorization then decides whether that user may run this endpoint. The two failures have two status codes:\n\n- **401 Unauthorized**: the caller is not authenticated. The scheme answers with a challenge (a `WWW-Authenticate` header for bearer tokens, a login redirect for cookies).\n- **403 Forbidden**: the caller is known but not allowed. Signing in again will not help.\n\n## Claims, roles and the principal\n\nA `ClaimsIdentity` is a bag of claims (`sub`, `email`, `role`, `tenant`) plus an authentication type. `User.Identity.IsAuthenticated` is true only when that authentication type is set, so an identity built in a test with claims but no type still counts as anonymous. `User.IsInRole(\"admin\")` looks for a claim of the identity's role claim type with that value, and `User.FindFirst(ClaimTypes.NameIdentifier)` reads the user id.\n\n## Policies: every requirement must pass\n\n```csharp\nbuilder.Services.AddAuthorization(options =>\n    options.AddPolicy(\"CanRefund\", p => p.RequireRole(\"support\").RequireClaim(\"scope\", \"refunds\")));\n\napp.MapPost(\"/refunds\", Refund).RequireAuthorization(\"CanRefund\");\n```\n\nA policy is a list of requirements, and each requirement is checked by handlers (`AuthorizationHandler<TRequirement>`). The policy succeeds only when EVERY requirement has been marked succeeded by some handler and no handler called `Fail()`. One `Fail()` denies the whole check, whatever the other handlers said, which is how a \"suspended account\" handler can veto everything.\n\n## Resource-based checks: load first, then decide\n\n`[Authorize(Policy = \"...\")]` runs before the endpoint has loaded anything, so it cannot know who owns invoice 77. Load the resource, then ask the authorization service with it:\n\n```csharp\nvar invoice = await db.Invoices.FindAsync(id);\nif (invoice is null) return Results.NotFound();\nvar result = await auth.AuthorizeAsync(User, invoice, \"CanApproveInvoice\");\nif (!result.Succeeded) return Results.Forbid();\n```\n\nThe handler for that policy receives the invoice as `context.Resource` and can compare its owner and tenant with the user's claims. For a resource of another tenant, many APIs answer 404 instead of 403, so ids cannot be probed across tenants.\n\n## Deny by default\n\nAn endpoint with no authorization metadata is open to anyone. Set a fallback policy, `options.FallbackPolicy = new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build()`, so every new endpoint needs a signed-in user unless it says `[AllowAnonymous]`. The default policy is different: it is what a bare `[Authorize]` (no policy named) applies.\n\n## Filter in the query, not after it\n\nAn insecure direct object reference (IDOR) is an endpoint that trusts an id from the request without checking the caller may see that object. For lists the fix belongs in the query: `db.Orders.Where(o => o.TenantId == tenantId)`, or a global query filter on `TenantId`, so rows of other tenants never leave the database and page counts stay right. Removing foreign rows after loading a page leaks them the day someone forgets the check.",
+  "quiz": [
+    {
+      "prompt": "A request with no credentials calls an endpoint that requires an authenticated user. What does ASP.NET Core answer?",
+      "choices": [
+        "403 Forbidden, because nobody is allowed in",
+        "401 Unauthorized, through the scheme's challenge",
+        "404 Not Found, so that the endpoint stays hidden",
+        "200 OK, with an empty body for the anonymous user"
+      ],
+      "answer": 1,
+      "explanation": "The caller is not authenticated, so the authentication scheme challenges: 401 with WWW-Authenticate for bearer tokens, a login redirect for cookies."
+    },
+    {
+      "prompt": "A signed-in user with the role \"viewer\" calls an endpoint whose policy requires the role \"admin\". What should the response be?",
+      "choices": [
+        "401, so the user signs in again with more rights",
+        "404, to hide that the admin endpoint exists at all",
+        "403 Forbidden: known user, not permitted here",
+        "400 Bad Request, because the role claim is wrong"
+      ],
+      "answer": 2,
+      "explanation": "The user is known but not permitted. A fresh sign-in would produce the same user and the same answer, so 401 would be misleading."
+    },
+    {
+      "prompt": "A policy has two requirements. A handler succeeds the first one, and no handler succeeds the second. What is the result?",
+      "choices": [
+        "Allowed: one succeeding handler is enough for the policy",
+        "Denied: every requirement of the policy must succeed",
+        "Allowed, because nothing ever evaluated the second one",
+        "An exception, because a requirement has no handler"
+      ],
+      "answer": 1,
+      "explanation": "A policy succeeds only when every requirement is marked succeeded. A requirement nobody succeeds leaves the policy failed."
+    },
+    {
+      "prompt": "For one requirement, handler A calls `Succeed` and handler B calls `Fail`. What is the result?",
+      "choices": [
+        "Denied: an explicit Fail wins over any Succeed",
+        "Allowed: one Succeed is enough for each requirement",
+        "It depends on the order the handlers were registered",
+        "Allowed, and the failure is only written to the log"
+      ],
+      "answer": 0,
+      "explanation": "Fail marks the whole authorization check as failed, whatever other handlers did. That is how a veto handler (a suspended account) works."
+    },
+    {
+      "prompt": "Why can `[Authorize(Policy = \"CanEditDocument\")]` on the endpoint not check that the caller owns document 42?",
+      "choices": [
+        "Attributes are evaluated once at startup, never per request",
+        "Policies cannot read any of the user's claims",
+        "It runs before the document is loaded, so there is no resource to check",
+        "Route values are hidden from the authorization layer"
+      ],
+      "answer": 2,
+      "explanation": "Endpoint authorization runs before your code, with no resource. Load the document first and call IAuthorizationService.AuthorizeAsync with it."
+    },
+    {
+      "prompt": "Which line is a resource-based authorization check?",
+      "choices": [
+        "`[Authorize(Roles = \"Owner\")]` on the endpoint",
+        "`await auth.AuthorizeAsync(User, doc, \"EditPolicy\")` after loading doc",
+        "`if (User.Identity!.IsAuthenticated)` before loading doc",
+        "`User.IsInRole(doc.OwnerId)` inside the query"
+      ],
+      "answer": 1,
+      "explanation": "AuthorizeAsync with the loaded resource lets the policy's handlers compare the document's owner and tenant with the user's claims."
+    },
+    {
+      "prompt": "A user of tenant A requests `/invoices/77`, which belongs to tenant B. Which answer gives away the least?",
+      "choices": [
+        "404 Not Found, as if the invoice did not exist",
+        "403 Forbidden, naming the tenant that owns it",
+        "200 OK, with every amount blanked out",
+        "401 Unauthorized, asking for a sign-in to tenant B"
+      ],
+      "answer": 0,
+      "explanation": "404 does not confirm that invoice 77 exists, so ids cannot be probed across tenants. A 403 tells the caller the id is real."
+    },
+    {
+      "prompt": "What changes when the fallback policy is set to require an authenticated user?",
+      "choices": [
+        "Endpoints marked [Authorize] now also need a role",
+        "Anonymous users are sent to the login page on every request",
+        "Endpoints marked [AllowAnonymous] now need a signed-in user",
+        "Endpoints with no authorization metadata now need a signed-in user"
+      ],
+      "answer": 3,
+      "explanation": "The fallback policy applies only where an endpoint declares nothing. [AllowAnonymous] still opts out, and a bare [Authorize] uses the default policy."
+    },
+    {
+      "prompt": "A test builds `new ClaimsPrincipal(new ClaimsIdentity(claims))`, with claims but no authentication type. What is `User.Identity.IsAuthenticated`?",
+      "choices": [
+        "true, because the identity carries claims",
+        "true, but only when one claim is a NameIdentifier",
+        "false: without an authentication type it is anonymous",
+        "It throws, because the authentication type is required"
+      ],
+      "answer": 2,
+      "explanation": "IsAuthenticated reports whether an authentication type was set, not whether claims exist. Pass a type such as \"Test\" to the identity."
+    },
+    {
+      "prompt": "Where is the safest place to enforce \"users see only their own tenant's orders\" in a list endpoint?",
+      "choices": [
+        "In the client, which hides the rows of other tenants",
+        "In the query, for example a global filter on TenantId",
+        "In a check that drops foreign rows from each loaded page",
+        "In the endpoint's [Authorize] attribute"
+      ],
+      "answer": 1,
+      "explanation": "A filter in the query keeps other tenants' rows in the database and keeps counts and pages right; a global query filter applies it to every query by default."
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "401 versus 403",
+      "back": "401: the request is not authenticated, so the scheme challenges; 403: the caller is known but not allowed."
+    },
+    {
+      "front": "What does authentication middleware do with a request that has no credentials?",
+      "back": "It leaves HttpContext.User anonymous and lets the request through; authorization decides later whether to challenge."
+    },
+    {
+      "front": "How are a policy's requirements combined?",
+      "back": "All of them must succeed; a requirement succeeds when some handler calls Succeed, and a single Fail denies the check."
+    },
+    {
+      "front": "Resource-based authorization",
+      "back": "Load the resource first, then call IAuthorizationService.AuthorizeAsync with the user, the resource and a policy or requirement."
+    },
+    {
+      "front": "Default policy versus fallback policy",
+      "back": "The default policy is what [Authorize] with no policy name applies; the fallback policy covers endpoints that declare no authorization at all."
+    },
+    {
+      "front": "What does User.IsInRole check?",
+      "back": "Whether the principal has a claim of its identity's role claim type with that exact value."
+    },
+    {
+      "front": "Why answer 404 for another tenant's resource?",
+      "back": "It does not confirm that the id exists, so a caller cannot probe ids that belong to other tenants."
+    },
+    {
+      "front": "IDOR",
+      "back": "Insecure direct object reference: an endpoint acts on an id from the request without checking that the caller may access that object."
+    }
+  ],
+  "drills": [
+    {
+      "slug": "01-evaluate-a-policy",
+      "title": "Evaluate a policy the way the authorization service does",
+      "difficulty": 3,
+      "skills": [
+        "ClaimsPrincipal",
+        "requirements and handlers",
+        "401 versus 403"
+      ],
+      "instructions": "**Interview prompt.** \"Explain how `[Authorize(Policy = ...)]` decides between 200, 401 and 403 by writing the evaluator. A suspended-account handler must be able to veto any policy.\"\n\n**Why it matters.** The rules are short but easy to get backwards: requirements combine with AND, handlers for one requirement combine with OR, an explicit `Fail()` vetoes everything, and the status depends on whether the caller is authenticated at all.\n\n**Your task.** Implement `Decision Authorize(ClaimsPrincipal user, Policy policy, IReadOnlyList<IHandler> handlers, object? resource)` (`AuthContext`, the requirements and four handlers are given):\n- \"authenticated\" means `user.Identity?.IsAuthenticated == true`\n- when `policy.RequireAuthenticatedUser` is set and the user is not authenticated: `Decision.Challenge`, without running any handler\n- otherwise create one `AuthContext(user, resource)` and run EVERY handler for EVERY requirement of the policy\n- `Decision.Allow` when no handler called `Fail()` and every requirement was succeeded by at least one handler\n- otherwise `Decision.Challenge` if the user is not authenticated (401: signing in may help), else `Decision.Forbid` (403)\n\n**Worked example.** An authenticated \"support\" user without the `scope=refunds` claim, on a policy needing both: `Forbid`. The same user with the claim but also `status=suspended`: still `Forbid`, because the suspension handler calls `Fail()`.",
+      "starterHead": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · evaluate a policy★★★ core\n//  concepts: requirements AND · handlers OR · Fail vetoes · challenge versus forbid\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Every requirement must succeed, one Fail denies, and who you are decides 401 or 403.\n\nusing static Bootcamp.Check;\nusing System.Security.Claims;\n\nDecision Authorize(ClaimsPrincipal user, Policy policy, IReadOnlyList<IHandler> handlers, object? resource)\n{\n    // TODO: challenge early when a signed-in user is required; run every handler for every requirement; decide\n    throw new NotImplementedException();\n}\n\n// Given: how tests build users.\nClaimsPrincipal SignedIn(string id, params (string Type, string Value)[] claims) =>\n    new(new ClaimsIdentity(claims.Select(c => new Claim(c.Type, c.Value)).Append(new Claim(ClaimTypes.NameIdentifier, id)), authenticationType: \"Test\"));\nClaimsPrincipal Anonymous() => new(new ClaimsIdentity());\nIHandler[] AllHandlers() => new IHandler[] { new RoleHandler(), new ClaimHandler(), new OwnerHandler(), new SuspendedHandler() };\nvar refunds = new Policy(true, new IRequirement[] { new RoleRequirement(\"support\"), new ClaimRequirement(\"scope\", \"refunds\") });\n\n\n",
+      "solutionHead": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · evaluate a policy★★★ core\n//  concepts: requirements AND · handlers OR · Fail vetoes · challenge versus forbid\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Every requirement must succeed, one Fail denies, and who you are decides 401 or 403.\n\nusing static Bootcamp.Check;\nusing System.Security.Claims;\n\nDecision Authorize(ClaimsPrincipal user, Policy policy, IReadOnlyList<IHandler> handlers, object? resource)\n{\n    var authenticated = user.Identity?.IsAuthenticated == true;\n    if (policy.RequireAuthenticatedUser && !authenticated) return Decision.Challenge;\n    var context = new AuthContext(user, resource);\n    foreach (var requirement in policy.Requirements)\n        foreach (var handler in handlers)\n            handler.Handle(context, requirement);\n    var allSucceeded = policy.Requirements.All(context.HasSucceeded);\n    if (!context.Failed && allSucceeded) return Decision.Allow;\n    return authenticated ? Decision.Forbid : Decision.Challenge;\n}\n\n// Given: how tests build users.\nClaimsPrincipal SignedIn(string id, params (string Type, string Value)[] claims) =>\n    new(new ClaimsIdentity(claims.Select(c => new Claim(c.Type, c.Value)).Append(new Claim(ClaimTypes.NameIdentifier, id)), authenticationType: \"Test\"));\nClaimsPrincipal Anonymous() => new(new ClaimsIdentity());\nIHandler[] AllHandlers() => new IHandler[] { new RoleHandler(), new ClaimHandler(), new OwnerHandler(), new SuspendedHandler() };\nvar refunds = new Policy(true, new IRequirement[] { new RoleRequirement(\"support\"), new ClaimRequirement(\"scope\", \"refunds\") });\n\n\n",
+      "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"an anonymous caller on a policy that needs a signed-in user is challenged, and no handler runs\", () =>\n{\n    var counting = new CountingHandler();\n    Eq((Authorize(Anonymous(), refunds, new IHandler[] { counting }, null), counting.Calls), (Decision.Challenge, 0));\n});\n\nTest(\"an identity with claims but no authentication type is still anonymous\", () =>\n{\n    var claimsOnly = new ClaimsPrincipal(new ClaimsIdentity(new[] { new Claim(ClaimTypes.Role, \"support\"), new Claim(\"scope\", \"refunds\") }));\n    Eq(Authorize(claimsOnly, refunds, AllHandlers(), null), Decision.Challenge);\n});\n\nTest(\"a signed-in user who meets every requirement is allowed\", () =>\n    Eq(Authorize(SignedIn(\"u1\", (ClaimTypes.Role, \"support\"), (\"scope\", \"refunds\")), refunds, AllHandlers(), null), Decision.Allow));\n\nTest(\"every requirement must succeed: the right role without the claim is forbidden\", () =>\n    Eq(Authorize(SignedIn(\"u1\", (ClaimTypes.Role, \"support\")), refunds, AllHandlers(), null), Decision.Forbid));\n\nTest(\"one Fail vetoes the check even when every requirement succeeded\", () =>\n    Eq(Authorize(SignedIn(\"u1\", (ClaimTypes.Role, \"support\"), (\"scope\", \"refunds\"), (\"status\", \"suspended\")), refunds, AllHandlers(), null), Decision.Forbid));\n\nTest(\"the owner requirement compares the resource with the user\", () =>\n{\n    var edit = new Policy(true, new IRequirement[] { new OwnerRequirement() });\n    var doc = new Document(42, OwnerId: \"u1\");\n    Eq((Authorize(SignedIn(\"u1\"), edit, AllHandlers(), doc), Authorize(SignedIn(\"u2\"), edit, AllHandlers(), doc)), (Decision.Allow, Decision.Forbid));\n});\n\nTest(\"a failed check for an anonymous caller is a challenge, not a forbid\", () =>\n{\n    var openButOwned = new Policy(false, new IRequirement[] { new OwnerRequirement() });\n    Eq(Authorize(Anonymous(), openButOwned, AllHandlers(), new Document(42, OwnerId: \"u1\")), Decision.Challenge);\n});\n\nTest(\"a policy with no requirements and no sign-in rule lets anyone in (boundary)\", () =>\n    Eq(Authorize(Anonymous(), new Policy(false, Array.Empty<IRequirement>()), AllHandlers(), null), Decision.Allow));\n\n",
+      "tail": "// ──────────────────────────── types ──────────────────────────────────────\n\nenum Decision { Allow, Challenge, Forbid }\n\ninterface IRequirement { }\nrecord RoleRequirement(string Role) : IRequirement;\nrecord ClaimRequirement(string Type, string Value) : IRequirement;\nrecord OwnerRequirement() : IRequirement;\n\nrecord Policy(bool RequireAuthenticatedUser, IReadOnlyList<IRequirement> Requirements);\nrecord Document(int Id, string OwnerId);\n\n/// <summary>Given: what one authorization check has collected so far.</summary>\nsealed class AuthContext(ClaimsPrincipal user, object? resource)\n{\n    readonly HashSet<IRequirement> succeeded = new(ReferenceEqualityComparer.Instance);\n    public ClaimsPrincipal User { get; } = user;\n    public object? Resource { get; } = resource;\n    public bool Failed { get; private set; }\n    public void Succeed(IRequirement requirement) => succeeded.Add(requirement);\n    public void Fail() => Failed = true;\n    public bool HasSucceeded(IRequirement requirement) => succeeded.Contains(requirement);\n}\n\ninterface IHandler { void Handle(AuthContext context, IRequirement requirement); }\n\nsealed class RoleHandler : IHandler\n{\n    public void Handle(AuthContext c, IRequirement r) { if (r is RoleRequirement role && c.User.IsInRole(role.Role)) c.Succeed(r); }\n}\n\nsealed class ClaimHandler : IHandler\n{\n    public void Handle(AuthContext c, IRequirement r) { if (r is ClaimRequirement claim && c.User.HasClaim(claim.Type, claim.Value)) c.Succeed(r); }\n}\n\nsealed class OwnerHandler : IHandler\n{\n    public void Handle(AuthContext c, IRequirement r)\n    {\n        if (r is OwnerRequirement && c.Resource is Document d && d.OwnerId == c.User.FindFirst(ClaimTypes.NameIdentifier)?.Value) c.Succeed(r);\n    }\n}\n\n/// <summary>A veto: a suspended account fails every check.</summary>\nsealed class SuspendedHandler : IHandler\n{\n    public void Handle(AuthContext c, IRequirement r) { if (c.User.HasClaim(\"status\", \"suspended\")) c.Fail(); }\n}\n\nsealed class CountingHandler : IHandler\n{\n    public int Calls { get; private set; }\n    public void Handle(AuthContext c, IRequirement r) => Calls++;\n}\n",
+      "explanation": "Challenge early, run everything, then combine:\n\n```csharp\nvar authenticated = user.Identity?.IsAuthenticated == true;\nif (policy.RequireAuthenticatedUser && !authenticated) return Decision.Challenge;\nvar context = new AuthContext(user, resource);\nforeach (var requirement in policy.Requirements)\n    foreach (var handler in handlers) handler.Handle(context, requirement);\nif (!context.Failed && policy.Requirements.All(context.HasSucceeded)) return Decision.Allow;\nreturn authenticated ? Decision.Forbid : Decision.Challenge;\n```\n\nThe tests catch the usual wrong evaluators: `Any` instead of `All` over the requirements (the role alone gets in), ignoring `Failed` (the suspended user gets in), always answering `Forbid` on a failure (the anonymous caller should be challenged), and treating \"has claims\" or `user.Identity != null` as signed in (the identity without an authentication type).",
+      "hints": [
+        "Authentication status decides the early exit and the kind of failure; the requirements and the veto decide whether the answer is yes.",
+        "Work out whether the user is authenticated, return the challenge straight away when the policy needs that and it is missing, run every handler against every requirement on one shared context, and allow only when nothing failed and each requirement was succeeded.",
+        "Check the authentication type first, let all handlers vote on all requirements, require every requirement to have a success and no veto, and choose between challenge and forbid by whether the caller is signed in."
+      ]
+    },
+    {
+      "slug": "02-resource-based-invoice-access",
+      "title": "Load the invoice, then decide",
+      "difficulty": 2,
+      "skills": [
+        "resource-based authorization",
+        "tenant isolation",
+        "separation of duties"
+      ],
+      "instructions": "**Interview prompt.** \"Invoice endpoints check `[Authorize(Roles = \"approver\")]` and nothing else. A pen test found that an approver of one company could approve another company's invoices by changing the id, and that people could approve their own. Fix both endpoints.\"\n\n**Why it matters.** A role says what kind of user someone is, not which objects they may touch. The rule needs the resource, so it runs after loading it: check the tenant first (roles never cross tenants), answer 404 for another tenant's invoice exactly as for a missing one, and only then apply role and ownership rules.\n\n**Your task.** The user's claims are `ClaimTypes.NameIdentifier` (user id), `\"tenant\"` and any number of `ClaimTypes.Role`. Implement:\n- `(int Status, Invoice? Body) GetInvoice(ClaimsPrincipal user, int id, Func<int, Invoice?> load)`\n- `(int Status, Invoice? Body) Approve(ClaimsPrincipal user, int id, Func<int, Invoice?> load, Action<Invoice> save)`\n\nRules for both, in order:\n- not authenticated: `(401, null)`, and `load` is never called\n- no such invoice, or its `TenantId` differs from the user's `\"tenant\"` claim: `(404, null)`\n- `GetInvoice`: any user of the same tenant gets `(200, invoice)`\n- `Approve`: the user needs the role `approver` AND must not be the invoice's `CreatedBy` (nobody approves their own invoice), else `(403, null)`. When allowed, call `save` with the invoice's `Status` set to `\"approved\"` and return `(200, thatInvoice)`\n\n**Worked example.** Bo (approver, tenant `acme`) approves invoice 7 of `acme` created by Ana: 200. Bo approving invoice 9 of `globex`: 404, and nothing is saved.",
+      "starterHead": "// ─────────────────────────────────────────────────────────────────────────\n//  02 · resource-based invoice access★★☆ core\n//  concepts: load, then authorize · tenant before role · 404 across tenants · no self-approval\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  A role says what kind of user you are, not which invoices you may touch.\n\nusing static Bootcamp.Check;\nusing System.Security.Claims;\n\n(int Status, Invoice? Body) GetInvoice(ClaimsPrincipal user, int id, Func<int, Invoice?> load)\n{\n    // TODO: 401 before loading, 404 for missing or another tenant, else 200\n    throw new NotImplementedException();\n}\n\n(int Status, Invoice? Body) Approve(ClaimsPrincipal user, int id, Func<int, Invoice?> load, Action<Invoice> save)\n{\n    // TODO: same checks, then the approver role and no self-approval; save the approved invoice\n    throw new NotImplementedException();\n}\n\n// Given: users and invoices for the tests.\nClaimsPrincipal User(string id, string tenant, params string[] roles) =>\n    new(new ClaimsIdentity(roles.Select(r => new Claim(ClaimTypes.Role, r)).Append(new Claim(ClaimTypes.NameIdentifier, id)).Append(new Claim(\"tenant\", tenant)), authenticationType: \"Test\"));\nvar invoices = new Dictionary<int, Invoice>\n{\n    [7] = new Invoice(7, TenantId: \"acme\", CreatedBy: \"ana\", Status: \"pending\"),\n    [9] = new Invoice(9, TenantId: \"globex\", CreatedBy: \"gus\", Status: \"pending\"),\n};\nInvoice? Load(int id) => invoices.GetValueOrDefault(id);\n\n\n",
+      "solutionHead": "// ─────────────────────────────────────────────────────────────────────────\n//  02 · resource-based invoice access★★☆ core\n//  concepts: load, then authorize · tenant before role · 404 across tenants · no self-approval\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  A role says what kind of user you are, not which invoices you may touch.\n\nusing static Bootcamp.Check;\nusing System.Security.Claims;\n\n// The shared part: who is asking, does the invoice exist, and is it in their tenant?\n(int Status, Invoice? Invoice) LoadForUser(ClaimsPrincipal user, int id, Func<int, Invoice?> load)\n{\n    if (user.Identity?.IsAuthenticated != true) return (401, null);\n    var invoice = load(id);\n    if (invoice is null || invoice.TenantId != user.FindFirst(\"tenant\")?.Value) return (404, null);\n    return (200, invoice);\n}\n\n(int Status, Invoice? Body) GetInvoice(ClaimsPrincipal user, int id, Func<int, Invoice?> load) =>\n    LoadForUser(user, id, load);\n\n(int Status, Invoice? Body) Approve(ClaimsPrincipal user, int id, Func<int, Invoice?> load, Action<Invoice> save)\n{\n    var (status, invoice) = LoadForUser(user, id, load);\n    if (invoice is null) return (status, null);\n    var self = invoice.CreatedBy == user.FindFirst(ClaimTypes.NameIdentifier)?.Value;\n    if (!user.IsInRole(\"approver\") || self) return (403, null);\n    var approved = invoice with { Status = \"approved\" };\n    save(approved);\n    return (200, approved);\n}\n\n// Given: users and invoices for the tests.\nClaimsPrincipal User(string id, string tenant, params string[] roles) =>\n    new(new ClaimsIdentity(roles.Select(r => new Claim(ClaimTypes.Role, r)).Append(new Claim(ClaimTypes.NameIdentifier, id)).Append(new Claim(\"tenant\", tenant)), authenticationType: \"Test\"));\nvar invoices = new Dictionary<int, Invoice>\n{\n    [7] = new Invoice(7, TenantId: \"acme\", CreatedBy: \"ana\", Status: \"pending\"),\n    [9] = new Invoice(9, TenantId: \"globex\", CreatedBy: \"gus\", Status: \"pending\"),\n};\nInvoice? Load(int id) => invoices.GetValueOrDefault(id);\n\n\n",
+      "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"an anonymous caller gets 401 and nothing is loaded\", () =>\n{\n    var loads = 0;\n    var anonymous = new ClaimsPrincipal(new ClaimsIdentity());\n    Eq((GetInvoice(anonymous, 7, id => { loads++; return Load(id); }), loads), ((401, (Invoice?)null), 0));\n});\n\nTest(\"a user of the same tenant reads the invoice\", () =>\n    Eq(GetInvoice(User(\"cy\", \"acme\"), 7, Load), (200, (Invoice?)invoices[7])));\n\nTest(\"another tenant's invoice is 404, exactly like a missing one\", () =>\n    Eq((GetInvoice(User(\"cy\", \"acme\"), 9, Load), GetInvoice(User(\"cy\", \"acme\"), 404404, Load)), ((404, (Invoice?)null), (404, (Invoice?)null))));\n\nTest(\"an approver of another tenant gets 404 and nothing is saved\", () =>\n{\n    var saved = new List<Invoice>();\n    Eq((Approve(User(\"bo\", \"acme\", \"approver\"), 9, Load, saved.Add), saved.Count), ((404, (Invoice?)null), 0));\n});\n\nTest(\"a user without the approver role gets 403\", () =>\n    Eq(Approve(User(\"cy\", \"acme\", \"clerk\"), 7, Load, _ => { }), (403, (Invoice?)null)));\n\nTest(\"nobody approves their own invoice, approver or not\", () =>\n    Eq(Approve(User(\"ana\", \"acme\", \"approver\"), 7, Load, _ => { }), (403, (Invoice?)null)));\n\nTest(\"an approver approves someone else's invoice, and the approved invoice is saved\", () =>\n{\n    var saved = new List<Invoice>();\n    var result = Approve(User(\"bo\", \"acme\", \"approver\"), 7, Load, saved.Add);\n    var approved = new Invoice(7, \"acme\", \"ana\", \"approved\");\n    Eq((result, saved.Single()), ((200, (Invoice?)approved), approved));\n});\n\nTest(\"approving a missing invoice is 404 and saves nothing (boundary)\", () =>\n{\n    var saved = new List<Invoice>();\n    Eq((Approve(User(\"bo\", \"acme\", \"approver\"), 8, Load, saved.Add), saved.Count), ((404, (Invoice?)null), 0));\n});\n\n",
+      "tail": "// ──────────────────────────── types ──────────────────────────────────────\n\nrecord Invoice(int Id, string TenantId, string CreatedBy, string Status);\n",
+      "explanation": "Share the \"who is asking and may they see it\" part, then add the approval rules:\n\n```csharp\nif (user.Identity?.IsAuthenticated != true) return (401, null);\nvar invoice = load(id);\nif (invoice is null || invoice.TenantId != user.FindFirst(\"tenant\")?.Value) return (404, null);\n// Approve only:\nvar self = invoice.CreatedBy == user.FindFirst(ClaimTypes.NameIdentifier)?.Value;\nif (!user.IsInRole(\"approver\") || self) return (403, null);\nvar approved = invoice with { Status = \"approved\" };\nsave(approved);\nreturn (200, approved);\n```\n\nThe tests catch the bugs the pen test found and their cousins: checking the role before the tenant (an approver of acme approves globex's invoice), answering 403 for another tenant (the id is confirmed to exist), loading before the 401 check, and forgetting the self-approval rule.",
+      "hints": [
+        "The role check can only come after you know which tenant the invoice belongs to, and that needs the invoice.",
+        "Refuse an anonymous caller before loading anything, then load and give the same not-found answer for a missing invoice and for one of another tenant. Only for approval, require the approver role and a different creator before saving a copy marked approved.",
+        "Check sign-in first, load next, treat another tenant's invoice as missing, and apply the role and the self-approval rule last, saving the approved copy only when every rule passed."
+      ]
+    }
+  ]
+}

@@ -3524,6 +3524,534 @@
     "fund-csharp/20-ef-core-queries-n-plus-1-and-transactions/02-concurrency-token-to-409",
     "fund-csharp/20-ef-core-queries-n-plus-1-and-transactions/03-transaction-across-two-saves"
    ]
+  },
+  {
+   "id": "21-testing-web-apps-seams-and-fakes",
+   "order": 21,
+   "title": "Testing ASP.NET Core: seams, fakes & WebApplicationFactory",
+   "level": "advanced",
+   "summary": "Seams for the clock, ids and outbound calls, fakes versus mocks, WebApplicationFactory hosting the real pipeline in memory, swapping only the edges in ConfigureTestServices, an isolated real database, test authentication, and asserting on HTTP behaviour.",
+   "lesson": "## Seams: inject what the test must control\n\nA handler that calls `DateTimeOffset.UtcNow`, `Guid.NewGuid()` or a real HTTP client has hidden inputs, so a test cannot pin its output and ends up asserting \"roughly a week from now\". Take those inputs as dependencies instead: `TimeProvider` (the base library's clock abstraction) for time, an id generator, and an interface such as `IEmailSender` or `IWebhookSender` for every call that leaves the process. Production registers `TimeProvider.System`; a test passes a clock it can set and advance.\n\n```csharp\npublic sealed class InviteService(TimeProvider clock, IInviteStore store)\n{\n    public Invite Create(string email)\n    {\n        var now = clock.GetUtcNow();                 // read once per operation\n        return store.Add(new Invite(email, now, now.AddDays(7)));\n    }\n}\n```\n\nRead the clock once per operation, so `CreatedAt` and `ExpiresAt` come from the same instant.\n\n## Fakes, stubs and mocks\n\nA **stub** returns canned answers. A **fake** is a small working implementation: an in-memory store that assigns ids and refuses a duplicate email, a clock you can advance, a sender that keeps an outbox. A **mock** records calls so the test can assert on them. Prefer fakes for stores, clocks and senders: the test then checks outcomes, and a refactor that keeps the behaviour keeps the tests green. Assert on an interaction only when the interaction is the behaviour (\"exactly one webhook was sent\").\n\nA fake must keep the rules of the thing it replaces. A dictionary-backed store that accepts `Ana@x.io` and `ana@x.io` lets the tests pass while production returns 500 when the unique index fires.\n\n## WebApplicationFactory runs the real pipeline in memory\n\n`WebApplicationFactory<Program>` (package `Microsoft.AspNetCore.Mvc.Testing`) boots the app's real `Program` on an in-memory `TestServer`. `factory.CreateClient()` returns an `HttpClient` whose requests never open a socket, yet still run routing, middleware, model binding, validation, authentication, authorization, the endpoint and JSON serialization. That is the right level for \"POST /invites returns 201 with a Location header\" or \"an anonymous DELETE gets 401\".\n\n```csharp\npublic sealed class ApiFactory : WebApplicationFactory<Program>\n{\n    public FakeEmailSender Email { get; } = new();\n    public ManualClock Clock { get; } = new(DateTimeOffset.Parse(\"2026-03-01T09:00:00Z\"));\n\n    protected override void ConfigureWebHost(IWebHostBuilder builder)\n    {\n        builder.UseEnvironment(\"Testing\");\n        builder.ConfigureTestServices(services =>\n        {\n            services.RemoveAll<IEmailSender>();\n            services.AddSingleton<IEmailSender>(Email);\n            services.RemoveAll<TimeProvider>();\n            services.AddSingleton<TimeProvider>(Clock);\n        });\n    }\n}\n```\n\n## Swap only the edges\n\n`ConfigureTestServices` runs after the app's own registrations. When a constructor asks for one `IEmailSender`, the container hands it the LAST registration, so an added fake wins there; but anything that takes `IEnumerable<IEmailSender>` still receives the real sender as well. Call `RemoveAll` before adding the fake. A `TryAdd...` call in the override changes nothing when the app already registered the service. Keep the real routing, validation, serialization and queries; replace only what leaves the process (email, payments, webhooks) and what the test must control (the clock).\n\n## A real database, isolated per test\n\nEF Core's InMemory provider is not a relational database: it runs no SQL and does not enforce relational constraints such as unique indexes, so it can pass a test that the real database would fail. Use the real engine instead. A SQLite `:memory:` database lives only as long as its connection, so keep one connection open for the factory's lifetime and create the schema at startup; or start a throwaway PostgreSQL container. Give each test class its own database, or reset the rows each test touches: tests that lean on each other's rows pass alone and fail in another order.\n\n## Authenticate as a test user\n\nRegister a test authentication handler that builds the `ClaimsPrincipal` from a request header (for example `X-Test-User` and `X-Test-Role`), so the real authorization rules still run. Then assert at the HTTP level: anonymous gets 401, the wrong role gets 403, the owner gets 200. Check status codes, headers such as `Location`, the ProblemDetails body and what the fakes recorded, not the private methods behind the endpoint.\n",
+   "quiz": [
+    {
+     "key": "fund:csharp/21-testing-web-apps-seams-and-fakes/q01",
+     "prompt": "A handler sets `CreatedAt = DateTimeOffset.UtcNow` and `ExpiresAt = DateTimeOffset.UtcNow.AddDays(7)`. What makes it testable to the exact second?",
+     "choices": [
+      "Compare the two stamps in the test with a tolerance of a few seconds",
+      "Inject a TimeProvider and read it once per operation",
+      "Switch to `DateTime.Now` so the stamps follow the server's own time zone",
+      "Make the handler static, so the test can call it without a clock"
+     ],
+     "answer": 1,
+     "explanation": "The clock is a hidden input. Taking a TimeProvider lets the test fix the instant, and one read per operation keeps both stamps on the same instant; a tolerance only hides the problem."
+    },
+    {
+     "key": "fund:csharp/21-testing-web-apps-seams-and-fakes/q02",
+     "prompt": "What does `factory.CreateClient()` give a test that uses `WebApplicationFactory<Program>`?",
+     "choices": [
+      "An HttpClient aimed at the app on a random free localhost port",
+      "A client that calls the controller methods directly, skipping middleware",
+      "An HttpClient whose requests run the app's real pipeline in memory",
+      "A mock HttpClient that returns what the test stubs per route"
+     ],
+     "answer": 2,
+     "explanation": "The factory hosts the real Program on an in-memory TestServer. No socket is opened, but routing, middleware, binding, authorization, the endpoint and serialization all run."
+    },
+    {
+     "key": "fund:csharp/21-testing-web-apps-seams-and-fakes/q03",
+     "prompt": "The app registers `SmtpNotifier` as `INotifier`, and a dispatcher takes `IEnumerable<INotifier>` and calls each one. The test override only adds `services.AddSingleton<INotifier>(fake)`. What happens when a test triggers a notification?",
+     "choices": [
+      "Only the fake runs, because the last registration replaces the first",
+      "Startup fails: one service type has two registrations",
+      "Both run, so the real SMTP notifier still sends mail",
+      "Only SmtpNotifier runs, because the app's registration came first"
+     ],
+     "answer": 2,
+     "explanation": "A single resolve gets the last registration, but IEnumerable resolves every registration in order. Call RemoveAll for the service before adding the fake."
+    },
+    {
+     "key": "fund:csharp/21-testing-web-apps-seams-and-fakes/q04",
+     "prompt": "Email has a unique index. A test that uses EF Core's InMemory provider signs up the same email twice and gets 201 both times, while production returns 500 the second time. Why?",
+     "choices": [
+      "The InMemory provider runs no SQL and enforces no unique index, so both inserts succeed",
+      "The test client replays the first response from a cache",
+      "Model validation skips duplicate checks in the Testing environment",
+      "The two requests share one DbContext, so the second insert merges into the first"
+     ],
+     "answer": 0,
+     "explanation": "InMemory is not a relational database, so constraints such as unique indexes are not checked. Test against the real engine (SQLite or a container) to see what production does."
+    },
+    {
+     "key": "fund:csharp/21-testing-web-apps-seams-and-fakes/q05",
+     "prompt": "A test factory uses SQLite with `DataSource=:memory:` and opens a new connection for each DbContext. The second request fails with \"no such table\". Why?",
+     "choices": [
+      "SQLite drops every table after each committed transaction",
+      "EnsureCreated must run again for each request in the Testing environment",
+      "The in-memory database becomes read-only once the first connection closes",
+      "Each new connection opens its own empty in-memory database"
+     ],
+     "answer": 3,
+     "explanation": "An in-memory SQLite database belongs to its connection. Keep one connection open for the factory's lifetime and create the schema on it."
+    },
+    {
+     "key": "fund:csharp/21-testing-web-apps-seams-and-fakes/q06",
+     "prompt": "Which test is the most likely to break after a refactor that keeps the endpoint's behaviour the same?",
+     "choices": [
+      "Posting a signup, then asserting the fake outbox holds one email",
+      "Verifying that the repository's Save method ran before its GetById",
+      "Asserting a 409 when the fake store already holds that email",
+      "Freezing the clock, then checking ExpiresAt in the response"
+     ],
+     "answer": 1,
+     "explanation": "Asserting the call order of internal methods ties the test to one implementation. The other three check outcomes that any correct implementation produces."
+    },
+    {
+     "key": "fund:csharp/21-testing-web-apps-seams-and-fakes/q07",
+     "prompt": "Two integration tests pass when run alone but fail together in a different order. What is the likely cause?",
+     "choices": [
+      "The client from CreateClient caches responses between tests",
+      "The factory rebuilds Program for each test and loses state",
+      "They share one database and depend on each other's rows",
+      "The test server's port is reused before it is released"
+     ],
+     "answer": 2,
+     "explanation": "Shared data couples tests to their order. Give each test class its own database, or reset what each test touches."
+    },
+    {
+     "key": "fund:csharp/21-testing-web-apps-seams-and-fakes/q08",
+     "prompt": "How do integration tests call `[Authorize]` endpoints as different users without a real identity provider?",
+     "choices": [
+      "Turn authorization off in the Testing environment and test the handlers alone",
+      "Sign a real JWT with the production signing key inside every test",
+      "Call the endpoint method directly with a hand-built User property",
+      "Register a test auth handler that reads the user from a header"
+     ],
+     "answer": 3,
+     "explanation": "A test authentication scheme builds the ClaimsPrincipal from a header, so the real authorization rules still decide 401, 403 or 200."
+    },
+    {
+     "key": "fund:csharp/21-testing-web-apps-seams-and-fakes/q09",
+     "prompt": "A service reads `clock.GetUtcNow()` once for CreatedAt and again for ExpiresAt. What can go wrong?",
+     "choices": [
+      "The stamps can differ, so ExpiresAt is not CreatedAt plus 7 days",
+      "TimeProvider throws when it is read twice in one request scope",
+      "The second read returns local time instead of UTC",
+      "Nothing: every read inside one request returns the same instant"
+     ],
+     "answer": 0,
+     "explanation": "Each read returns the time of that read. One read per operation gives every timestamp of the action the same instant."
+    },
+    {
+     "key": "fund:csharp/21-testing-web-apps-seams-and-fakes/q10",
+     "prompt": "In a WebApplicationFactory test of the signup endpoint, what should be replaced with fakes?",
+     "choices": [
+      "Routing, model binding and validation, to keep the test fast",
+      "The JSON serializer, so the response can be compared as an object",
+      "The email sender and the clock, the edges the test must control",
+      "Everything except the endpoint under test"
+     ],
+     "answer": 2,
+     "explanation": "Replace what leaves the process and what the test must control. Everything else stays real, because that is what the test is meant to prove."
+    }
+   ],
+   "flashcards": [
+    {
+     "key": "fund:csharp/21-testing-web-apps-seams-and-fakes/c01",
+     "front": "What is a seam?",
+     "back": "A place where a test can change behaviour without editing the code there, such as an injected clock, id generator or outbound client."
+    },
+    {
+     "key": "fund:csharp/21-testing-web-apps-seams-and-fakes/c02",
+     "front": "Stub, fake, mock",
+     "back": "A stub returns canned answers, a fake is a small working implementation, and a mock records calls so a test can assert on them."
+    },
+    {
+     "key": "fund:csharp/21-testing-web-apps-seams-and-fakes/c03",
+     "front": "What does WebApplicationFactory<Program> do?",
+     "back": "It boots the app's real Program on an in-memory TestServer and hands out HttpClients whose requests go through the whole pipeline."
+    },
+    {
+     "key": "fund:csharp/21-testing-web-apps-seams-and-fakes/c04",
+     "front": "Where do test doubles go in a WebApplicationFactory test?",
+     "back": "In ConfigureTestServices, which runs after the app's own registrations: remove the real service, then add the fake."
+    },
+    {
+     "key": "fund:csharp/21-testing-web-apps-seams-and-fakes/c05",
+     "front": "Single resolve versus IEnumerable<T>",
+     "back": "One resolve returns the last registration, while IEnumerable<T> returns all of them, so a fake added without RemoveAll leaves the real one active there."
+    },
+    {
+     "key": "fund:csharp/21-testing-web-apps-seams-and-fakes/c06",
+     "front": "Why keep a SQLite :memory: connection open?",
+     "back": "The in-memory database lives only as long as its connection, and every new connection starts with an empty database."
+    },
+    {
+     "key": "fund:csharp/21-testing-web-apps-seams-and-fakes/c07",
+     "front": "What should an integration test assert?",
+     "back": "HTTP behaviour: the status code, headers such as Location, the response body, and the side effects the fakes recorded."
+    },
+    {
+     "key": "fund:csharp/21-testing-web-apps-seams-and-fakes/c08",
+     "front": "Why must a fake keep the real store's rules?",
+     "back": "A fake that allows what the database forbids, such as a duplicate unique key, lets tests pass for code that fails in production."
+    }
+   ],
+   "drillKeys": [
+    "fund-csharp/21-testing-web-apps-seams-and-fakes/01-clock-seam-and-invite-expiry",
+    "fund-csharp/21-testing-web-apps-seams-and-fakes/02-fake-repository-keeps-the-constraints"
+   ]
+  },
+  {
+   "id": "22-httpclient-timeouts-retries-and-cancellation",
+   "order": 22,
+   "title": "HttpClient resilience: timeouts, retries & cancellation",
+   "level": "advanced",
+   "summary": "IHttpClientFactory and socket reuse, timeouts on every call, telling a timeout from caller cancellation with linked tokens, which failures are transient and which requests are safe to repeat, exponential backoff with full jitter inside a budget, and the standard resilience pipeline.",
+   "lesson": "## One client per dependency, from the factory\n\nCreating `new HttpClient()` for every call and disposing it closes a connection each time; closed connections linger in TIME_WAIT, and under load the machine runs out of sockets. One static client kept forever never notices a DNS change. `IHttpClientFactory` pools and recycles the message handlers, and a typed client is the one place to set the base address, headers, timeout and resilience handlers:\n\n```csharp\nbuilder.Services.AddHttpClient<IWebhookSender, HttpWebhookSender>(client =>\n    client.Timeout = TimeSpan.FromSeconds(10));   // one slow subscriber cannot stall the drain\n```\n\n## Every outbound call needs a timeout\n\n`HttpClient.Timeout` defaults to 100 seconds, so a hung dependency holds your request, its connection and its caller for that long. When the timeout fires, `SendAsync` throws a `TaskCanceledException` (an `OperationCanceledException`) whose inner exception is a `TimeoutException`. Pick a timeout that fits inside your own caller's deadline.\n\n## Timeout or cancellation? Ask the caller's token\n\nAn `OperationCanceledException` means one of two things: your timeout fired, or the caller gave up (the client disconnected, the host is stopping). Only the caller's token can tell them apart:\n\n```csharp\nusing var attempt = CancellationTokenSource.CreateLinkedTokenSource(ct);\nattempt.CancelAfter(TimeSpan.FromSeconds(2));\ntry\n{\n    return Results.Ok(await client.GetStringAsync(url, attempt.Token));\n}\ncatch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }   // the caller left\ncatch (OperationCanceledException) { return Results.StatusCode(504); }          // our timeout fired\n```\n\nA linked source is cancelled when the caller's token is cancelled and also when its own `CancelAfter` fires; it never cancels the caller's token. Dispose it, and pass the token to every async call, including the `Task.Delay` of a backoff.\n\n## Retry only what is transient and safe to repeat\n\nTransient: connection failures (`HttpRequestException`), 408, 429, 500, 502, 503 and 504. The other 4xx answers (400, 401, 403, 404, 409, 422) will be the same next time, so a retry only adds latency. Safe to repeat: GET, HEAD, PUT and DELETE, which are idempotent. Retry a POST or PATCH only when it carries an idempotency key that the server deduplicates on; otherwise a retried \"create payment\" can charge twice. A request message can be sent only once, so build a fresh `HttpRequestMessage` for every attempt.\n\n## Backoff with jitter, inside a budget\n\nExponential backoff (base x 2^(attempt-1), capped) gives a struggling service room to recover. Full jitter waits a random fraction of that delay, so clients that failed at the same moment do not all come back at the same moment. A 429 or 503 may carry `Retry-After`: honour it. Bound everything: a maximum number of attempts and a total waiting budget below your caller's timeout. Retries multiply: three layers that each try 3 times send 27 calls to the bottom service during an outage.\n\n## The standard resilience pipeline\n\n`AddStandardResilienceHandler()` (package `Microsoft.Extensions.Http.Resilience`, used by the eShop sample's service defaults) stacks the pieces for you: a total request timeout on the outside, then retry, then a circuit breaker, and a per-attempt timeout on the inside. Every retry gets a fresh attempt timeout, and the total timeout caps the whole operation. After many failures the circuit breaker opens and fails calls at once for a while, so a dead dependency costs microseconds instead of a full timeout per request.\n",
+   "quiz": [
+    {
+     "key": "fund:csharp/22-httpclient-timeouts-retries-and-cancellation/q01",
+     "prompt": "What does `HttpClient` throw when its `Timeout` elapses?",
+     "choices": [
+      "A TimeoutException, thrown directly by SendAsync",
+      "A TaskCanceledException wrapping a TimeoutException",
+      "An HttpRequestException whose StatusCode is 408 Request Timeout",
+      "Nothing: it returns a 504 response to the caller"
+     ],
+     "answer": 1,
+     "explanation": "The timeout cancels the request, so it surfaces as a TaskCanceledException (an OperationCanceledException); the inner TimeoutException says the cause was the timeout, not a caller."
+    },
+    {
+     "key": "fund:csharp/22-httpclient-timeouts-retries-and-cancellation/q02",
+     "prompt": "A handler catches every `OperationCanceledException` from an outbound call and returns 504. What is wrong with that?",
+     "choices": [
+      "A caller that gave up is reported as an upstream timeout",
+      "An OperationCanceledException can never come from a timeout",
+      "504 is reserved for timeouts inside the server's own pipeline",
+      "It has to catch TaskCanceledException for the catch to work at all"
+     ],
+     "answer": 0,
+     "explanation": "Cancellation by the caller and your own timeout both throw OperationCanceledException. Check the caller's token: if it is cancelled, let the exception go; otherwise your timeout fired and 504 is right."
+    },
+    {
+     "key": "fund:csharp/22-httpclient-timeouts-retries-and-cancellation/q03",
+     "prompt": "Which failed call should a client retry?",
+     "choices": [
+      "422 Unprocessable Entity on a POST",
+      "404 Not Found on a GET",
+      "503 Service Unavailable on a GET request",
+      "401 Unauthorized on a DELETE"
+     ],
+     "answer": 2,
+     "explanation": "503 is transient and GET is safe to repeat. The 4xx answers describe the request itself, so the same request gets the same answer."
+    },
+    {
+     "key": "fund:csharp/22-httpclient-timeouts-retries-and-cancellation/q04",
+     "prompt": "A POST /payments call timed out. When is it safe to retry it?",
+     "choices": [
+      "Always, because a timeout means the server did nothing",
+      "Never: no POST request may ever be sent a second time",
+      "When the retry first waits as long as the timeout did",
+      "With an idempotency key the server deduplicates on"
+     ],
+     "answer": 3,
+     "explanation": "The server may have charged before the response was lost. An idempotency key lets it recognise the retry and return the first result instead of charging again."
+    },
+    {
+     "key": "fund:csharp/22-httpclient-timeouts-retries-and-cancellation/q05",
+     "prompt": "Why add jitter to exponential backoff?",
+     "choices": [
+      "So clients that failed together do not all retry at once",
+      "So the delay never grows past the HttpClient timeout value",
+      "So that each retry reaches a different server instance",
+      "Because Task.Delay is inaccurate below about 15 milliseconds"
+     ],
+     "answer": 0,
+     "explanation": "Without jitter, every client that saw the same outage retries on the same schedule, and the synchronised waves keep the service down. A random fraction of the delay spreads them out."
+    },
+    {
+     "key": "fund:csharp/22-httpclient-timeouts-retries-and-cancellation/q06",
+     "prompt": "A retry loop sends the same `HttpRequestMessage` instance on every attempt. What happens on the second attempt?",
+     "choices": [
+      "It is sent again with the same headers, body and method",
+      "HttpClient clones the message automatically before sending it again",
+      "SendAsync throws: a request message can only be sent once",
+      "The body goes out empty because its stream was read"
+     ],
+     "answer": 2,
+     "explanation": "SendAsync refuses a message that was already sent, with an InvalidOperationException. Build a fresh request for every attempt."
+    },
+    {
+     "key": "fund:csharp/22-httpclient-timeouts-retries-and-cancellation/q07",
+     "prompt": "A service creates `new HttpClient()` for each outbound call and disposes it straight after. What happens under load?",
+     "choices": [
+      "Calls get slower because every header is parsed again",
+      "Closed connections pile up until sockets run out",
+      "The clients cannot be collected, so memory grows without bound",
+      "Nothing: disposing each client releases everything at once"
+     ],
+     "answer": 1,
+     "explanation": "Each disposed client closes its connection, which lingers in TIME_WAIT. IHttpClientFactory pools and reuses the handlers instead."
+    },
+    {
+     "key": "fund:csharp/22-httpclient-timeouts-retries-and-cancellation/q08",
+     "prompt": "A linked source is created from the request's token and given `CancelAfter` of 2 seconds. The 2 seconds pass. What is cancelled?",
+     "choices": [
+      "Both the linked token and the request's own token are cancelled",
+      "Only the request's token, and the linked one follows it",
+      "Only the linked token; the request's token is untouched",
+      "Neither, because CancelAfter only affects later tasks"
+     ],
+     "answer": 2,
+     "explanation": "Linking works one way: the linked source listens to the request's token, but its own cancellation never flows back to the token it was linked from."
+    },
+    {
+     "key": "fund:csharp/22-httpclient-timeouts-retries-and-cancellation/q09",
+     "prompt": "Three service layers each try a failing call up to 3 times. How many calls can one user request send to the bottom service?",
+     "choices": [
+      "3 calls, one per layer",
+      "9 calls",
+      "27 calls",
+      "6 calls"
+     ],
+     "answer": 2,
+     "explanation": "Each layer multiplies the attempts below it: 3 x 3 x 3. Retry in one layer only, or share a budget, so an outage is not amplified."
+    },
+    {
+     "key": "fund:csharp/22-httpclient-timeouts-retries-and-cancellation/q10",
+     "prompt": "A resilience pipeline has a total timeout, retries and a per-attempt timeout. Where does the per-attempt timeout belong?",
+     "choices": [
+      "Outside the retry, so it caps the whole operation",
+      "Inside the retry, so each attempt gets a fresh timeout of its own",
+      "Before the circuit breaker, so timeouts are never counted",
+      "Nowhere, because the total timeout makes it redundant"
+     ],
+     "answer": 1,
+     "explanation": "Inside the retry, every attempt starts a fresh attempt timeout, while the total timeout outside caps the attempts and waits together."
+    }
+   ],
+   "flashcards": [
+    {
+     "key": "fund:csharp/22-httpclient-timeouts-retries-and-cancellation/c01",
+     "front": "The default HttpClient.Timeout",
+     "back": "100 seconds, so a client with no timeout of its own lets a hung dependency hold the caller's request that long."
+    },
+    {
+     "key": "fund:csharp/22-httpclient-timeouts-retries-and-cancellation/c02",
+     "front": "Timeout versus caller cancellation",
+     "back": "Both surface as OperationCanceledException; whether the caller's own token is cancelled tells you which one happened."
+    },
+    {
+     "key": "fund:csharp/22-httpclient-timeouts-retries-and-cancellation/c03",
+     "front": "Transient HTTP failures",
+     "back": "Connection errors and the statuses 408, 429, 500, 502, 503 and 504; the other 4xx answers will not change on a retry."
+    },
+    {
+     "key": "fund:csharp/22-httpclient-timeouts-retries-and-cancellation/c04",
+     "front": "Which methods are safe to retry?",
+     "back": "The idempotent ones, GET, HEAD, PUT and DELETE; a POST or PATCH first needs a key the server deduplicates on."
+    },
+    {
+     "key": "fund:csharp/22-httpclient-timeouts-retries-and-cancellation/c05",
+     "front": "Full jitter",
+     "back": "Wait a random fraction of the capped exponential delay, so clients that failed together spread out instead of returning in waves."
+    },
+    {
+     "key": "fund:csharp/22-httpclient-timeouts-retries-and-cancellation/c06",
+     "front": "Why IHttpClientFactory?",
+     "back": "It pools and recycles message handlers, which avoids both socket exhaustion from per-call clients and stale DNS in one client kept forever."
+    },
+    {
+     "key": "fund:csharp/22-httpclient-timeouts-retries-and-cancellation/c07",
+     "front": "Retry-After",
+     "back": "A 429 or 503 can say how long to wait before trying again; that wait replaces the computed backoff."
+    },
+    {
+     "key": "fund:csharp/22-httpclient-timeouts-retries-and-cancellation/c08",
+     "front": "Why give retries a budget?",
+     "back": "Capped attempts and a total wait below the caller's deadline stop retries from multiplying load or outliving the request they serve."
+    }
+   ],
+   "drillKeys": [
+    "fund-csharp/22-httpclient-timeouts-retries-and-cancellation/01-attempt-timeout-or-caller-cancelled",
+    "fund-csharp/22-httpclient-timeouts-retries-and-cancellation/02-retry-safe-requests-within-a-budget"
+   ]
+  },
+  {
+   "id": "23-authentication-authorization-and-resource-checks",
+   "order": 23,
+   "title": "Authentication vs authorization & resource-based checks",
+   "level": "advanced",
+   "summary": "401 versus 403, what authentication middleware does and does not do, claims and roles on a ClaimsPrincipal, how a policy's requirements and handlers combine, resource-based checks with IAuthorizationService, deny-by-default fallback policies, and tenant filters that live in the query.",
+   "lesson": "## Authentication says who, authorization says what\n\nAuthentication turns credentials (a cookie, a bearer token) into a `ClaimsPrincipal` on `HttpContext.User`. It does not reject anyone: a request without credentials simply carries an anonymous user. Authorization then decides whether that user may run this endpoint. The two failures have two status codes:\n\n- **401 Unauthorized**: the caller is not authenticated. The scheme answers with a challenge (a `WWW-Authenticate` header for bearer tokens, a login redirect for cookies).\n- **403 Forbidden**: the caller is known but not allowed. Signing in again will not help.\n\n## Claims, roles and the principal\n\nA `ClaimsIdentity` is a bag of claims (`sub`, `email`, `role`, `tenant`) plus an authentication type. `User.Identity.IsAuthenticated` is true only when that authentication type is set, so an identity built in a test with claims but no type still counts as anonymous. `User.IsInRole(\"admin\")` looks for a claim of the identity's role claim type with that value, and `User.FindFirst(ClaimTypes.NameIdentifier)` reads the user id.\n\n## Policies: every requirement must pass\n\n```csharp\nbuilder.Services.AddAuthorization(options =>\n    options.AddPolicy(\"CanRefund\", p => p.RequireRole(\"support\").RequireClaim(\"scope\", \"refunds\")));\n\napp.MapPost(\"/refunds\", Refund).RequireAuthorization(\"CanRefund\");\n```\n\nA policy is a list of requirements, and each requirement is checked by handlers (`AuthorizationHandler<TRequirement>`). The policy succeeds only when EVERY requirement has been marked succeeded by some handler and no handler called `Fail()`. One `Fail()` denies the whole check, whatever the other handlers said, which is how a \"suspended account\" handler can veto everything.\n\n## Resource-based checks: load first, then decide\n\n`[Authorize(Policy = \"...\")]` runs before the endpoint has loaded anything, so it cannot know who owns invoice 77. Load the resource, then ask the authorization service with it:\n\n```csharp\nvar invoice = await db.Invoices.FindAsync(id);\nif (invoice is null) return Results.NotFound();\nvar result = await auth.AuthorizeAsync(User, invoice, \"CanApproveInvoice\");\nif (!result.Succeeded) return Results.Forbid();\n```\n\nThe handler for that policy receives the invoice as `context.Resource` and can compare its owner and tenant with the user's claims. For a resource of another tenant, many APIs answer 404 instead of 403, so ids cannot be probed across tenants.\n\n## Deny by default\n\nAn endpoint with no authorization metadata is open to anyone. Set a fallback policy, `options.FallbackPolicy = new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build()`, so every new endpoint needs a signed-in user unless it says `[AllowAnonymous]`. The default policy is different: it is what a bare `[Authorize]` (no policy named) applies.\n\n## Filter in the query, not after it\n\nAn insecure direct object reference (IDOR) is an endpoint that trusts an id from the request without checking the caller may see that object. For lists the fix belongs in the query: `db.Orders.Where(o => o.TenantId == tenantId)`, or a global query filter on `TenantId`, so rows of other tenants never leave the database and page counts stay right. Removing foreign rows after loading a page leaks them the day someone forgets the check.\n",
+   "quiz": [
+    {
+     "key": "fund:csharp/23-authentication-authorization-and-resource-checks/q01",
+     "prompt": "A request with no credentials calls an endpoint that requires an authenticated user. What does ASP.NET Core answer?",
+     "choices": [
+      "403 Forbidden, because nobody is allowed in",
+      "401 Unauthorized, through the scheme's challenge",
+      "404 Not Found, so that the endpoint stays hidden",
+      "200 OK, with an empty body for the anonymous user"
+     ],
+     "answer": 1,
+     "explanation": "The caller is not authenticated, so the authentication scheme challenges: 401 with WWW-Authenticate for bearer tokens, a login redirect for cookies."
+    },
+    {
+     "key": "fund:csharp/23-authentication-authorization-and-resource-checks/q02",
+     "prompt": "A signed-in user with the role \"viewer\" calls an endpoint whose policy requires the role \"admin\". What should the response be?",
+     "choices": [
+      "401, so the user signs in again with more rights",
+      "404, to hide that the admin endpoint exists at all",
+      "403 Forbidden: known user, not permitted here",
+      "400 Bad Request, because the role claim is wrong"
+     ],
+     "answer": 2,
+     "explanation": "The user is known but not permitted. A fresh sign-in would produce the same user and the same answer, so 401 would be misleading."
+    },
+    {
+     "key": "fund:csharp/23-authentication-authorization-and-resource-checks/q03",
+     "prompt": "A policy has two requirements. A handler succeeds the first one, and no handler succeeds the second. What is the result?",
+     "choices": [
+      "Allowed: one succeeding handler is enough for the policy",
+      "Denied: every requirement of the policy must succeed",
+      "Allowed, because nothing ever evaluated the second one",
+      "An exception, because a requirement has no handler"
+     ],
+     "answer": 1,
+     "explanation": "A policy succeeds only when every requirement is marked succeeded. A requirement nobody succeeds leaves the policy failed."
+    },
+    {
+     "key": "fund:csharp/23-authentication-authorization-and-resource-checks/q04",
+     "prompt": "For one requirement, handler A calls `Succeed` and handler B calls `Fail`. What is the result?",
+     "choices": [
+      "Denied: an explicit Fail wins over any Succeed",
+      "Allowed: one Succeed is enough for each requirement",
+      "It depends on the order the handlers were registered",
+      "Allowed, and the failure is only written to the log"
+     ],
+     "answer": 0,
+     "explanation": "Fail marks the whole authorization check as failed, whatever other handlers did. That is how a veto handler (a suspended account) works."
+    },
+    {
+     "key": "fund:csharp/23-authentication-authorization-and-resource-checks/q05",
+     "prompt": "Why can `[Authorize(Policy = \"CanEditDocument\")]` on the endpoint not check that the caller owns document 42?",
+     "choices": [
+      "Attributes are evaluated once at startup, never per request",
+      "Policies cannot read any of the user's claims",
+      "It runs before the document is loaded, so there is no resource to check",
+      "Route values are hidden from the authorization layer"
+     ],
+     "answer": 2,
+     "explanation": "Endpoint authorization runs before your code, with no resource. Load the document first and call IAuthorizationService.AuthorizeAsync with it."
+    },
+    {
+     "key": "fund:csharp/23-authentication-authorization-and-resource-checks/q06",
+     "prompt": "Which line is a resource-based authorization check?",
+     "choices": [
+      "`[Authorize(Roles = \"Owner\")]` on the endpoint",
+      "`await auth.AuthorizeAsync(User, doc, \"EditPolicy\")` after loading doc",
+      "`if (User.Identity!.IsAuthenticated)` before loading doc",
+      "`User.IsInRole(doc.OwnerId)` inside the query"
+     ],
+     "answer": 1,
+     "explanation": "AuthorizeAsync with the loaded resource lets the policy's handlers compare the document's owner and tenant with the user's claims."
+    },
+    {
+     "key": "fund:csharp/23-authentication-authorization-and-resource-checks/q07",
+     "prompt": "A user of tenant A requests `/invoices/77`, which belongs to tenant B. Which answer gives away the least?",
+     "choices": [
+      "404 Not Found, as if the invoice did not exist",
+      "403 Forbidden, naming the tenant that owns it",
+      "200 OK, with every amount blanked out",
+      "401 Unauthorized, asking for a sign-in to tenant B"
+     ],
+     "answer": 0,
+     "explanation": "404 does not confirm that invoice 77 exists, so ids cannot be probed across tenants. A 403 tells the caller the id is real."
+    },
+    {
+     "key": "fund:csharp/23-authentication-authorization-and-resource-checks/q08",
+     "prompt": "What changes when the fallback policy is set to require an authenticated user?",
+     "choices": [
+      "Endpoints marked [Authorize] now also need a role",
+      "Anonymous users are sent to the login page on every request",
+      "Endpoints marked [AllowAnonymous] now need a signed-in user",
+      "Endpoints with no authorization metadata now need a signed-in user"
+     ],
+     "answer": 3,
+     "explanation": "The fallback policy applies only where an endpoint declares nothing. [AllowAnonymous] still opts out, and a bare [Authorize] uses the default policy."
+    },
+    {
+     "key": "fund:csharp/23-authentication-authorization-and-resource-checks/q09",
+     "prompt": "A test builds `new ClaimsPrincipal(new ClaimsIdentity(claims))`, with claims but no authentication type. What is `User.Identity.IsAuthenticated`?",
+     "choices": [
+      "true, because the identity carries claims",
+      "true, but only when one claim is a NameIdentifier",
+      "false: without an authentication type it is anonymous",
+      "It throws, because the authentication type is required"
+     ],
+     "answer": 2,
+     "explanation": "IsAuthenticated reports whether an authentication type was set, not whether claims exist. Pass a type such as \"Test\" to the identity."
+    },
+    {
+     "key": "fund:csharp/23-authentication-authorization-and-resource-checks/q10",
+     "prompt": "Where is the safest place to enforce \"users see only their own tenant's orders\" in a list endpoint?",
+     "choices": [
+      "In the client, which hides the rows of other tenants",
+      "In the query, for example a global filter on TenantId",
+      "In a check that drops foreign rows from each loaded page",
+      "In the endpoint's [Authorize] attribute"
+     ],
+     "answer": 1,
+     "explanation": "A filter in the query keeps other tenants' rows in the database and keeps counts and pages right; a global query filter applies it to every query by default."
+    }
+   ],
+   "flashcards": [
+    {
+     "key": "fund:csharp/23-authentication-authorization-and-resource-checks/c01",
+     "front": "401 versus 403",
+     "back": "401: the request is not authenticated, so the scheme challenges; 403: the caller is known but not allowed."
+    },
+    {
+     "key": "fund:csharp/23-authentication-authorization-and-resource-checks/c02",
+     "front": "What does authentication middleware do with a request that has no credentials?",
+     "back": "It leaves HttpContext.User anonymous and lets the request through; authorization decides later whether to challenge."
+    },
+    {
+     "key": "fund:csharp/23-authentication-authorization-and-resource-checks/c03",
+     "front": "How are a policy's requirements combined?",
+     "back": "All of them must succeed; a requirement succeeds when some handler calls Succeed, and a single Fail denies the check."
+    },
+    {
+     "key": "fund:csharp/23-authentication-authorization-and-resource-checks/c04",
+     "front": "Resource-based authorization",
+     "back": "Load the resource first, then call IAuthorizationService.AuthorizeAsync with the user, the resource and a policy or requirement."
+    },
+    {
+     "key": "fund:csharp/23-authentication-authorization-and-resource-checks/c05",
+     "front": "Default policy versus fallback policy",
+     "back": "The default policy is what [Authorize] with no policy name applies; the fallback policy covers endpoints that declare no authorization at all."
+    },
+    {
+     "key": "fund:csharp/23-authentication-authorization-and-resource-checks/c06",
+     "front": "What does User.IsInRole check?",
+     "back": "Whether the principal has a claim of its identity's role claim type with that exact value."
+    },
+    {
+     "key": "fund:csharp/23-authentication-authorization-and-resource-checks/c07",
+     "front": "Why answer 404 for another tenant's resource?",
+     "back": "It does not confirm that the id exists, so a caller cannot probe ids that belong to other tenants."
+    },
+    {
+     "key": "fund:csharp/23-authentication-authorization-and-resource-checks/c08",
+     "front": "IDOR",
+     "back": "Insecure direct object reference: an endpoint acts on an id from the request without checking that the caller may access that object."
+    }
+   ],
+   "drillKeys": [
+    "fund-csharp/23-authentication-authorization-and-resource-checks/01-evaluate-a-policy",
+    "fund-csharp/23-authentication-authorization-and-resource-checks/02-resource-based-invoice-access"
+   ]
   }
  ]
 }
