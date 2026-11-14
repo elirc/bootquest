@@ -57,6 +57,42 @@ describe('confidence tag on graded answers', () => {
   });
 });
 
+describe('rv3 W10a: confidence tag on Player drill and quiz submits', () => {
+  it('drill: picked before Submit, filed with the new attempt id, then cleared; an untagged submit files nothing', async () => {
+    const base = createMockApi();
+    const tagConfidence = vi.fn(base.tagConfidence);
+    const submitUnit = vi.fn(base.submitUnit);
+    const { user } = renderApp('/play/102', { ...base, tagConfidence, submitUnit });
+    await screen.findByRole('textbox', { name: /Code editor/ }, SLOW);
+    const pick = screen.getByTestId('confidence-pick');
+    await user.click(within(pick).getByRole('radio', { name: 'Confidence: Unsure' }));
+    await user.click(screen.getByRole('button', { name: /Submit/ }));
+    await vi.waitFor(() => expect(submitUnit).toHaveBeenCalledTimes(1));
+    const attemptId = (await submitUnit.mock.results[0]!.value).attempt.id as number;
+    await vi.waitFor(() => expect(tagConfidence).toHaveBeenCalledWith(attemptId, 'unsure'));
+    // one tag per graded try: the pick is cleared, and a second submit with no pick files nothing more
+    expect(within(screen.getByTestId('confidence-pick')).getByRole('radio', { name: 'Confidence: Unsure' })).not.toBeChecked();
+    await user.click(screen.getByRole('button', { name: /Submit/ }));
+    await vi.waitFor(() => expect(submitUnit).toHaveBeenCalledTimes(2));
+    expect(tagConfidence).toHaveBeenCalledTimes(1);
+  });
+
+  it('quiz: picked before Check answer, filed with the attempt; gone once passed', async () => {
+    const base = createMockApi();
+    const tagConfidence = vi.fn(base.tagConfidence);
+    const submitUnit = vi.fn(base.submitUnit);
+    const { user } = renderApp('/play/103', { ...base, tagConfidence, submitUnit });
+    await screen.findByRole('heading', { name: 'What does this print?' }, SLOW);
+    await user.click(screen.getByRole('radio', { name: /A D C B/ }));
+    await user.click(within(screen.getByTestId('confidence-pick')).getByRole('radio', { name: 'Confidence: Sure' }));
+    await user.click(screen.getByRole('button', { name: /Check answer/ }));
+    await vi.waitFor(() => expect(submitUnit).toHaveBeenCalledTimes(1));
+    const attemptId = (await submitUnit.mock.results[0]!.value).attempt.id as number;
+    await vi.waitFor(() => expect(tagConfidence).toHaveBeenCalledWith(attemptId, 'sure'));
+    await vi.waitFor(() => expect(screen.queryByTestId('confidence-pick')).toBeNull());
+  });
+});
+
 describe('Stats: calibration', () => {
   it('per level answers and passes; "sure but failed" named; empty text before any graded tag', async () => {
     const data: CalibrationResponse = {
