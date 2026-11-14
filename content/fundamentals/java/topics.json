@@ -3523,6 +3523,182 @@
     "fund-java/20-jpa-transactions-lazy-loading-and-n-plus-1/02-transactional-self-invocation",
     "fund-java/20-jpa-transactions-lazy-loading-and-n-plus-1/03-lazy-load-outside-the-session"
    ]
+  },
+  {
+   "id": "21-junit-5-mockito-and-fakes",
+   "order": 21,
+   "title": "JUnit 5 & Mockito: test behaviour, fake the boundary",
+   "level": "advanced",
+   "summary": "The JUnit 5 test lifecycle and assertions, testing behaviour through the public API, Mockito stubs, default answers, argument matching and verification, spies, why to fake your own boundary instead of mocking types you do not own, and what makes a fake trustworthy.",
+   "lesson": "## A JUnit 5 test runs on a fresh instance\n\n```java\nclass PriceCalculatorTest {\n    private final FakeClock clock = new FakeClock(Instant.parse(\"2026-03-07T10:00:00Z\"));\n    private PriceCalculator calc;\n\n    @BeforeEach\n    void setUp() { calc = new PriceCalculator(clock); }\n\n    @Test\n    void addsTheWeekendSurcharge() {\n        assertEquals(new BigDecimal(\"12.00\"), calc.price(\"SKU-1\", 1));\n    }\n\n    @Test\n    void rejectsANegativeQuantity() {\n        var e = assertThrows(IllegalArgumentException.class, () -> calc.price(\"SKU-1\", -1));\n        assertEquals(\"quantity must be positive\", e.getMessage());\n    }\n}\n```\n\nBy default JUnit Jupiter creates a NEW instance of the test class for every test method, so instance fields start fresh each time. `@BeforeEach` runs before every test, `@BeforeAll` once per class (a static method by default). The order of test methods is not something to rely on: a test that needs another test to run first is broken. `assertThrows` returns the exception so you can check its message, `assertAll` reports every failing assertion instead of the first, and `@ParameterizedTest` with `@CsvSource` runs one test over many rows.\n\n## Test behaviour through the public API\n\nA good test says what the code promises: given these inputs, this result, this state, this message sent. It calls the public methods and checks outcomes. A test that asserts private details or the order of internal calls breaks on every refactor and still misses real bugs.\n\n## Mockito: stubs, defaults and verification\n\n```java\nPaymentGateway gateway = mock(PaymentGateway.class);\nwhen(gateway.charge(\"order-7\", \"card-1\", 1200)).thenReturn(new Charge(\"ch_1\", \"card-1\", 1200, APPROVED));\n\ncheckout.pay(\"7\", \"card-1\", 1200);\n\nverify(mailer, times(1)).send(eq(\"ana@x.io\"), contains(\"receipt\"));\n```\n\nA stub answers only a call whose arguments are `equals` to the stubbed ones; any other call gets the default answer: `null` for most objects, `0` or `false` for primitives and their wrappers, and an EMPTY collection, `Optional.empty()` or empty stream for those types. Once one argument uses a matcher (`any()`, `eq(...)`), every argument must. `thenThrow` scripts a failure, and an `ArgumentCaptor` catches what was passed so you can assert on it. With `MockitoExtension`'s strict stubs, a stub the test never uses fails the test, which keeps setups honest.\n\n## Fake the boundary; do not mock what you do not own\n\nPut a seam at the edge of your system, an interface YOU define (`PaymentGateway`, `Mailer`, a `Clock`), and mock or fake that. Do not mock types you do not own, such as a JDBC `ResultSet`, an `HttpClient` or JPA's `EntityManager`: the mock encodes your guess of how they behave, and the tests stay green when the guess is wrong. Test those against the real thing (an in-memory or containerised database behind your repository).\n\nA hand-written fake of your own boundary is often better than a mock: it is reusable, readable, and it can keep the real rules. A payment fake that honours idempotency keys and can \"lose\" a response after charging lets a test prove that the retry does not charge twice.\n\n## Spies and over-mocking\n\n`spy(real)` calls the real methods unless stubbed. `when(spy.loadAll()).thenReturn(...)` calls the REAL `loadAll` once while setting up the stub; use `doReturn(...).when(spy).loadAll()` instead. If a test needs ten `when` lines and then verifies every call, it is a copy of the implementation: it breaks on every refactor and proves little. Prefer one fake and assertions on the outcome.\n",
+   "quiz": [
+    {
+     "key": "fund:java/21-junit-5-mockito-and-fakes/q01",
+     "prompt": "A JUnit 5 test class has the field `List<String> seen = new ArrayList<>()`. Test A adds an item; test B asserts that `seen` is empty. What happens when both run?",
+     "choices": [
+      "B fails whenever A happens to run first",
+      "B fails, because JUnit runs the methods in declaration order",
+      "B passes: each test method gets a new instance of the class",
+      "It depends on whether a @BeforeEach method clears the list"
+     ],
+     "answer": 2,
+     "explanation": "The default per-method lifecycle builds a fresh test instance for every test method, so instance fields never carry state between tests."
+    },
+    {
+     "key": "fund:java/21-junit-5-mockito-and-fakes/q02",
+     "prompt": "What does `assertThrows(IllegalArgumentException.class, () -> calc.price(\"SKU-1\", -1))` give the test?",
+     "choices": [
+      "A boolean saying whether the exception was thrown or not",
+      "The thrown exception, so its message can be checked too",
+      "Nothing; it only prints the exception's stack trace to the console",
+      "The message string, or null when nothing was thrown"
+     ],
+     "answer": 1,
+     "explanation": "assertThrows fails the test when no exception (or another type) is thrown, and returns the exception otherwise, ready for assertions on its message."
+    },
+    {
+     "key": "fund:java/21-junit-5-mockito-and-fakes/q03",
+     "prompt": "`List<Order> findOpen()` on a Mockito mock was never stubbed. What does a call return?",
+     "choices": [
+      "null, like every other unstubbed method",
+      "It throws UnsupportedOperationException",
+      "A list that holds one mock Order",
+      "An empty list, not null"
+     ],
+     "answer": 3,
+     "explanation": "Mockito's default answer returns empty collections for collection types, Optional.empty() for Optional, 0 or false for primitives and wrappers, and null for other objects."
+    },
+    {
+     "key": "fund:java/21-junit-5-mockito-and-fakes/q04",
+     "prompt": "The test stubs `when(repo.findByEmail(\"ana@x.io\")).thenReturn(Optional.of(ana))`. The code calls `repo.findByEmail(\"ANA@x.io\")`. What does it get?",
+     "choices": [
+      "Optional.empty(): the arguments are matched with equals",
+      "Optional.of(ana), because stubs ignore letter case",
+      "An exception, since the call matches no stub",
+      "null, because the stub has no default value"
+     ],
+     "answer": 0,
+     "explanation": "Arguments are compared with equals, and \"ANA@x.io\" is not equal to \"ana@x.io\", so the call gets the default answer for an Optional return type."
+    },
+    {
+     "key": "fund:java/21-junit-5-mockito-and-fakes/q05",
+     "prompt": "Which dependency is the best candidate for a Mockito mock or a hand-written fake?",
+     "choices": [
+      "A JDBC ResultSet, so that the test needs no database at all",
+      "Your own PaymentGateway interface around the card provider",
+      "The BigDecimal arithmetic inside the price calculator",
+      "The JPA EntityManager that the repository calls into"
+     ],
+     "answer": 1,
+     "explanation": "Fake the boundary you own. Third-party types like ResultSet and EntityManager should be tested against the real thing, and plain arithmetic needs no double at all."
+    },
+    {
+     "key": "fund:java/21-junit-5-mockito-and-fakes/q06",
+     "prompt": "Why is mocking `EntityManager` in a repository test risky?",
+     "choices": [
+      "Mockito cannot mock interfaces that come from the jakarta packages",
+      "Its methods are final, so every stub is silently ignored by Mockito",
+      "It encodes your guess of JPA, and a wrong guess still passes",
+      "The test would need a whole running Spring context"
+     ],
+     "answer": 2,
+     "explanation": "A mock of a type you do not own tests your assumptions about it. A repository test against a real database finds the query, mapping and flush problems the mock hides."
+    },
+    {
+     "key": "fund:java/21-junit-5-mockito-and-fakes/q07",
+     "prompt": "A test stubs five methods, calls the service, then verifies all five calls in order. What is the main problem?",
+     "choices": [
+      "verify has no way to check the order in which calls happened",
+      "Five stubs make Mockito noticeably slower on every run",
+      "It mirrors the implementation, so every refactor breaks it",
+      "A stubbed method can no longer be verified"
+     ],
+     "answer": 2,
+     "explanation": "The test restates how the service works instead of what it promises. Assert on the outcome, and verify only interactions that are the behaviour."
+    },
+    {
+     "key": "fund:java/21-junit-5-mockito-and-fakes/q08",
+     "prompt": "A test writes `when(spy.loadAll()).thenReturn(List.of())` on a spy whose real `loadAll` calls the network. What happens?",
+     "choices": [
+      "The stub takes effect and nothing real runs at any point",
+      "The real loadAll runs once while the stub is set up",
+      "Mockito refuses, because a spy can never be stubbed at all",
+      "The spy turns into a plain mock for every one of its methods"
+     ],
+     "answer": 1,
+     "explanation": "when(spy.loadAll()) has to call spy.loadAll() to know what to stub, and on a spy that is the real method. doReturn(...).when(spy).loadAll() stubs without calling it."
+    },
+    {
+     "key": "fund:java/21-junit-5-mockito-and-fakes/q09",
+     "prompt": "Many tests will share a payment fake. Which behaviour should it keep from the real gateway?",
+     "choices": [
+      "None: a fake should simply approve every charge it gets",
+      "A random delay on every call, so tests feel realistic",
+      "A reused idempotency key returns the first charge",
+      "A console log line for every call, to help debugging"
+     ],
+     "answer": 2,
+     "explanation": "The fake must keep the rules the code relies on. Idempotency is what makes a retry after a timeout safe, so a fake without it cannot test that retry."
+    },
+    {
+     "key": "fund:java/21-junit-5-mockito-and-fakes/q10",
+     "prompt": "With `MockitoExtension`'s strict stubs, a test stubs a method that the code under test never calls. What happens?",
+     "choices": [
+      "The test fails with an unnecessary-stubbing error",
+      "Nothing at all: unused stubs are simply ignored",
+      "The stub carries over into the next test method",
+      "Mockito logs a warning and the test passes"
+     ],
+     "answer": 0,
+     "explanation": "Strict stubs report a stub nobody used, because it usually means the test or the code is not doing what the author thinks."
+    }
+   ],
+   "flashcards": [
+    {
+     "key": "fund:java/21-junit-5-mockito-and-fakes/c01",
+     "front": "JUnit 5 test-instance lifecycle",
+     "back": "By default a new instance of the test class is created for every test method, so instance fields start fresh in each test."
+    },
+    {
+     "key": "fund:java/21-junit-5-mockito-and-fakes/c02",
+     "front": "@BeforeEach versus @BeforeAll",
+     "back": "@BeforeEach runs before every test method; @BeforeAll runs once for the class and is a static method by default."
+    },
+    {
+     "key": "fund:java/21-junit-5-mockito-and-fakes/c03",
+     "front": "Mockito's default answers",
+     "back": "Unstubbed calls return null for most objects, zero or false for primitives and wrappers, and empty collections, Optional or streams for those types."
+    },
+    {
+     "key": "fund:java/21-junit-5-mockito-and-fakes/c04",
+     "front": "How does Mockito match a stub's arguments?",
+     "back": "With equals on each argument, unless matchers are used, and then every argument of that call must be a matcher."
+    },
+    {
+     "key": "fund:java/21-junit-5-mockito-and-fakes/c05",
+     "front": "Stub or verify?",
+     "back": "Stub to supply the inputs a test needs; verify only the interactions that are themselves the behaviour, such as one receipt email."
+    },
+    {
+     "key": "fund:java/21-junit-5-mockito-and-fakes/c06",
+     "front": "Don't mock what you don't own",
+     "back": "Mock or fake your own interfaces at the boundary, and test third-party types such as JDBC or JPA against the real thing."
+    },
+    {
+     "key": "fund:java/21-junit-5-mockito-and-fakes/c07",
+     "front": "Stubbing a spy safely",
+     "back": "Use doReturn(value).when(spy).method(), because when(spy.method()) runs the real method while setting up the stub."
+    },
+    {
+     "key": "fund:java/21-junit-5-mockito-and-fakes/c08",
+     "front": "What makes a fake trustworthy?",
+     "back": "It keeps the real dependency's rules, such as idempotency keys and declines, so tests fail where production would fail."
+    }
+   ],
+   "drillKeys": [
+    "fund-java/21-junit-5-mockito-and-fakes/01-fake-the-payment-gateway",
+    "fund-java/21-junit-5-mockito-and-fakes/02-a-mock-by-hand"
+   ]
   }
  ]
 }
