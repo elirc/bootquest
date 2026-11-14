@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { REPO_ROOT } from '../factory/report.ts';
-import { formatKeyIdeasReport, keyIdeasFailed, keyIdeasReport, readEstate, scopeUnits, wordCount } from './keyideas-lint.ts';
+import { formatKeyIdeasReport, IDEA_LEAK_PENDING, keyIdeasFailed, keyIdeasReport, MAX_RECAP_UNITS, readEstate, recapUnitsNeeded, RECAP_UNITS_PENDING, scopeUnits, wordCount } from './keyideas-lint.ts';
 
 const root = mkdtempSync(join(tmpdir(), 'bq-keyideas-'));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -92,7 +92,7 @@ describe('seed:lint:keyideas: schema, counts, keys', () => {
     expect(r.problems).toEqual([]);
     expect(keyIdeasFailed(r)).toBe(false);
     expect(formatKeyIdeasReport(r).at(-1)).toBe('RESULT OK');
-    expect(r.perSection).toEqual([{ section: 'demo', ideas: 5, scopeUnits: 5 }]);
+    expect(r.perSection).toEqual([{ section: 'demo', ideas: 5, scopeUnits: 5, recapUnits: 4 }]);
   });
 
   it('no content/keyideas dir is clean (0 files)', () => {
@@ -123,6 +123,32 @@ describe('seed:lint:keyideas: schema, counts, keys', () => {
     expect(msgs(estate({ demo: section(five(), { recapAfter: 3 }) }))).toEqual([]);
     expect(msgs(estate({ demo: section(five(), { recapAfter: 1.5 }) })).some((x) => /schema: recapAfter: a fraction <= 1 or a whole count >= 2/.test(x))).toBe(true);
     expect(msgs(estate({ demo: section(five(), { recapAfter: 9 }) }))).toContain(': recapAfter 9 is more than the 5 live scope unit(s)');
+  });
+
+  it('rv3 MF-2: a recap that needs more than 40 passed scope units is a problem (a whole count or a narrow scope passes)', () => {
+    // 50 drills under one prefix: 0.8 x 50 = 40 is the limit; 51 units -> 41 is over it
+    const many = (n: number) => Array.from({ length: n }, (_, i) => ({ unit: { key: `big/c1/d${i}`, track: 'js', kind: 'drill', title: `d${i}`, checks: [{ spec: { type: 'drill-js' } }] } }));
+    const big = (n: number, over: Record<string, unknown> = {}) => {
+      const dir = estate({ demo: section(five(), { scope: ['big/c1/'], ...over }) });
+      put(dir, 'packs/big/c1.json', { format: 'bootquest-pack@1', units: many(n) });
+      return dir;
+    };
+    expect(recapUnitsNeeded(0.8, 50)).toBe(40);
+    expect(recapUnitsNeeded(undefined, 51)).toBe(41);
+    expect(recapUnitsNeeded(12, 129)).toBe(12);
+    expect(msgs(big(50))).toEqual([]);
+    expect(msgs(big(51))).toContain(': the recap opens after 41 passed scope units (max 40): use a whole-count recapAfter or a narrower scope');
+    expect(msgs(big(129, { recapAfter: 27 }))).toEqual([]);
+    expect(keyIdeasReport(big(129, { recapAfter: 27 })).perSection[0]).toMatchObject({ scopeUnits: 129, recapUnits: 27 });
+    // a pending section (scheduled fix) is reported apart, and a pending entry that no longer applies is a problem
+    const pend = estate({ sysdrills: section(Array.from({ length: 18 }, (_, i) => idea(`i-${i}`)), { section: 'sysdrills', scope: ['big/c1/'] }) });
+    put(pend, 'packs/big/c1.json', { format: 'bootquest-pack@1', units: many(60) });
+    const r = keyIdeasReport(pend);
+    expect(r.problems).toEqual([]);
+    expect(r.pending).toEqual([{ section: 'sysdrills', recapUnits: 48, owner: RECAP_UNITS_PENDING.sysdrills }]);
+    expect(formatKeyIdeasReport(r)).toContain(`PENDING sysdrills: the recap opens after 48 passed units (max ${MAX_RECAP_UNITS}); fix scheduled: rv3 S1 content patch`);
+    const fixed = estate({ sysdrills: section(Array.from({ length: 18 }, (_, i) => idea(`i-${i}`)), { section: 'sysdrills' }) });
+    expect(msgs(fixed)).toContain(': RECAP_UNITS_PENDING lists this section but its recap opens after 4 unit(s), within 40: remove the entry');
   });
 
   it('word limits, duplicate ids and a section that does not match its file name', () => {
@@ -171,6 +197,23 @@ describe('seed:lint:keyideas: xleak (prompt + answer vs keyed answers outside so
     expect(keyIdeasReport(estate({ demo: section(own) })).leaks).toBe(0);
   });
 
+  it('rv3 MF-4: the idea sentence is leak-checked too (quiz key token rule and key-point containment)', () => {
+    const quiz = five();
+    quiz[0] = idea('idea-1', { idea: 'The cache key carries the tenant id.' });
+    const r = keyIdeasReport(estate({ demo: section(quiz) }));
+    expect(r.leaks).toBe(1);
+    expect(r.problems[0]!.message).toMatch(/^LEAK idea contains the keyed answer of pack:demo\/c1\/q1/);
+    const kp = five();
+    kp[0] = idea('idea-1', { idea: 'Each replica invalidates its local copy through a broadcast channel before the write returns, so readers never observe stale prices.' });
+    expect(keyIdeasReport(estate({ demo: section(kp) })).problems.map((p) => p.message).some((m) => /^LEAK idea restates eb:demo--doc q1\.kp1/.test(m))).toBe(true);
+    // a listed pending leak is reported apart (not a problem); the other matchers still run
+    expect(Object.values(IDEA_LEAK_PENDING).every((o) => o === 'rv3 S3' || o === 'rv3 S1 content patch')).toBe(true);
+    // a source's own key is allowed in the idea sentence (the server withholds it until the sources are passed)
+    const own = five();
+    own[0] = idea('idea-1', { idea: 'The cache key carries the tenant id.', sources: ['demo/c1/q1'] });
+    expect(keyIdeasReport(estate({ demo: section(own) })).leaks).toBe(0);
+  });
+
   it('an explain-back key point paraphrased outside the sources is a LEAK (containment rule)', () => {
     const ideas = five();
     ideas[0] = idea('idea-1', { prompt: 'How do replicas avoid stale prices?', answer: 'Each replica invalidates its local copy through a broadcast channel before the write returns to the caller, so readers never observe stale prices.' });
@@ -187,5 +230,9 @@ describe('seed:lint:keyideas: the committed side files', () => {
     expect(r.files).toBe(24);
     expect(r.perSection.find((s) => s.section === 'sysdrills')?.ideas).toBe(18);
     for (const s of r.perSection) if (s.section !== 'sysdrills') expect(s.ideas).toBeGreaterThanOrEqual(5);
+    // rv3 MF-4: the idea sentences that still restate a key outside their sources are exactly the listed ones
+    expect(r.pendingLeaks.map((x) => x.key).sort()).toEqual(Object.keys(IDEA_LEAK_PENDING).sort());
+    // rv3 MF-2: every recap opens within 40 units, or its fix is scheduled (RECAP_UNITS_PENDING)
+    for (const s of r.perSection) if (!RECAP_UNITS_PENDING[s.section]) expect(s.recapUnits, s.section).toBeLessThanOrEqual(MAX_RECAP_UNITS);
   }, 600_000);
 });
