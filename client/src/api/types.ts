@@ -144,6 +144,9 @@ export type {
   RecapSubmitResponse,
   RedoRunResponse,
 };
+// rv2 S3: interview mode S + the DESIGN IT dimension profile (shared/src/api-ext.ts rv2 S3 section)
+import type { DesignDimension, DesignDimensionDto, DesignProfileResponse, InterviewMetaBody, InterviewMetaResponse } from '@bootquest/shared/api-ext';
+export type { DesignDimension, DesignDimensionDto, DesignProfileResponse, InterviewMetaBody, InterviewMetaResponse };
 
 /**
  * f52 wave B (app ruling 7): lesson aids of a Fundamentals topic (GET /units/:id/lesson-aids). Declared
@@ -475,6 +478,11 @@ export interface BootQuestApi {
   addNote(body: ErrorNoteBody): Promise<ErrorNoteResponse>;
   /** GET /api/notebook — entries newest first + category counts. */
   getNotebook(): Promise<NotebookResponse>;
+  // ---- rv2 S3: interview mode S (never evidence) + the dimension profile (read-only)
+  /** POST /api/units/:id/explain-back/interview — the timer of a DESIGN IT answer of record, filed before its self-score. */
+  recordInterviewMeta(unitId: number, body: InterviewMetaBody): Promise<InterviewMetaResponse>;
+  /** GET /api/stats/design-profile — covered / missed key points per headlines.json dimension. */
+  getDesignProfile(): Promise<DesignProfileResponse>;
 }
 
 /** Codes the client can raise itself on top of the server's envelope codes. */

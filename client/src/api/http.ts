@@ -51,6 +51,8 @@ import {
   type KeyIdeaQueueResponse,
   type KeyIdeasResponse,
   type NotebookResponse,
+  type DesignProfileResponse,
+  type InterviewMetaResponse,
   type RecapPromptsResponse,
   type RecapRevealResponse,
   type RecapSubmitResponse,
@@ -224,5 +226,9 @@ export function createHttpApi(baseUrl = '/api', fetchImpl: typeof fetch = (...a)
     addNote: (b) =>
       post<ErrorNoteResponse>('/notebook', { unitId: b.unitId, ...(b.attemptId !== undefined ? { attemptId: b.attemptId } : {}), line: b.line, category: b.category }),
     getNotebook: () => call<NotebookResponse>('/notebook'),
+    // rv2 S3: interview meta + the design profile (whitelisted body)
+    recordInterviewMeta: (id, b) =>
+      post<InterviewMetaResponse>(`${unit(id)}/explain-back/interview`, { attemptId: b.attemptId, elapsedMs: b.elapsedMs, timeBoxMs: b.timeBoxMs, blind: b.blind }),
+    getDesignProfile: () => call<DesignProfileResponse>('/stats/design-profile'),
   };
 }

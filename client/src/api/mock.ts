@@ -112,6 +112,8 @@ import {
 import type { XpByTrack } from '@bootquest/shared/api';
 import { G1_MIN_DEFECTS, G1_TARGET_RATE, PROMOTION_MIN_COVERAGE } from '@bootquest/shared/thresholds';
 import { ebMeetsGate, ebTally } from '../lib/eb-weights';
+import { DESIGN_DIMENSIONS } from '@bootquest/shared/api-ext';
+import type { DesignProfileResponse, InterviewMetaResponse } from './types';
 
 /** Private, fixture-only grading material. Never crosses the API boundary. */
 interface PrivateFixture {
@@ -301,6 +303,7 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
   const writtenAnswers = new Map<number, { attemptId: number; answer: string; at: number }>();
   // rv2 S1: the error notebook, newest first
   const notebook: ErrorNoteDto[] = [];
+  const interviewMeta: InterviewMetaResponse[] = []; // rv2 S3
   const studyMissCards = new Set<string>();
   const studyPassed = new Set<number>();
   // "Learn more": units with a graded study-quiz submit, and code units with a verified pass
@@ -1715,6 +1718,27 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
         const counts = new Map<ErrorNoteDto['category'], number>();
         for (const e of notebook) counts.set(e.category, (counts.get(e.category) ?? 0) + 1);
         return { entries: [...notebook], categories: [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([category, count]) => ({ category, count })) };
+      }),
+    // rv2 S3: interview meta (one per attempt, before the self-score) + an empty profile with the interview tally
+    recordInterviewMeta: (id, b) =>
+      wrap((): InterviewMetaResponse => {
+        if (!findUnit(id)) throw err(404, 'NOT_FOUND', `unit ${id} not found`);
+        if (interviewMeta.some((m) => m.attemptId === b.attemptId)) throw err(409, 'ALREADY_ANSWERED', `attempt ${b.attemptId} already has its interview meta`);
+        const out: InterviewMetaResponse = { attemptId: b.attemptId, mode: 'interview', elapsedMs: b.elapsedMs, timeBoxMs: b.timeBoxMs, blind: b.blind, overTime: b.elapsedMs > b.timeBoxMs };
+        interviewMeta.push(out);
+        return out;
+      }),
+    getDesignProfile: () =>
+      wrap((): DesignProfileResponse => {
+        const e = [...interviewMeta].map((m) => m.elapsedMs).sort((a, b) => a - b);
+        const mid = e.length === 0 ? null : e.length % 2 ? e[(e.length - 1) / 2]! : Math.round((e[e.length / 2 - 1]! + e[e.length / 2]!) / 2);
+        return {
+          headlinesLoaded: false,
+          answers: 0,
+          dimensions: DESIGN_DIMENSIONS.map((id) => ({ id, description: null, covered: 0, missed: 0, coverage: null, answers: 0 })),
+          unclassified: { covered: 0, missed: 0 },
+          interview: { answers: e.length, medianElapsedMs: mid, overTime: interviewMeta.filter((m) => m.overTime).length },
+        };
       }),
   };
 }

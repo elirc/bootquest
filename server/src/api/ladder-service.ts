@@ -21,7 +21,7 @@ import {
   type RatingChangeDto,
 } from '@bootquest/shared/api';
 import { answerWords, EB_MIN_ANSWER_WORDS } from '@bootquest/shared/eb-weight';
-import type { EvidenceListResponseExt, UnitSourceResponse } from '@bootquest/shared/api-ext';
+import type { EvidenceListResponseExt, InterviewMetaBody, InterviewMetaResponse, UnitSourceResponse } from '@bootquest/shared/api-ext';
 import type { Db } from '../db/database.ts';
 import { HonestyRuleError, recordAttempt, type AttemptRow } from '../engines/attempts.ts';
 import { ebObservation, ebPasses, ebScore, recordEbScoreDetail } from '../engines/eb-score.ts';
@@ -36,7 +36,7 @@ import type { SeedExplainBackItem, SeedPatchKataItem } from '@bootquest/shared';
 import { HttpError } from './http.ts';
 import { questUnitUnlocked } from '../engines/campaign.ts';
 import { nowMs, type Clock } from '../engines/clock.ts';
-import { ebSetGroup, explainBackUnitKey, isG2 } from '../store/ladder.ts';
+import { ebSetGroup, explainBackUnitKey, isDesignIt, isG2 } from '../store/ladder.ts';
 import { ESTATE_OWNER } from './study-service.ts';
 
 /**
@@ -998,4 +998,44 @@ export function getUnitSource(deps: LadderDeps, unitId: number): UnitSourceRespo
     url: `https://github.com/${ESTATE_OWNER}/${encodeURIComponent(repo)}/tree/${sha}`,
     openBook: eb !== undefined && isG2(eb),
   };
+}
+
+// ---------------------------------------------------------------- rv2 S3 (F5): interview mode S
+
+/**
+ * POST /units/:id/explain-back/interview — the meta of a DESIGN IT answer of record taken in interview mode S
+ * (the client's timer and time box, blind on or off), filed right after POST .../answers stored the answer and
+ * before its self-score. It is a row in eb_attempt_meta (migration 025) and nothing else: the answer, its
+ * grading, evidence, XP, retests and promotion are exactly those of any explain-back answer. Refused: a unit
+ * that is not a DESIGN IT set (409 WRONG_UNIT_KIND), an attempt that is not this unit's current answer of
+ * record (400), an answer already self-scored (409 ALREADY_SCORED: the meta must describe an answer written
+ * before its key was graded), a second meta (409 ALREADY_ANSWERED).
+ */
+export function recordInterviewMeta(deps: LadderDeps, unitId: number, body: InterviewMetaBody): InterviewMetaResponse {
+  const { db, clock } = deps;
+  const unit = requireUnit(db, unitId);
+  assertOpen(db, unit);
+  const { item } = requireExplainBack(deps, unit, 'interview mode');
+  if (!isDesignIt(item)) throw new HttpError(409, 'WRONG_UNIT_KIND', `unit ${unit.id} is not a DESIGN IT set; interview mode is for DESIGN IT explain-backs only`);
+  return db.tx(() => {
+    const attempt = currentAnswer(db, 'explainBack', item);
+    if (!attempt || attempt.id !== body.attemptId || attempt.unit_id !== unit.id) {
+      throw new HttpError(400, 'VALIDATION', `attempt ${body.attemptId} is not the answer of record of unit ${unit.id}`, [{ path: 'body.attemptId', message: 'not the current answer of this unit' }]);
+    }
+    if (scoredOn(db, attempt.id, 'explain-back')) {
+      throw new HttpError(409, 'ALREADY_SCORED', `unit ${unit.id}: this answer is already self-scored; interview meta is filed before the self-score`);
+    }
+    if (db.get('SELECT 1 AS x FROM eb_attempt_meta WHERE attempt_id = ?', attempt.id)) {
+      throw new HttpError(409, 'ALREADY_ANSWERED', `attempt ${attempt.id} already has its interview meta (append-only)`);
+    }
+    db.run(
+      `INSERT INTO eb_attempt_meta (attempt_id, mode, elapsed_ms, time_box_ms, blind, created_at) VALUES (?, 'interview', ?, ?, ?, ?)`,
+      attempt.id,
+      body.elapsedMs,
+      body.timeBoxMs,
+      body.blind ? 1 : 0,
+      nowMs(clock),
+    );
+    return { attemptId: attempt.id, mode: 'interview' as const, elapsedMs: body.elapsedMs, timeBoxMs: body.timeBoxMs, blind: body.blind, overTime: body.elapsedMs > body.timeBoxMs };
+  });
 }

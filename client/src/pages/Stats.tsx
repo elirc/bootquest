@@ -7,6 +7,8 @@ import type {
   CampaignProgressResponse,
   CheckType,
   CompetencyId,
+  DesignDimension,
+  DesignProfileResponse,
   EvidenceRowDto,
   KataStatsResponse,
   PassRatesResponse,
@@ -47,9 +49,10 @@ export function StatsPage() {
   const campaign = useAsync(() => api.getCampaignProgress(), [api]);
   const katas = useAsync(() => api.getKataStats(), [api]);
   const weak = useAsync(() => api.getWeakSpots(), [api]);
+  const design = useAsync(() => api.getDesignProfile(), [api]); // rv2 S3 (F5)
   // settled once = laid out for good (a later Retry puts that one panel back into loading, in place)
   const [panelsSettled, setPanelsSettled] = useState(false);
-  const allSettled = [xp, rates, reviews, campaign, katas, weak].every((x) => x.status !== 'loading');
+  const allSettled = [xp, rates, reviews, campaign, katas, weak, design].every((x) => x.status !== 'loading');
   if (allSettled && !panelsSettled) setPanelsSettled(true);
   const grid = q.data ? buildHeatGrid(q.data.heatmap, q.data.today) : null;
   const days = q.data?.heatmap ?? [];
@@ -90,6 +93,7 @@ export function StatsPage() {
             <ReviewPanel q={reviews} />
             <CampaignProgressPanel q={campaign} />
             <CatchRatePanel q={katas} />
+            <DesignProfilePanel q={design} />
             {/* rv wave C (R4-20): the competency ladder lives here, off the dashboard, until a promotion path exists */}
             <div className="span-all">
               <CompetencyPanel rows={q.data.competencies} today={q.data.today} dueRetestUnits={new Set<number>()} />
@@ -450,6 +454,104 @@ function CatchRatePanel({ q }: { q: Loaded<KataStatsResponse> }) {
         </div>
       )}
     </Panel>
+  );
+}
+
+// ---------------------------------------------------------------- rv2 S3 (F5): DESIGN IT dimension profile
+
+export const DIMENSION_LABEL: Record<DesignDimension, string> = {
+  requirements: 'Requirements & numbers',
+  'data-and-api': 'Data model & API',
+  consistency: 'Consistency',
+  scaling: 'Scaling',
+  reliability: 'Reliability',
+  security: 'Security & tenancy',
+  operations: 'Operations',
+  'trade-offs': 'Trade-offs',
+};
+
+const mmss = (ms: number): string => `${Math.floor(ms / 60_000)}:${String(Math.floor((ms % 60_000) / 1000)).padStart(2, '0')}`;
+
+/** The weakest dimension worth naming: the lowest coverage among those with at least 3 marked key points. */
+export function weakestDimension(p: DesignProfileResponse): DesignDimension | null {
+  const marked = p.dimensions.filter((d) => d.coverage !== null && d.covered + d.missed >= 3);
+  if (marked.length < 2) return null;
+  return [...marked].sort((a, b) => a.coverage! - b.coverage! || DESIGN_ORDER.indexOf(a.id) - DESIGN_ORDER.indexOf(b.id))[0]!.id;
+}
+const DESIGN_ORDER = Object.keys(DIMENSION_LABEL) as DesignDimension[];
+
+function DesignProfilePanel({ q }: { q: Loaded<DesignProfileResponse> }) {
+  return (
+    <Panel title="DESIGN IT profile" className="span-all">
+      {q.status !== 'ready' ? (
+        <LoadState error={q.error} onRetry={q.reload} minHeight={120} />
+      ) : (
+        <DesignProfileBody p={q.data} />
+      )}
+    </Panel>
+  );
+}
+
+function DesignProfileBody({ p }: { p: DesignProfileResponse }) {
+  const weakest = weakestDimension(p);
+  const interview =
+    p.interview.answers > 0 ? (
+      <p className="muted small" data-testid="design-interview">
+        Interview mode: {p.interview.answers} answer{p.interview.answers === 1 ? '' : 's'}
+        {p.interview.medianElapsedMs !== null ? `, median ${mmss(p.interview.medianElapsedMs)}` : ''}
+        {p.interview.overTime > 0 ? `, ${p.interview.overTime} over the time box` : ', all inside the time box'}.
+      </p>
+    ) : null;
+  if (p.answers === 0) {
+    return (
+      <div data-testid="design-profile-empty">
+        <p className="muted">
+          No DESIGN IT or G2 answer self-scored yet. Each key point you mark covered or missed counts toward its dimension: requirements, data model, consistency,
+          scaling, reliability, security, operations, trade-offs.
+        </p>
+        {interview}
+      </div>
+    );
+  }
+  const unclassified = p.unclassified.covered + p.unclassified.missed;
+  return (
+    <div data-testid="design-profile">
+      <p className="small">
+        Key points you marked on {p.answers} self-scored answer{p.answers === 1 ? '' : 's'} of record, by dimension (practice retakes not counted).
+        {weakest && (
+          <>
+            {' '}
+            Weakest: <strong data-testid="design-weakest">{DIMENSION_LABEL[weakest]}</strong>.
+          </>
+        )}
+      </p>
+      <table className="table design-profile-table small">
+        <thead>
+          <tr>
+            <th scope="col">Dimension</th>
+            <th scope="col">Covered</th>
+            <th scope="col">Coverage</th>
+          </tr>
+        </thead>
+        <tbody>
+          {p.dimensions.map((d) => (
+            <tr key={d.id} data-dimension={d.id} title={d.description ?? undefined}>
+              <th scope="row">{DIMENSION_LABEL[d.id]}</th>
+              <td>{d.coverage === null ? <span className="muted">none yet</span> : `${d.covered}/${d.covered + d.missed}`}</td>
+              <td>{d.coverage === null ? '' : <ProgressBar value={d.covered} max={d.covered + d.missed} label={`${DIMENSION_LABEL[d.id]} coverage`} tone={d.id === weakest ? 'accent' : 'success'} />}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {unclassified > 0 && (
+        <p className="muted small" data-testid="design-unclassified">
+          {p.headlinesLoaded
+            ? `${unclassified} marked key point${unclassified === 1 ? '' : 's'} from sets without a dimension yet (${p.unclassified.covered} covered).`
+            : `No headlines file on this server, so the ${unclassified} marked key points are not classified yet (${p.unclassified.covered} covered).`}
+        </p>
+      )}
+      {interview}
+    </div>
   );
 }
 

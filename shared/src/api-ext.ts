@@ -722,3 +722,83 @@ export const NotebookResponse = z
   .object({ entries: z.array(ErrorNoteDto), categories: z.array(z.object({ category: NoteCategory, count: z.number().int().positive() }).strict()) })
   .strict();
 export type NotebookResponse = z.infer<typeof NotebookResponse>;
+
+// ---- rv2 S3: interview mode S + design profile (F5), the weekly review (F7) ----------------------------------
+// Server: api/ladder-service.ts (recordInterviewMeta), store/design-side.ts + api/stats-service.ts (designProfile),
+// api/week-service.ts (F7, next commit). Nothing here is evidence: interview meta, the profile and the week page change no grade, pay
+// no XP, write no ladder leg and unlock nothing (a DESIGN IT answer in interview mode is graded exactly like any).
+
+/** Interview mode S: the time box the client's timer runs against (R5 F9: 45 minutes). */
+export const INTERVIEW_TIME_BOX_MS = 45 * 60 * 1000;
+/** The six delivery-framework headings shown in interview mode, in order (PLAN §2.2 design-it, R5 F9). */
+export const INTERVIEW_FRAMEWORK = [
+  'Requirements and numbers',
+  'Entities and API',
+  'High-level design',
+  'Deep dive',
+  'Pre-mortem',
+  'Trade-offs',
+] as const;
+
+/** POST /units/:id/explain-back/interview: the meta of the answer of record just stored (before its self-score). */
+export const InterviewMetaBody = z
+  .object({
+    attemptId: z.number().int().positive(),
+    elapsedMs: z.number().int().min(0).max(86_400_000),
+    timeBoxMs: z.number().int().positive().max(86_400_000),
+    blind: z.boolean(),
+  })
+  .strict();
+export type InterviewMetaBody = z.infer<typeof InterviewMetaBody>;
+export const InterviewMetaResponse = z
+  .object({
+    attemptId: z.number().int().positive(),
+    mode: z.literal('interview'),
+    elapsedMs: z.number().int(),
+    timeBoxMs: z.number().int(),
+    blind: z.boolean(),
+    overTime: z.boolean(),
+  })
+  .strict();
+export type InterviewMetaResponse = z.infer<typeof InterviewMetaResponse>;
+
+/** The eight key-point dimensions of content/design/headlines.json (S2 C2: a fixed list). */
+export const DESIGN_DIMENSIONS = ['requirements', 'data-and-api', 'consistency', 'scaling', 'reliability', 'security', 'operations', 'trade-offs'] as const;
+export const DesignDimension = z.enum(DESIGN_DIMENSIONS);
+export type DesignDimension = z.infer<typeof DesignDimension>;
+
+const Tally = z.object({ covered: z.number().int().min(0), missed: z.number().int().min(0) }).strict();
+export const DesignDimensionDto = Tally.extend({
+  id: DesignDimension,
+  /** the file's own definition of the dimension, when headlines.json is loaded */
+  description: z.string().nullable(),
+  /** covered / (covered + missed); null with no marked key point */
+  coverage: z.number().min(0).max(1).nullable(),
+  /** distinct answers of record that marked a key point of this dimension */
+  answers: z.number().int().min(0),
+}).strict();
+export type DesignDimensionDto = z.infer<typeof DesignDimensionDto>;
+
+/**
+ * GET /stats/design-profile: per dimension, the key points the learner marked covered / missed on their self-scored
+ * DESIGN IT and G2 answers of record (practice retakes excluded). A key point with no headline (no file, or a set
+ * the file does not list) counts under `unclassified`, so a set without headlines still works.
+ */
+export const DesignProfileResponse = z
+  .object({
+    /** content/design/headlines.json was found and parsed */
+    headlinesLoaded: z.boolean(),
+    /** self-scored answers of record counted */
+    answers: z.number().int().min(0),
+    dimensions: z.array(DesignDimensionDto),
+    unclassified: Tally,
+    interview: z
+      .object({
+        answers: z.number().int().min(0),
+        medianElapsedMs: z.number().int().nullable(),
+        overTime: z.number().int().min(0),
+      })
+      .strict(),
+  })
+  .strict();
+export type DesignProfileResponse = z.infer<typeof DesignProfileResponse>;
