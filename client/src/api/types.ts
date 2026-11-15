@@ -153,6 +153,9 @@ export type { WeekReflectionBody, WeekReflectionResponse, WeekResponse };
 // rv2 S3: confidence tags + calibration (F9, stretch)
 import type { CalibrationResponse, Confidence, ConfidenceResponse } from '@bootquest/shared/api-ext';
 export type { CalibrationResponse, Confidence, ConfidenceResponse };
+// rv3 S5 (W9 / F10): kata precision, approve / block on flagged katas (shared/src/api-ext.ts rv3 S5 section)
+import type { DecoyMark, KataDecoyDto, KataReviewResponse, KataVerdict, KataVerdictScoreResponse } from '@bootquest/shared/api-ext';
+export type { DecoyMark, KataDecoyDto, KataReviewResponse, KataVerdict, KataVerdictScoreResponse };
 
 /**
  * f52 wave B (app ruling 7): lesson aids of a Fundamentals topic (GET /units/:id/lesson-aids). Declared
@@ -499,6 +502,19 @@ export interface BootQuestApi {
   tagConfidence(attemptId: number, confidence: Confidence): Promise<ConfidenceResponse>;
   /** GET /api/stats/calibration — tagged answers and passes per confidence level. */
   getCalibration(): Promise<CalibrationResponse>;
+  // ---- rv3 S5 (W9 / F10): kata precision. A flagged kata (clean / decoys) asks approve | block; findings = block.
+  /**
+   * GET /api/units/:id/kata/review — does this kata ask for a verdict; after the answer, the flags' key. Never rejects:
+   * an older server (404) or any failure is null (the pane then shows the plain findings flow).
+   */
+  getKataReview(unitId: number): Promise<KataReviewResponse | null>;
+  /** POST /api/units/:id/kata/approve — the approve verdict (no findings); immutable like findings. */
+  approveKata(unitId: number, body: { selfAssisted: boolean }): Promise<AnswerRecordedResponse>;
+  /** POST /api/units/:id/kata/verdict-score — `{}` for a clean kata or an approve; else every defect and decoy marked once. */
+  verdictScoreKata(
+    unitId: number,
+    body: { perDefect: Record<string, 'caught' | 'missed'>; perDecoy: Record<string, DecoyMark> },
+  ): Promise<KataVerdictScoreResponse>;
 }
 
 /** Codes the client can raise itself on top of the server's envelope codes. */

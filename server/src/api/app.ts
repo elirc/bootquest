@@ -73,6 +73,8 @@ import { designProfile } from './stats-service.ts';
 import { registerWeekRoutes } from './week-service.ts';
 // rv2 S3 (F9, stretch): confidence tags + calibration
 import { registerConfidenceRoutes } from './confidence-service.ts';
+// rv3 S5 (W9 / F10): kata approve / block verdicts and their precision score
+import { registerKataVerdictRoutes } from './kata-verdict-routes.ts';
 import { EvidenceListResponseExt, FundamentalsResponseExt, HintsResponse, HintTakenResponse, LessonAidsResponse } from '@bootquest/shared/api-ext';
 import { getFundamentals, getLessonAids } from './fundamentals-service.ts';
 import { getHints, takeHint } from './hints-service.ts';
@@ -539,6 +541,7 @@ export function createApp(opts: AppOptions): Express {
   }));
   registerWeekRoutes(router, deps); // rv2 S3 (F7): GET /week, POST /week/reflection
   registerConfidenceRoutes(router, deps); // rv2 S3 (F9): POST /attempts/:id/confidence, GET /stats/calibration
+  registerKataVerdictRoutes(router, ladder); // rv3 S5 (W9): GET /units/:id/kata/review, POST .../kata/approve, .../kata/verdict-score
 
   app.use('/api', router);
 

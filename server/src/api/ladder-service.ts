@@ -22,6 +22,8 @@ import {
 } from '@bootquest/shared/api';
 import { answerWords, EB_MIN_ANSWER_WORDS } from '@bootquest/shared/eb-weight';
 import type { EvidenceListResponseExt, InterviewMetaBody, InterviewMetaResponse, UnitSourceResponse } from '@bootquest/shared/api-ext';
+import type { KataApproveBody, KataReviewResponse, KataVerdict, KataVerdictScoreBody, KataVerdictScoreResponse } from '@bootquest/shared/api-ext';
+import { citesDecoy, kataFlagFor, type KataFlag } from '../store/kata-flags.ts';
 import type { Db } from '../db/database.ts';
 import { HonestyRuleError, recordAttempt, type AttemptRow } from '../engines/attempts.ts';
 import { ebObservation, ebPasses, ebScore, recordEbScoreDetail } from '../engines/eb-score.ts';
@@ -257,7 +259,7 @@ function assertExactMarks(expected: readonly string[], got: Record<string, strin
       .filter((id) => !want.has(id))
       .map((id) => ({ path: `body.${field}.${id}`, message: 'no such id in the key' })),
   ];
-  if (issues.length) throw new HttpError(400, 'VALIDATION', `mark every ${field === 'perKeyPoint' ? 'key point' : 'defect'} exactly once`, issues);
+  if (issues.length) throw new HttpError(400, 'VALIDATION', `mark every ${field === 'perKeyPoint' ? 'key point' : field === 'perDecoy' ? 'decoy line' : 'defect'} exactly once`, issues);
 }
 
 const pct = (x: number): number => Math.round(x * 1000) / 10;
@@ -698,6 +700,8 @@ export function submitKataFindings(deps: LadderDeps, unitId: number, body: KataF
       // server review F2: an earlier version's findings unlocked its key; these cannot be blind
       { priorKey: supersededAnswerIds(db, 'kata', item).length > 0 },
     );
+    // rv3 S5 (W9): on a flagged kata (clean / decoys) findings ARE the "block" verdict, stored with the answer
+    if (kataFlagFor(item.key)) recordKataVerdict(db, attempt.id, 'block', clock);
     return { attemptId: attempt.id, mode: attempt.mode, outcome: 'submitted' };
   });
 }
@@ -725,6 +729,10 @@ export function selfScoreKata(deps: LadderDeps, unitId: number, body: { perDefec
   const unit = requireUnit(db, unitId);
   assertOpen(db, unit);
   const { item } = requireKata(deps, unit, 'kata self-score');
+  // rv3 S5 (W9): a flagged kata is scored by its verdict (precision counts), never by the catch rate alone
+  if (kataFlagFor(item.key)) {
+    throw new HttpError(409, 'WRONG_UNIT_KIND', `unit ${unit.id}: this kata asks for a verdict; score it with POST /api/units/${unit.id}/kata/verdict-score`);
+  }
   const attempt = currentAnswer(db, 'kata', item);
   if (!attempt) throw notAnswered(db, 'kata', item, unit, 'findings');
   assertAnsweredHere(db, unit, attempt);
@@ -811,11 +819,13 @@ function recordKataScoreDetail(db: Db, evidenceId: number, s: KataSplit, t: numb
  */
 export function kataStats(deps: LadderDeps): KataStatsResponse {
   const { db } = deps;
-  const rows = db.all<{ attemptId: number; unitId: number; score: number; mode: string; assisted: number; answer: string | null; pTotal: number | null; pCaught: number | null }>(
+  const rows = db.all<{ attemptId: number; unitId: number; score: number; mode: string; assisted: number; answer: string | null; pTotal: number | null; pCaught: number | null; gTotal: number | null; gCaught: number | null }>(
     `SELECT e.attempt_id AS attemptId, a.unit_id AS unitId, MIN(e.score) AS score, a.mode AS mode,
             MAX(CASE WHEN e.assistance <> 'none' THEN 1 ELSE 0 END) AS assisted, a.answer AS answer,
-            MIN(d.patched_total) AS pTotal, MIN(d.patched_caught) AS pCaught
+            MIN(d.patched_total) AS pTotal, MIN(d.patched_caught) AS pCaught,
+            MIN(p.g1_total) AS gTotal, MIN(p.g1_caught) AS gCaught
        FROM evidence e JOIN attempt a ON a.id = e.attempt_id LEFT JOIN kata_score_detail d ON d.evidence_id = e.id
+            LEFT JOIN kata_precision p ON p.evidence_id = e.id
       WHERE e.kind = 'kata' GROUP BY e.attempt_id ORDER BY e.attempt_id`,
   );
   let caught = 0;
@@ -839,6 +849,14 @@ export function kataStats(deps: LadderDeps): KataStatsResponse {
     if (kataKey !== undefined && earliest.get(kataKey) !== r.attemptId) continue;
     if (r.mode !== 'solo' || r.assisted) {
       assistedCount += 1;
+      continue;
+    }
+    // rv3 S5 (W9 / F10): a FLAGGED kata (clean / decoys) counts its precision row (migration 029): a clean PR is one
+    // call (approve = caught), a decoy line flagged is one more miss. Unflagged katas never have such a row.
+    if (r.gTotal !== null && r.gCaught !== null) {
+      katas += 1;
+      total += r.gTotal;
+      caught += r.gCaught;
       continue;
     }
     if (r.pTotal !== null && r.pCaught !== null) {
@@ -876,6 +894,236 @@ export function kataStats(deps: LadderDeps): KataStatsResponse {
       rule: `G1: catch >= ${G1_TARGET_RATE * 10}/10 seeded defects (scenario + evidence + consequence) across at least ${G1_MIN_DEFECTS} seeded defects; only defects evidenced in the patched lines count (consequences do not)`,
     },
   };
+}
+
+// ---------------------------------------------------------------- rv3 S5 (W9 / F10): kata precision
+
+/**
+ * A kata listed in content/seed/kata-flags.json (store/kata-flags.ts) as `clean` or with `decoys` asks for a VERDICT,
+ * stored with the answer before any key is readable (kata_verdict, migration 029):
+ *   approve  POST /units/:id/kata/approve   no findings;
+ *   block    POST /units/:id/kata/findings  the findings (the existing endpoint; on a flagged kata it also writes the verdict).
+ * It is scored with POST /units/:id/kata/verdict-score (never /kata/self-score):
+ *   clean    approve passes, any finding fails: nothing to mark, the verdict decides. The key's one entry is what the
+ *            PR FIXES, never a missed defect. G1: one call (g1_total 1, g1_caught 1 on approve).
+ *   decoys   the learner marks each defect caught | missed AND each decoy line flagged | clear (a finding on a decoy
+ *            line is a false positive). G1: patched-line defects caught over patched-line defects + decoys flagged.
+ *            An approve found nothing: every defect missed, nothing to mark.
+ * Katas without a flag are untouched (rv B rule, pinned by test).
+ */
+
+function recordKataVerdict(db: Db, attemptId: number, verdict: KataVerdict, clock: Clock): void {
+  db.run('INSERT INTO kata_verdict (attempt_id, verdict, created_at) VALUES (?, ?, ?)', attemptId, verdict, nowMs(clock));
+}
+
+/** The verdict of an answer: its kata_verdict row; one recorded before its kata was flagged reads from its findings. */
+function verdictOf(db: Db, attempt: AttemptRow): KataVerdict {
+  const row = db.get<{ verdict: KataVerdict }>('SELECT verdict FROM kata_verdict WHERE attempt_id = ?', attempt.id);
+  if (row) return row.verdict;
+  return (storedAnswer(attempt).kata?.findings?.length ?? 0) > 0 ? 'block' : 'approve';
+}
+
+function requireFlag(item: SeedPatchKataItem, unit: UnitRecord, endpoint: string): KataFlag {
+  const flag = kataFlagFor(item.key);
+  if (!flag) {
+    throw new HttpError(
+      409,
+      'WRONG_UNIT_KIND',
+      `unit ${unit.id}: this kata asks for no verdict (it is not flagged clean and has no decoy lines); ${endpoint} is for flagged katas only: file findings and self-score them`,
+    );
+  }
+  return flag;
+}
+
+interface PrecisionRow {
+  passed: number;
+  decoys_total: number;
+  decoys_flagged: number;
+  score: number | null;
+}
+
+function precisionOn(db: Db, attemptId: number): KataReviewResponse['scored'] {
+  const r = db.get<PrecisionRow>(
+    `SELECT p.passed, p.decoys_total, p.decoys_flagged, e.score FROM kata_precision p JOIN evidence e ON e.id = p.evidence_id
+      WHERE e.attempt_id = ? ORDER BY p.id LIMIT 1`,
+    attemptId,
+  );
+  return r ? { passed: r.passed === 1, score: r.score ?? 0, decoysFlagged: r.decoys_flagged, decoysTotal: r.decoys_total } : null;
+}
+
+/** POST /units/:id/kata/approve: the "approve" verdict (no findings) on a flagged kata; immutable, before the key. */
+export function approveKata(deps: LadderDeps, unitId: number, body: KataApproveBody): AnswerRecordedResponse {
+  const { db, clock } = deps;
+  const unit = requireUnit(db, unitId);
+  assertOpen(db, unit);
+  const { check, item } = requireKata(deps, unit, 'kata approve');
+  requireFlag(item, unit, 'approve');
+  return db.tx(() => {
+    const prior = currentAnswer(db, 'kata', item);
+    if (prior) throw alreadyAnswered(db, prior, unit, item, 'verdict');
+    const attempt = recordAttempt(
+      db,
+      {
+        unitId: unit.id,
+        checkId: check.id,
+        selfAssisted: body.selfAssisted,
+        answer: { kata: { kataKey: item.key, itemSha: seedItemHash(item), defectCount: item.seededDefectKey.length, findings: [], verdict: 'approve' } },
+      },
+      clock,
+      { priorKey: supersededAnswerIds(db, 'kata', item).length > 0 },
+    );
+    recordKataVerdict(db, attempt.id, 'approve', clock);
+    return { attemptId: attempt.id, mode: attempt.mode, outcome: 'submitted' };
+  });
+}
+
+/** GET /units/:id/kata/review: does this kata ask for a verdict, and (after the answer only) the flags' key. */
+export function getKataReview(deps: LadderDeps, unitId: number): KataReviewResponse {
+  const { db } = deps;
+  const unit = requireUnit(db, unitId);
+  const check = requireCheckType(db, unit, 'patch-kata', 'the kata review');
+  const flag = kataFlagFor(check.spec.kataKey);
+  const none: KataReviewResponse = { verdictAsked: false, verdict: null, key: null, scored: null };
+  if (!flag) return none;
+  const item = deps.seedItems.kata(check.spec.kataKey);
+  const attempt = item ? currentAnswer(db, 'kata', item) : undefined;
+  // before the answer: the same reply for a clean and a decoy kata (nothing says which, nor where the decoys are)
+  if (!item || !attempt) return { ...none, verdictAsked: true };
+  const findings = storedAnswer(attempt).kata?.findings ?? [];
+  return {
+    verdictAsked: true,
+    verdict: verdictOf(db, attempt),
+    key: {
+      clean: flag.clean,
+      fixes: flag.clean ? kataKey(item).map((d) => d.id) : [],
+      decoys: flag.decoys.map((d) => ({ ...d, cited: findings.some((f) => citesDecoy(f.evidence, d)) })),
+    },
+    scored: precisionOn(db, attempt.id),
+  };
+}
+
+/** POST /units/:id/kata/verdict-score: a flagged kata's score (see the section header); kata evidence + 15 XP once. */
+export function verdictScoreKata(deps: LadderDeps, unitId: number, body: KataVerdictScoreBody): KataVerdictScoreResponse {
+  const { db, clock } = deps;
+  const unit = requireUnit(db, unitId);
+  assertOpen(db, unit);
+  const { item } = requireKata(deps, unit, 'kata verdict-score');
+  const flag = requireFlag(item, unit, 'verdict-score');
+  const attempt = currentAnswer(db, 'kata', item);
+  if (!attempt) throw notAnswered(db, 'kata', item, unit, 'verdict');
+  assertAnsweredHere(db, unit, attempt);
+  const competencies = requireCompetencies(db, attempt.unit_id);
+  const verdict = verdictOf(db, attempt);
+  const defects = kataKey(item);
+  const ids = defects.map((d) => d.id);
+  const marked = !flag.clean && verdict === 'block';
+  if (marked) {
+    assertExactMarks(ids, body.perDefect, 'perDefect');
+    assertExactMarks(
+      flag.decoys.map((d) => d.id),
+      body.perDecoy,
+      'perDecoy',
+    );
+  } else {
+    const extra = [...Object.keys(body.perDefect).map((k) => `body.perDefect.${k}`), ...Object.keys(body.perDecoy).map((k) => `body.perDecoy.${k}`)];
+    if (extra.length) {
+      throw new HttpError(
+        400,
+        'VALIDATION',
+        flag.clean ? 'a clean kata is scored by its verdict alone: send {}' : 'an approve found nothing to mark: send {}',
+        extra.map((path) => ({ path, message: 'nothing to mark' })),
+      );
+    }
+  }
+  const marks: Readonly<Record<string, 'caught' | 'missed'>> = marked ? body.perDefect : Object.fromEntries(ids.map((id) => [id, 'missed' as const]));
+  const split = kataSplit(defects, marks);
+  const decoysTotal = flag.decoys.length;
+  let caught: number;
+  let total: number;
+  let missed: string[];
+  let decoysFlagged = 0;
+  let g1Total: number;
+  let g1Caught: number;
+  let score: number;
+  let passed: boolean;
+  if (flag.clean) {
+    // the key's entries are what the PR fixes, not defects of the PR: the verdict is the one call
+    caught = verdict === 'approve' ? 1 : 0;
+    total = 1;
+    missed = [];
+    g1Total = 1;
+    g1Caught = caught;
+    score = caught;
+    passed = verdict === 'approve';
+  } else {
+    missed = ids.filter((id) => marks[id] === 'missed');
+    caught = ids.length - missed.length;
+    total = ids.length;
+    decoysFlagged = marked ? flag.decoys.filter((d) => body.perDecoy[d.id] === 'flagged').length : 0;
+    g1Total = split.patchedTotal + decoysFlagged;
+    g1Caught = split.patchedCaught;
+    score = caught / (ids.length + decoysFlagged);
+    passed = verdict === 'block' && decoysFlagged === 0 && caught / ids.length >= G1_TARGET_RATE;
+  }
+  const catchRate = caught / total;
+  const observation = flag.clean
+    ? `clean PR: ${verdict === 'approve' ? 'approved (the right call)' : 'blocked with findings (a clean PR takes no finding)'}`
+    : `${verdict === 'approve' ? 'approved: ' : ''}caught ${caught}/${ids.length} seeded defects (${pct(catchRate)}%)${missed.length ? `; missed ${missed.join(', ')}` : ''}; flagged ${decoysFlagged}/${decoysTotal} decoy lines`;
+  return honest(() =>
+    db.tx(() => {
+      if (scoredOn(db, attempt.id, 'kata')) throw new HttpError(409, 'ALREADY_SCORED', 'your verdict on this unit is already scored (evidence is append-only)');
+      closeElapsedDays(db, clock);
+      const t = nowMs(clock);
+      const evidenceIds = competencies.map(
+        (competency) =>
+          recordEvidence(
+            db,
+            {
+              competency,
+              kind: 'kata',
+              intention: 'patch-review kata with a verdict: approve or block stored first, then scored against the key (precision counts)',
+              observation,
+              score,
+              attemptId: attempt.id,
+            },
+            clock,
+          ).id,
+      );
+      for (const evId of evidenceIds) {
+        if (!flag.clean) recordKataScoreDetail(db, evId, split, t);
+        db.run(
+          `INSERT INTO kata_precision (evidence_id, verdict, clean, passed, decoys_total, decoys_flagged, g1_total, g1_caught, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          evId,
+          verdict,
+          flag.clean ? 1 : 0,
+          passed ? 1 : 0,
+          decoysTotal,
+          decoysFlagged,
+          g1Total,
+          g1Caught,
+          t,
+        );
+      }
+      const award = awardXp(db, { kind: 'patch-kata', attemptId: attempt.id }, clock);
+      composeSlate(db, clock);
+      return {
+        attemptId: attempt.id,
+        verdict,
+        clean: flag.clean,
+        passed,
+        caught,
+        total,
+        catchRate,
+        missed,
+        decoysFlagged,
+        decoysTotal,
+        score,
+        evidenceIds,
+        xp: { id: award.id, amount: award.amount, reason: award.reason },
+      };
+    }),
+  );
 }
 
 // ---------------------------------------------------------------- mutation gate marker

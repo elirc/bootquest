@@ -114,6 +114,8 @@ import { G1_MIN_DEFECTS, G1_TARGET_RATE, PROMOTION_MIN_COVERAGE } from '@bootque
 import { ebMeetsGate, ebTally } from '../lib/eb-weights';
 import { DESIGN_DIMENSIONS } from '@bootquest/shared/api-ext';
 import type { CalibrationResponse, Confidence, ConfidenceResponse, DesignProfileResponse, InterviewMetaResponse, WeekReflectionResponse, WeekResponse } from './types';
+// rv3 S5 (W9 / F10): kata precision
+import type { KataDecoyDto, KataReviewResponse, KataVerdict, KataVerdictScoreResponse } from './types';
 import { WEEK_REFLECTION_QUESTIONS } from '@bootquest/shared/api-ext';
 
 /** Private, fixture-only grading material. Never crosses the API boundary. */
@@ -288,7 +290,15 @@ export type MockApi = BootQuestApi & {
    * unit takes one fresh answer. Mock only; nothing in the app calls it.
    */
   reseedItem(unitId: number): void;
+  /**
+   * rv3 S5 (W9): stand-in for content/seed/kata-flags.json: flag a kata unit clean (approve is right) or give it
+   * nit-only decoy lines (a finding there is a false positive). Mock only; nothing in the app calls it.
+   */
+  flagKata(unitId: number, flag: MockKataFlag): void;
 };
+
+/** A mock kata flag (rv3 S5 W9): clean, or decoy lines (ids n1, n2, ... in this order). */
+export type MockKataFlag = { clean: true } | { decoys: { path: string; lineStart: number; lineEnd: number; why: string }[] };
 
 export function createMockApi(opts: MockApiOptions = {}): MockApi {
   const latency = opts.latencyMs ?? 0;
@@ -369,6 +379,10 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
   const scores = new Map<number, { score: number; evidenceIds: number[]; at: number }>();
   const kataXpPaid = new Set<number>();
   const ebXpPaid = new Set<number>();
+  // rv3 S5 (W9): flagged katas (flagKata), verdicts per attempt, precision scores per attempt (server: migration 029)
+  const kataFlags = new Map<number, { clean: boolean; decoys: Omit<KataDecoyDto, 'cited'>[] }>();
+  const kataVerdicts = new Map<number, KataVerdict>();
+  const kataPrecision = new Map<number, { passed: boolean; score: number; decoysFlagged: number; decoysTotal: number; g1Total: number; g1Caught: number }>();
   const evidence: EvidenceRowDto[] = clone(evidenceFixtures);
   const attempts = new Map<number, AttemptDetailResponse>();
   // graded submits the pass rates derive from (seed history + every submit through this instance)
@@ -1276,6 +1290,7 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
         if (prior) throw alreadyAnswered(id, prior, 'kata');
         const attemptId = recordAttempt(u, { kata: { kataKey: ITEM.kata.key(id), findings: body.findings } }, body.selfAssisted);
         recordAnswer(kataAnswers, id, { attemptId, at: NOW, version: versionOf(id), body: clone(body.findings) });
+        if (kataFlags.has(id)) kataVerdicts.set(attemptId, 'block'); // rv3 S5 (W9): findings ARE the block verdict
         return { attemptId, mode: attempts.get(attemptId)!.mode, outcome: 'submitted' as const };
       }),
 
@@ -1290,6 +1305,7 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
     selfScoreKata: (id, body) =>
       wrap(() => {
         const { u } = requireType(id, 'patch-kata');
+        if (kataFlags.has(id)) throw err(409, 'WRONG_UNIT_KIND', `unit ${id}: this kata asks for a verdict; score it with POST /api/units/${id}/kata/verdict-score`);
         const a = currentAnswer(kataAnswers, id);
         if (!a) throw notAnswered(kataAnswers, id, 'kata');
         if (scores.has(a.attemptId)) throw err(409, 'ALREADY_SCORED', 'your findings on this unit are already self-scored (evidence is append-only)');
@@ -1349,9 +1365,17 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
           for (const a of list) {
             const sc = scores.get(a.attemptId);
             if (!sc) continue;
+            const pr = kataPrecision.get(a.attemptId);
             // W7 (audit #2): only SOLO answers count toward G1
             if (attempts.get(a.attemptId)?.mode !== 'solo') {
               assistedCount += 1;
+              continue;
+            }
+            // rv3 S5 (W9): a flagged kata counts its precision numbers (clean = one call; a decoy flagged = one more miss)
+            if (pr) {
+              katas += 1;
+              total += pr.g1Total;
+              caught += pr.g1Caught;
               continue;
             }
             const n = kataFixtures[String(unitId)]!.defects.length;
@@ -1609,6 +1633,10 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
       itemVersion.set(unitId, versionOf(unitId) + 1);
     },
 
+    flagKata: (unitId, flag) => {
+      kataFlags.set(unitId, 'clean' in flag ? { clean: true, decoys: [] } : { clean: false, decoys: flag.decoys.map((d, i) => ({ id: `n${i + 1}`, ...d })) });
+    },
+
     // ---- ab wave S3: a fresh learner has no weak spots; Due now mirrors getCompetencies' retests
     // (none) and no alternate set is ever due (the mock clock is fixed: a sibling of an answered set
     // stays inside its 2-day gap).
@@ -1780,6 +1808,100 @@ export function createMockApi(opts: MockApiOptions = {}): MockApi {
           dimensions: DESIGN_DIMENSIONS.map((id) => ({ id, description: null, covered: 0, missed: 0, coverage: null, answers: 0 })),
           unclassified: { covered: 0, missed: 0 },
           interview: { answers: e.length, medianElapsedMs: mid, overTime: interviewMeta.filter((m) => m.overTime).length },
+        };
+      }),
+
+    // ---- rv3 S5 (W9 / F10): kata precision, mirrors server/src/api/ladder-service.ts "kata precision"
+    getKataReview: (id) =>
+      wrap((): KataReviewResponse | null => {
+        requireType(id, 'patch-kata');
+        const flag = kataFlags.get(id);
+        if (!flag) return { verdictAsked: false, verdict: null, key: null, scored: null };
+        const a = currentAnswer(kataAnswers, id);
+        if (!a) return { verdictAsked: true, verdict: null, key: null, scored: null };
+        const cites = (ev: string, d: Omit<KataDecoyDto, 'cited'>) =>
+          [...ev.matchAll(/([A-Za-z0-9_./-]+):(\d+)/g)].some((m) => (m[1] === d.path || d.path.endsWith(`/${m[1]}`)) && Number(m[2]) >= d.lineStart && Number(m[2]) <= d.lineEnd);
+        const pr = kataPrecision.get(a.attemptId);
+        return {
+          verdictAsked: true,
+          verdict: kataVerdicts.get(a.attemptId) ?? (a.body.length ? 'block' : 'approve'),
+          key: { clean: flag.clean, fixes: flag.clean ? kataDefects(id).map((d) => d.id) : [], decoys: flag.decoys.map((d) => ({ ...d, cited: a.body.some((f) => cites(f.evidence, d)) })) },
+          scored: pr ? { passed: pr.passed, score: pr.score, decoysFlagged: pr.decoysFlagged, decoysTotal: pr.decoysTotal } : null,
+        };
+      }),
+
+    approveKata: (id, body) =>
+      wrap(() => {
+        const { u } = requireType(id, 'patch-kata');
+        if (!kataFixtures[String(id)]) throw err(409, 'CONTENT_PENDING', 'kata not loaded');
+        if (!kataFlags.has(id)) throw err(409, 'WRONG_UNIT_KIND', `unit ${id}: this kata asks for no verdict; approve is for flagged katas only`);
+        const prior = currentAnswer(kataAnswers, id);
+        if (prior) throw err(403, 'ALREADY_ANSWERED', `unit ${id}: your verdict is recorded and immutable; open the key instead`);
+        const attemptId = recordAttempt(u, { kata: { kataKey: ITEM.kata.key(id), findings: [], verdict: 'approve' } }, body.selfAssisted);
+        recordAnswer(kataAnswers, id, { attemptId, at: NOW, version: versionOf(id), body: [] });
+        kataVerdicts.set(attemptId, 'approve');
+        return { attemptId, mode: attempts.get(attemptId)!.mode, outcome: 'submitted' as const };
+      }),
+
+    verdictScoreKata: (id, body) =>
+      wrap((): KataVerdictScoreResponse => {
+        const { u } = requireType(id, 'patch-kata');
+        const flag = kataFlags.get(id);
+        if (!flag) throw err(409, 'WRONG_UNIT_KIND', `unit ${id}: this kata asks for no verdict`);
+        const a = currentAnswer(kataAnswers, id);
+        if (!a) throw notAnswered(kataAnswers, id, 'kata');
+        if (scores.has(a.attemptId)) throw err(409, 'ALREADY_SCORED', 'your verdict on this unit is already scored (evidence is append-only)');
+        const verdict = kataVerdicts.get(a.attemptId) ?? (a.body.length ? 'block' : 'approve');
+        const defects = kataDefects(id);
+        const ids = defects.map((d) => d.id);
+        const marked = !flag.clean && verdict === 'block';
+        if (marked) {
+          exactMarks(ids, body.perDefect);
+          exactMarks(flag.decoys.map((d) => d.id), body.perDecoy);
+        } else if (Object.keys(body.perDefect).length || Object.keys(body.perDecoy).length) {
+          throw err(400, 'VALIDATION', flag.clean ? 'a clean kata is scored by its verdict alone: send {}' : 'an approve found nothing to mark: send {}');
+        }
+        const marks: Record<string, 'caught' | 'missed'> = marked ? body.perDefect : Object.fromEntries(ids.map((k) => [k, 'missed' as const]));
+        const decoysTotal = flag.decoys.length;
+        let r: { caught: number; total: number; missed: string[]; decoysFlagged: number; g1Total: number; g1Caught: number; score: number; passed: boolean };
+        if (flag.clean) {
+          const c = verdict === 'approve' ? 1 : 0;
+          r = { caught: c, total: 1, missed: [], decoysFlagged: 0, g1Total: 1, g1Caught: c, score: c, passed: verdict === 'approve' };
+        } else {
+          const missed = ids.filter((k) => marks[k] === 'missed');
+          const caught = ids.length - missed.length;
+          const decoysFlagged = marked ? flag.decoys.filter((d) => body.perDecoy[d.id] === 'flagged').length : 0;
+          const patched = defects.filter((d) => d.evidence.in === 'patched');
+          r = {
+            caught,
+            total: ids.length,
+            missed,
+            decoysFlagged,
+            g1Total: patched.length + decoysFlagged,
+            g1Caught: patched.filter((d) => marks[d.id] === 'caught').length,
+            score: caught / (ids.length + decoysFlagged),
+            passed: verdict === 'block' && decoysFlagged === 0 && caught / ids.length >= G1_TARGET_RATE,
+          };
+        }
+        const evidenceIds = fileEvidence(u, a.attemptId, 'kata', r.score, `verdict ${verdict}`, kataFixtures[String(id)]!.competencies);
+        scores.set(a.attemptId, { score: r.score, evidenceIds, at: NOW });
+        kataPrecision.set(a.attemptId, { passed: r.passed, score: r.score, decoysFlagged: r.decoysFlagged, decoysTotal, g1Total: r.g1Total, g1Caught: r.g1Caught });
+        const xp = kataXpPaid.has(id) ? { id: nextId++, amount: 0, reason: 'already-awarded' as const } : { id: nextId++, amount: 15, reason: null };
+        kataXpPaid.add(id);
+        return {
+          attemptId: a.attemptId,
+          verdict,
+          clean: flag.clean,
+          passed: r.passed,
+          caught: r.caught,
+          total: r.total,
+          catchRate: r.caught / r.total,
+          missed: r.missed,
+          decoysFlagged: r.decoysFlagged,
+          decoysTotal,
+          score: r.score,
+          evidenceIds,
+          xp,
         };
       }),
   };

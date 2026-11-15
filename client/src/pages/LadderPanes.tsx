@@ -26,6 +26,9 @@ import {
   type KataFinding,
   type KataKeyResponse,
   type KataScoreResponse,
+  type DecoyMark,
+  type KataReviewResponse,
+  type KataVerdictScoreResponse,
   type TolerantSuperseded,
   type UnitDetail,
   type UnitSourceResponse,
@@ -1643,6 +1646,28 @@ export function KataPane({ detail }: { detail: UnitDetail }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { rows, assisted } = draft.value;
+  // rv3 S5 (W9 / F10): a flagged kata (clean / decoys) asks for a verdict, approve or block. The review read never
+  // rejects (null = an older server: the plain findings flow); it is re-read once the key is open (the flags' key).
+  const [review, setReview] = useState<KataReviewResponse | null>(null);
+  const [verdictAsked, setVerdictAsked] = useState(false);
+  const [verdictPick, setVerdictPick] = useState<'approve' | 'block' | null>(null);
+  const [reviewTick, setReviewTick] = useState(0);
+  const answeredId = ks.key?.attemptId ?? null;
+  useEffect(() => {
+    if (typeof api.getKataReview !== 'function') return undefined;
+    let live = true;
+    void api.getKataReview(id).then(
+      (r) => {
+        if (!live) return;
+        setReview(r);
+        if (r?.verdictAsked) setVerdictAsked(true);
+      },
+      () => undefined,
+    );
+    return () => {
+      live = false;
+    };
+  }, [api, id, answeredId, reviewTick]);
 
   useEffect(() => {
     if (ks.key) draft.clear();
@@ -1664,11 +1689,14 @@ export function KataPane({ detail }: { detail: UnitDetail }) {
   const setRows = (f: (prev: KataFinding[]) => KataFinding[]) => draft.set((d) => ({ ...d, rows: f(d.rows) }));
   const setCell = (i: number, f: keyof KataFinding, v: string) => setRows((prev) => prev.map((r, j) => (j === i ? { ...r, [f]: v } : r)));
 
-  const submit = async () => {
+  const pick = verdictPick ?? (kataDraftEmpty(draft.value) ? null : 'block');
+  const submit = (verdict: 'approve' | 'findings' = 'findings') =>
+    record(() => (verdict === 'approve' ? api.approveKata(id, { selfAssisted: assisted }) : api.submitKataFindings(id, { findings: rows, selfAssisted: assisted })));
+  const record = async (send: () => Promise<unknown>) => {
     setBusy(true);
     setError(null);
     try {
-      await api.submitKataFindings(id, { findings: rows, selfAssisted: assisted });
+      await send();
       setStored(true);
       draft.clear();
       try {
@@ -1701,10 +1729,18 @@ export function KataPane({ detail }: { detail: UnitDetail }) {
           {wrap ? 'No wrap' : 'Wrap lines'}
         </button>
       </header>
-      <p className="muted small">
-        Review this patch like a PR. Find every seeded defect you can: how many there are is shown with the key, after your findings are recorded. Runs
-        of removed comment lines are collapsed; click one to expand it.
-      </p>
+      {verdictAsked ? (
+        <p className="muted small" data-testid="kata-verdict-intro">
+          Review this patch like a PR and give a verdict: approve it if nothing in it is wrong, or block it with your findings. Some PRs are clean,
+          and some changed lines are only nits: a finding on a line that is fine counts against you. Runs of removed comment lines are collapsed;
+          click one to expand it.
+        </p>
+      ) : (
+        <p className="muted small">
+          Review this patch like a PR. Find every seeded defect you can: how many there are is shown with the key, after your findings are recorded. Runs
+          of removed comment lines are collapsed; click one to expand it.
+        </p>
+      )}
       <DiffView diff={kata.diff} wrap={wrap} />
       {kata.contextFiles.map((f) => (
         <details key={f.path} className="streams">
@@ -1715,7 +1751,25 @@ export function KataPane({ detail }: { detail: UnitDetail }) {
         </details>
       ))}
       {ks.key ? (
-        <KataKeyView unitId={id} keyResp={ks.key} onStale={(e) => void staleNotice(e, async () => (await api.getUnit(id)).kata).then(ks.reopen)} />
+        verdictAsked ? (
+          review?.key && review.verdict ? (
+            <KataVerdictKeyView
+              unitId={id}
+              keyResp={ks.key}
+              review={{ ...review, key: review.key, verdict: review.verdict }}
+              onStale={(e) => void staleNotice(e, async () => (await api.getUnit(id)).kata).then(ks.reopen)}
+            />
+          ) : (
+            <p className="muted small" data-testid="verdict-key-loading">
+              Loading the verdict key…{' '}
+              <button type="button" className="btn btn-sm" onClick={() => setReviewTick((n) => n + 1)}>
+                Retry
+              </button>
+            </p>
+          )
+        ) : (
+          <KataKeyView unitId={id} keyResp={ks.key} onStale={(e) => void staleNotice(e, async () => (await api.getUnit(id)).kata).then(ks.reopen)} />
+        )
       ) : ks.phase === 'checking' ? (
         <p className="muted small">Checking for earlier findings…</p>
       ) : ks.phase === 'unavailable' ? (
@@ -1723,6 +1777,37 @@ export function KataPane({ detail }: { detail: UnitDetail }) {
       ) : (
         <>
           <SupersededNote notice={ks.notice} />
+          {verdictAsked && (
+            <div className="toolbar" data-testid="kata-verdict">
+              <span className="small">Your verdict:</span>
+              <span className="seg" role="radiogroup" aria-label="Verdict">
+                {(['approve', 'block'] as const).map((v) => (
+                  <label key={v} className={`seg-opt${pick === v ? ' on' : ''}`}>
+                    <input type="radio" name="kata-verdict" checked={pick === v} disabled={busy} onChange={() => setVerdictPick(v)} aria-label={v === 'approve' ? 'Approve' : 'Block'} />
+                    {v === 'approve' ? 'Approve (no findings)' : 'Block (file findings)'}
+                  </label>
+                ))}
+              </span>
+            </div>
+          )}
+          {verdictAsked && pick === null && <p className="muted small">Pick a verdict first.</p>}
+          {verdictAsked && pick === 'approve' && (
+            <>
+              <div className="toolbar">
+                <HelpBox checked={assisted} onChange={(v) => draft.set((d) => ({ ...d, assisted: v }))} disabled={busy} />
+                <span className="toolbar-spacer" />
+                <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void submit('approve')}>
+                  <Icon name="check" /> Approve this PR
+                </button>
+              </div>
+              <p className="muted small submit-note" data-testid="approve-final">
+                You can&apos;t change your verdict afterwards. The key is shown only after you submit.
+              </p>
+              <ErrorLine error={error} />
+            </>
+          )}
+          {(!verdictAsked || pick === 'block') && (
+            <>
           <table className="table findings-table">
             <thead>
               <tr>
@@ -1771,7 +1856,7 @@ export function KataPane({ detail }: { detail: UnitDetail }) {
             <HelpBox checked={assisted} onChange={(v) => draft.set((d) => ({ ...d, assisted: v }))} disabled={busy} />
             <span className="toolbar-spacer" />
             <button type="button" className="btn btn-primary" disabled={!ready || busy} onClick={() => void submit()}>
-              <Icon name="check" /> Submit findings
+              <Icon name="check" /> {verdictAsked ? 'Block with these findings' : 'Submit findings'}
             </button>
           </div>
           <p className="muted small submit-note" data-testid="findings-final">
@@ -1779,9 +1864,221 @@ export function KataPane({ detail }: { detail: UnitDetail }) {
           </p>
           <DraftNote restored={draft.restored} persisted={draft.persisted} />
           <ErrorLine error={error} />
+            </>
+          )}
         </>
       )}
     </section>
+  );
+}
+
+/**
+ * rv3 S5 (W9 / F10): the key of a flagged kata. A clean PR: approve was right, a finding fails it; its key entries
+ * are what the PR FIXES (never marked). A decoy PR: every defect caught | missed and every decoy line flagged |
+ * clear (pre-set from the stored findings' file:line citations; the learner decides). Scored by verdict-score.
+ */
+function KataVerdictKeyView({
+  unitId,
+  keyResp,
+  review,
+  onStale,
+}: {
+  unitId: number;
+  keyResp: KataKeyResponse;
+  review: KataReviewResponse & { key: NonNullable<KataReviewResponse['key']>; verdict: NonNullable<KataReviewResponse['verdict']> };
+  onStale: (e: ApiError) => void;
+}) {
+  const api = useApi();
+  const refreshTracks = useTracksRefresh();
+  const { key, verdict } = review;
+  const marksAsked = !key.clean && verdict === 'block';
+  const [marks, setMarks] = useState<Record<string, 'caught' | 'missed'>>({});
+  const [decoyMarks, setDecoyMarks] = useState<Record<string, DecoyMark>>(() => Object.fromEntries(key.decoys.map((d) => [d.id, d.cited ? 'flagged' : 'clear'])));
+  const [result, setResult] = useState<KataVerdictScoreResponse | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const done = result !== null || review.scored !== null || keyResp.scored !== null;
+  const ready = !marksAsked || keyResp.defects.every((d) => marks[d.id] !== undefined);
+  const flagged = key.decoys.filter((d) => decoyMarks[d.id] === 'flagged').length;
+
+  const send = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      setResult(await api.verdictScoreKata(unitId, marksAsked ? { perDefect: marks, perDecoy: decoyMarks } : { perDefect: {}, perDecoy: {} }));
+      refreshTracks();
+    } catch (e) {
+      if (isApiError(e, 'NOT_ANSWERED')) onStale(e);
+      else setError(ladderErrorText(e));
+    } finally {
+      setBusy(false);
+      setConfirming(false);
+    }
+  };
+
+  const summary = key.clean
+    ? verdict === 'approve'
+      ? 'You approved a clean PR: a pass.'
+      : 'You blocked a clean PR: a finding on a clean PR fails it.'
+    : verdict === 'approve'
+      ? 'You approved a PR with a defect: every defect counts as missed.'
+      : `${keyResp.defects.filter((d) => marks[d.id] === 'caught').length}/${keyResp.defects.length} caught, ${flagged} decoy line(s) flagged${flagged ? ' (false positives: the kata does not pass)' : ''}.`;
+
+  return (
+    <div className="kata-key" data-testid="kata-key">
+      <h3 className="small" data-testid="kata-verdict-stored">
+        Your verdict: {verdict === 'approve' ? 'approve' : 'block'} (stored {fmtWhen(keyResp.answeredAt)})
+      </h3>
+      {keyResp.findings.length > 0 && (
+        <ul className="findings-stored">
+          {keyResp.findings.map((f, i) => (
+            <li key={i}>
+              <strong>{f.scenario}</strong> · <code>{f.evidence}</code> · {f.consequence}
+            </li>
+          ))}
+        </ul>
+      )}
+      {key.clean ? (
+        <>
+          <div className={`verdict verdict-${verdict === 'approve' ? 'pass' : 'fail'}`} data-testid="kata-clean">
+            <Icon name={verdict === 'approve' ? 'check' : 'warn'} />
+            This PR is clean: approve was the right verdict{verdict === 'approve' ? '.' : ', and any finding fails it.'}
+          </div>
+          <h3 className="small">What this PR fixes</h3>
+          <ul className="checklist" data-testid="kata-fixes">
+            {keyResp.defects
+              .filter((d) => key.fixes.includes(d.id))
+              .map((d) => (
+                <li key={d.id} className="checklist-item">
+                  <span className="checklist-text">
+                    <InlineProse text={d.scenario} />
+                  </span>
+                  <code className="checklist-cite">
+                    {d.evidence.path}:{d.evidence.lineStart}
+                    {d.evidence.lineEnd !== d.evidence.lineStart ? `-${d.evidence.lineEnd}` : ''}
+                  </code>
+                  <span className="checklist-quote">
+                    <InlineProse text={d.consequence} />
+                  </span>
+                </li>
+              ))}
+          </ul>
+        </>
+      ) : (
+        <>
+          <h3 className="small">The seeded defects</h3>
+          <ul className="checklist">
+            {keyResp.defects.map((d) => (
+              <li key={d.id} className={`checklist-item${marks[d.id] ? ` is-${marks[d.id]}` : ''}`}>
+                <span className="checklist-text">
+                  <InlineProse text={d.scenario} />
+                </span>
+                <code className="checklist-cite">
+                  {d.evidence.path}:{d.evidence.lineStart}
+                  {d.evidence.lineEnd !== d.evidence.lineStart ? `-${d.evidence.lineEnd}` : ''}
+                </code>
+                <Chip>{d.evidence.in}</Chip>
+                <span className="checklist-quote">
+                  <InlineProse text={d.consequence} />
+                </span>
+                {marksAsked ? (
+                  <span className="seg" role="radiogroup" aria-label={`${d.id} catch`}>
+                    {(['caught', 'missed'] as const).map((m) => (
+                      <label key={m} className={`seg-opt${marks[d.id] === m ? ' on' : ''}`}>
+                        <input
+                          type="radio"
+                          name={`vdef-${d.id}`}
+                          checked={marks[d.id] === m}
+                          disabled={done || busy || confirming}
+                          onChange={() => setMarks((prev) => ({ ...prev, [d.id]: m }))}
+                          aria-label={`${d.id} ${m}`}
+                        />
+                        {m}
+                      </label>
+                    ))}
+                  </span>
+                ) : (
+                  <Chip>missed</Chip>
+                )}
+              </li>
+            ))}
+          </ul>
+          <h3 className="small">Decoy lines (nits only: a finding on one is a false positive)</h3>
+          {marksAsked && <p className="muted small">Pre-set from the file:line your findings cite. Mark each one yourself: did a finding of yours flag it?</p>}
+          <ul className="checklist" data-testid="kata-decoys">
+            {key.decoys.map((d) => (
+              <li key={d.id} className={`checklist-item${decoyMarks[d.id] === 'flagged' ? ' is-missed' : ''}`}>
+                <code className="checklist-cite">
+                  {d.path}:{d.lineStart}
+                  {d.lineEnd !== d.lineStart ? `-${d.lineEnd}` : ''}
+                </code>
+                <span className="checklist-text">{d.why}</span>
+                {marksAsked && (
+                  <span className="seg" role="radiogroup" aria-label={`${d.id} decoy`}>
+                    {(['clear', 'flagged'] as const).map((m) => (
+                      <label key={m} className={`seg-opt${decoyMarks[d.id] === m ? ' on' : ''}`}>
+                        <input
+                          type="radio"
+                          name={`decoy-${d.id}`}
+                          checked={decoyMarks[d.id] === m}
+                          disabled={done || busy || confirming}
+                          onChange={() => setDecoyMarks((prev) => ({ ...prev, [d.id]: m }))}
+                          aria-label={`${d.id} ${m}`}
+                        />
+                        {m === 'clear' ? 'not flagged' : 'I flagged it'}
+                      </label>
+                    ))}
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {!done && (
+        <div className="toolbar">
+          <span className="small">{summary}</span>
+          <span className="toolbar-spacer" />
+          <button type="button" className="btn btn-primary" disabled={!ready || busy || confirming} onClick={() => setConfirming(true)}>
+            <Icon name="check" /> Submit verdict score
+          </button>
+        </div>
+      )}
+      {!done && confirming && (
+        <ScoreConfirm
+          id="kata-verdict-confirm"
+          title="File this verdict score?"
+          summary={summary}
+          consequence="It feeds the G1 catch rate (solo, unassisted katas only): a clean PR is one call, a flagged decoy line one more miss."
+          confirmLabel="File verdict score"
+          busy={busy}
+          onCancel={() => setConfirming(false)}
+          onConfirm={() => void send()}
+        />
+      )}
+      <div className="results" aria-live="polite" data-testid="results">
+        <ErrorLine error={error} />
+        {result && (
+          <div className={`verdict verdict-${result.passed ? 'pass' : 'fail'}`} data-testid="verdict-result">
+            <Icon name={result.passed ? 'check' : 'warn'} />
+            <strong>{result.passed ? 'Passed' : 'Not passed'}</strong>
+            {result.clean ? null : (
+              <span>
+                {' '}
+                caught {result.caught}/{result.total}, {result.decoysFlagged}/{result.decoysTotal} decoy line(s) flagged
+              </span>
+            )}
+            <span className="verdict-xp">{result.xp ? (result.xp.amount > 0 ? `+${result.xp.amount} XP` : `0 XP${result.xp.reason ? ` (${result.xp.reason})` : ''}`) : '0 XP'}</span>
+          </div>
+        )}
+        {!result && review.scored && (
+          <div className="verdict verdict-todo">
+            <Icon name="check" /> Already scored: {review.scored.passed ? 'passed' : 'not passed'} ({fmtPct(review.scored.score)}).
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 

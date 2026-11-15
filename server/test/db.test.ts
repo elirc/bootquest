@@ -46,14 +46,14 @@ describe('migrations', () => {
     const tmp = makeTempDb();
     try {
       const first = tmp.db.all<{ version: number }>('SELECT version FROM schema_version ORDER BY version');
-      expect(first.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28]);
+      expect(first.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]);
       tmp.db.close();
 
       const again = openDb({ path: tmp.path, env: {} });
       try {
         expect(migrate(again)).toEqual([]); // third pass, explicit
-        expect(schemaVersion(again)).toBe(28);
-        expect(again.get<{ n: number }>('SELECT COUNT(*) AS n FROM schema_version')!.n).toBe(28);
+        expect(schemaVersion(again)).toBe(29);
+        expect(again.get<{ n: number }>('SELECT COUNT(*) AS n FROM schema_version')!.n).toBe(29);
         // 009: exactly one choice-order secret, and re-opening never regenerates it
         expect(again.all<{ secret: string }>('SELECT secret FROM server_secret')).toHaveLength(1);
         expect(again.all<{ checksum: string }>('SELECT checksum FROM schema_version').every((r) => /^[0-9a-f]{64}$/.test(r.checksum))).toBe(true);
@@ -333,7 +333,7 @@ describe('schema constraints', () => {
         };
         expect(() => db.run(`INSERT INTO attempt (unit_id, mode, assisted, assistance_source, outcome, created_at) VALUES (?, 'assisted', 1, 'prior-key', 'submitted', 0)`, unitId)).toThrow();
         // now the real migration set (013 included)
-        expect(migrate(db)).toEqual([13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28]);
+        expect(migrate(db)).toEqual([13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]);
         expect({ attempt: db.all('SELECT * FROM attempt ORDER BY id'), evidence: db.all('SELECT * FROM evidence ORDER BY id'), run: db.all('SELECT * FROM run ORDER BY id') }).toEqual(before);
         expect(db.all('PRAGMA foreign_key_check')).toEqual([]);
         expect(() => db.run('UPDATE attempt SET score = 0 WHERE id = ?', a.id)).toThrow(/append-only/);
@@ -380,7 +380,7 @@ describe('schema constraints', () => {
           ),
         ).toThrow();
         // now the real migration set (015 included)
-        expect(migrate(db)).toEqual([15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28]);
+        expect(migrate(db)).toEqual([15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]);
         expect({ attempt: db.all('SELECT * FROM attempt ORDER BY id'), evidence: db.all('SELECT * FROM evidence ORDER BY id'), run: db.all('SELECT * FROM run ORDER BY id') }).toEqual({ ...before, attempt: before15 });
         expect(db.all('PRAGMA foreign_key_check')).toEqual([]);
         expect(() => db.run('UPDATE attempt SET score = 0 WHERE id = ?', a.id)).toThrow(/append-only/);
@@ -512,6 +512,54 @@ describe('schema constraints', () => {
       const cols = ctx.db.all<{ name: string }>(`SELECT name FROM pragma_table_info(?)`, name);
       for (const c of cols) expect(c.name, `${name}.${c.name}`).not.toMatch(/^(body|text|content|markdown|md|lesson|prompt.*)$/);
     }
+  });
+});
+
+describe('029 kata_verdict + kata_precision (rv3 S5 W9): append-only, CHECKed', () => {
+  const ctx = useTempDb();
+
+  it('a verdict is approve | block, one per attempt; a precision row keeps caught <= total and flagged <= decoys; neither is updated, deleted or replaced', () => {
+    const unitId = makeUnit(ctx.db, ctx.clock, { kind: 'guided-project', competencies: ['feature-delivery'] });
+    const attempt = submit(ctx.db, ctx.clock, unitId);
+    const ev = recordEvidence(ctx.db, { competency: 'feature-delivery', kind: 'artifact', intention: 'i', observation: 'o', attemptId: attempt.id }, ctx.clock);
+    expect(() => ctx.db.run(`INSERT INTO kata_verdict (attempt_id, verdict, created_at) VALUES (?, 'maybe', 0)`, attempt.id)).toThrow(/CHECK/);
+    ctx.db.run(`INSERT INTO kata_verdict (attempt_id, verdict, created_at) VALUES (?, 'approve', 0)`, attempt.id);
+    expect(() => ctx.db.run(`INSERT INTO kata_verdict (attempt_id, verdict, created_at) VALUES (?, 'block', 0)`, attempt.id)).toThrow(/append-only|UNIQUE|PRIMARY/);
+    expect(() => ctx.db.run(`INSERT OR REPLACE INTO kata_verdict (attempt_id, verdict, created_at) VALUES (?, 'block', 0)`, attempt.id)).toThrow(/append-only/);
+    expect(() => ctx.db.run(`UPDATE kata_verdict SET verdict = 'block'`)).toThrow(/append-only/);
+    expect(() => ctx.db.run('DELETE FROM kata_verdict')).toThrow(/append-only/);
+    expect(ctx.db.get('SELECT verdict FROM kata_verdict WHERE attempt_id = ?', attempt.id)).toEqual({ verdict: 'approve' });
+
+    const row = (over: Record<string, number | string>) => {
+      const r = { verdict: 'block', clean: 0, passed: 0, decoys_total: 3, decoys_flagged: 1, g1_total: 2, g1_caught: 1, ...over };
+      ctx.db.run(
+        `INSERT INTO kata_precision (evidence_id, verdict, clean, passed, decoys_total, decoys_flagged, g1_total, g1_caught, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+        ev.id,
+        r.verdict,
+        r.clean,
+        r.passed,
+        r.decoys_total,
+        r.decoys_flagged,
+        r.g1_total,
+        r.g1_caught,
+      );
+    };
+    expect(() => row({ g1_caught: 3 })).toThrow(/CHECK/);
+    expect(() => row({ decoys_flagged: 4 })).toThrow(/CHECK/);
+    expect(() => row({ clean: 2 })).toThrow(/CHECK/);
+    row({});
+    expect(() => row({})).toThrow(/UNIQUE/);
+    const id = ctx.db.get<{ id: number }>('SELECT id FROM kata_precision')!.id;
+    expect(() => ctx.db.run('UPDATE kata_precision SET g1_caught = 2 WHERE id = ?', id)).toThrow(/append-only/);
+    expect(() => ctx.db.run('DELETE FROM kata_precision WHERE id = ?', id)).toThrow(/append-only/);
+    expect(() =>
+      ctx.db.run(
+        `REPLACE INTO kata_precision (id, evidence_id, verdict, clean, passed, decoys_total, decoys_flagged, g1_total, g1_caught, created_at) VALUES (?, ?, 'approve', 1, 1, 0, 0, 1, 1, 0)`,
+        id,
+        ev.id,
+      ),
+    ).toThrow(/append-only/);
+    expect(ctx.db.get('SELECT g1_total AS t, g1_caught AS c FROM kata_precision')).toEqual({ t: 2, c: 1 });
   });
 });
 

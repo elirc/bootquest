@@ -34,6 +34,7 @@ import { mapContentStore } from '../../src/api/content-store.ts';
 import { ledgerCounts, primaryCheck } from '../../src/store/queries.ts';
 import { loadSeedItemStore, mapSeedItemStore, SeedItemLoadError, seedItemHash } from '../../src/store/seed-items.ts';
 import { localNoon, makeTempDb, type TempDb } from '../helpers.ts';
+import { EMPTY_KATA_FLAGS, makeKataFlags, readKataFlags, setKataFlags } from '../../src/store/kata-flags.ts';
 import fixture from '../fixtures/ladder-fixture.json' with { type: 'json' };
 
 const EB = fixture.seedItems.find((i) => i.kind === 'explain-back') as unknown as SeedExplainBackItem;
@@ -854,6 +855,62 @@ describe('patch-review kata: findings first, then the seeded-defect key, then th
     await request(ctx.app).post(`/api/units/${k1}/kata/self-score`).send({ perDefect: { d1: 'caught' } }).expect(200);
     const stats = KataStatsResponse.parse((await request(ctx.app).get('/api/stats/katas')).body);
     expect(stats).toMatchObject({ katasScored: 0, assistedCount: 1, defectsCaught: 0, defectsTotal: 0, catchRate: null, gate: { met: false } });
+  });
+});
+
+/**
+ * rv3 S5 (PLAN W9 / F10, ruling 6): the G1 rule for katas WITHOUT a precision flag is unchanged. One ledger
+ * (kata-1 caught; kata-2 d1 caught, d2 missed) gives byte-identical /stats/katas with the REAL
+ * content/seed/kata-flags.json installed, with no flags, and with an unrelated flags store, and equals the rv B
+ * numbers pinned here: none of the pre-rv3 katas is flagged, so their answers write no kata_verdict /
+ * kata_precision row and their self-score path is the rv B one.
+ */
+describe('rv3 W9: the G1 numbers of unflagged katas are identical with and without kata flags (pinned)', () => {
+  const ctx = useLadder();
+  afterEach(() => setKataFlags(null));
+  const FINDING = { scenario: 'a tenant with two rules where one matches', evidence: 'allocationSummary.mjs:17 uses rules.length', consequence: 'the summary overstates coverage' };
+
+  it('kata-1 caught + kata-2 (d1 caught, d2 missed): G1 = 2/2 over 2 katas, whatever flags are installed', async () => {
+    const k1 = ctx.id('fixture:ladder/kata-1');
+    const k2 = ctx.id('fixture:ladder/kata-2');
+    const realFlags = readKataFlags(join(REPO_ROOT, 'content'));
+    expect(realFlags.problems).toEqual([]);
+    expect(realFlags.byKey.size).toBe(6);
+    for (const k of KATAS) expect(realFlags.byKey.has(k.key)).toBe(false);
+    setKataFlags(realFlags);
+    await request(ctx.app).post(`/api/units/${k1}/kata/findings`).send({ findings: [FINDING] }).expect(200);
+    await request(ctx.app).post(`/api/units/${k2}/kata/findings`).send({ findings: [FINDING] }).expect(200);
+    await request(ctx.app).post(`/api/units/${k1}/kata/self-score`).send({ perDefect: { d1: 'caught' } }).expect(200);
+    await request(ctx.app).post(`/api/units/${k2}/kata/self-score`).send({ perDefect: { d1: 'caught', d2: 'missed' } }).expect(200);
+    expect(ctx.tmp.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM kata_verdict')!.n).toBe(0);
+    expect(ctx.tmp.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM kata_precision')!.n).toBe(0);
+    const PINNED = {
+      katasScored: 2,
+      assistedCount: 0,
+      defectsCaught: 2,
+      defectsTotal: 2,
+      catchRate: 1,
+      gate: {
+        targetRate: 0.8,
+        minDefects: 10,
+        met: false,
+        rule: 'G1: catch >= 8/10 seeded defects (scenario + evidence + consequence) across at least 10 seeded defects; only defects evidenced in the patched lines count (consequences do not)',
+      },
+    };
+    const withReal = (await request(ctx.app).get('/api/stats/katas')).text;
+    expect(KataStatsResponse.parse(JSON.parse(withReal))).toEqual(PINNED);
+    setKataFlags(EMPTY_KATA_FLAGS);
+    expect((await request(ctx.app).get('/api/stats/katas')).text).toBe(withReal);
+    setKataFlags(
+      makeKataFlags({
+        format: 'bootquest-kata-flags@1',
+        counts: { clean: 1, decoyKatas: 0, decoyLines: 0 },
+        katas: { 'seed:patches:other/patch-kata/0': { unitKey: 'x', pack: 'p', title: 't', pattern: 'clean', clean: true } },
+      }),
+    );
+    expect((await request(ctx.app).get('/api/stats/katas')).text).toBe(withReal);
+    // and the unflagged review endpoint asks no verdict
+    expect((await request(ctx.app).get(`/api/units/${k1}/kata/review`)).body).toEqual({ verdictAsked: false, verdict: null, key: null, scored: null });
   });
 });
 

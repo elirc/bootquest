@@ -906,3 +906,87 @@ export const CalibrationResponse = z
   })
   .strict();
 export type CalibrationResponse = z.infer<typeof CalibrationResponse>;
+
+// ---- rv3 S5 (W9 / F10): kata precision ---------------------------------------------------------------
+// A kata listed in content/seed/kata-flags.json as `clean` or with `decoys` asks for a verdict: approve (no
+// findings, POST /units/:id/kata/approve) or block (findings, the existing POST /units/:id/kata/findings). The
+// verdict is stored with the answer (kata_verdict, migration 029), before any key is readable. Such a kata is
+// scored with POST /units/:id/kata/verdict-score (never /kata/self-score): a clean PR passes on approve and fails
+// on any finding; on a decoy kata each decoy line flagged is a false positive. Unflagged katas are untouched.
+
+export const KATA_VERDICTS = ['approve', 'block'] as const;
+export const KataVerdict = z.enum(KATA_VERDICTS);
+export type KataVerdict = z.infer<typeof KataVerdict>;
+/** decoy (nit-only) line ids: n1, n2, ... in file order */
+export const DECOY_ID_RE = /^n[1-9]\d?$/;
+export const DECOY_MARKS = ['flagged', 'clear'] as const;
+export type DecoyMark = (typeof DECOY_MARKS)[number];
+
+/** POST /units/:id/kata/approve: the "approve" verdict, no findings; immutable like findings. */
+export const KataApproveBody = z.object({ selfAssisted: z.boolean().default(false) }).strict();
+export type KataApproveBody = z.infer<typeof KataApproveBody>;
+
+/** A decoy line (served after the answer only). `cited`: one of the stored findings cites it (a suggestion). */
+export const KataDecoyDto = z
+  .object({ id: z.string(), path: z.string(), lineStart: z.number().int(), lineEnd: z.number().int(), why: z.string(), cited: z.boolean() })
+  .strict();
+export type KataDecoyDto = z.infer<typeof KataDecoyDto>;
+
+/**
+ * GET /units/:id/kata/review. Before the answer: `{verdictAsked, verdict: null, key: null, scored: null}` (the same
+ * for a clean and a decoy kata: nothing says which). After the answer: the verdict as recorded and the flags' key.
+ * An unflagged kata: verdictAsked false, everything else null.
+ */
+export const KataReviewResponse = z
+  .object({
+    verdictAsked: z.boolean(),
+    verdict: KataVerdict.nullable(),
+    key: z
+      .object({
+        clean: z.boolean(),
+        /** clean katas: the key entries that are what this PR FIXES (never a defect of the PR, never marked) */
+        fixes: z.array(z.string()),
+        decoys: z.array(KataDecoyDto),
+      })
+      .strict()
+      .nullable(),
+    scored: z
+      .object({ passed: z.boolean(), score: z.number(), decoysFlagged: z.number().int(), decoysTotal: z.number().int() })
+      .strict()
+      .nullable(),
+  })
+  .strict();
+export type KataReviewResponse = z.infer<typeof KataReviewResponse>;
+
+/**
+ * POST /units/:id/kata/verdict-score. Clean kata or an approve: `{}` (nothing to mark: the verdict decides). A
+ * blocked decoy kata: every defect id marked caught | missed and every decoy id flagged | clear, exactly once.
+ */
+export const KataVerdictScoreBody = z
+  .object({
+    perDefect: z.record(z.string().regex(api.DEFECT_ID_RE, 'defect id like d1'), z.enum(api.CATCH_MARKS)).default({}),
+    perDecoy: z.record(z.string().regex(DECOY_ID_RE, 'decoy id like n1'), z.enum(DECOY_MARKS)).default({}),
+  })
+  .strict();
+export type KataVerdictScoreBody = z.infer<typeof KataVerdictScoreBody>;
+
+export const KataVerdictScoreResponse = z
+  .object({
+    attemptId: z.number(),
+    verdict: KataVerdict,
+    clean: z.boolean(),
+    /** clean: the verdict was approve; decoys: no decoy flagged and the catch rate meets the G1 target */
+    passed: z.boolean(),
+    caught: z.number(),
+    total: z.number(),
+    catchRate: z.number(),
+    missed: z.array(z.string()),
+    decoysFlagged: z.number().int(),
+    decoysTotal: z.number().int(),
+    /** the evidence score: clean 1 | 0; decoys caught / (defects + decoys flagged) */
+    score: z.number(),
+    evidenceIds: z.array(z.number()),
+    xp: api.XpOutcome.nullable(),
+  })
+  .strict();
+export type KataVerdictScoreResponse = z.infer<typeof KataVerdictScoreResponse>;

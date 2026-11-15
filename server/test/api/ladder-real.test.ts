@@ -35,11 +35,13 @@ import type { SeedExplainBackItem, SeedPatchKataItem, SeedVariantItem } from '@b
 import { startServer, type RunningServer } from '../../src/api/serve.ts';
 import { DAY_MS, fixedClock } from '../../src/engines/clock.ts';
 import { getRating } from '../../src/engines/evidence.ts';
-import { explainBackUnitKey, retestUnitKey } from '../../src/store/ladder.ts';
+import { explainBackUnitKey, kataUnitKey, retestUnitKey } from '../../src/store/ladder.ts';
 import { createSyncService, resolveSyncPaths } from '../../src/sync/service.ts';
 import { offlineGithubClient } from '../../src/sync/github.ts';
 import { packTarball } from '../../src/sync/cache.ts';
 import { defaultSeedItemDirs, loadSeedItemStore } from '../../src/store/seed-items.ts';
+import { KataReviewResponse, KataVerdictScoreResponse } from '@bootquest/shared/api-ext';
+import { readKataFlags, setKataFlags } from '../../src/store/kata-flags.ts';
 
 const REPO = resolve(import.meta.dirname, '..', '..', '..');
 const SP_SHA = 'ff8446042a16d0aaef1687b34932b4f9137e6e0d';
@@ -311,5 +313,101 @@ describe.skipIf(!HAVE_CHECKOUT)('W7 real ladder content end to end (temp DB, no 
     expect((g3.check?.spec as { predicates: { kind: string }[] }).predicates.map((p) => p.kind)).toEqual(
       expect.arrayContaining(['branch-exists', 'ci-green', 'pr-has-section']),
     );
+  });
+
+  it('rv3 W9: the REAL kata-flags.json resolves (3 clean, 3 decoy katas, 9 decoy lines on added lines); a real clean PR approved passes, a real decoy line flagged fails', async () => {
+    const flags = readKataFlags(join(REPO, 'content'));
+    expect(flags.problems).toEqual([]);
+    const entries = [...flags.byKey.entries()];
+    expect(entries.length).toBe(6);
+    expect(entries.filter(([, f]) => f.clean).length).toBe(3);
+    expect(entries.reduce((n, [, f]) => n + f.decoys.length, 0)).toBe(9);
+    const added = (diff: string): Map<string, Set<number>> => {
+      const m = new Map<string, Set<number>>();
+      let file: string | null = null;
+      let b = 0;
+      for (const l of diff.split('\n')) {
+        const f = /^\+\+\+ b\/(.+?)\r?$/.exec(l);
+        if (f) {
+          file = f[1]!;
+          m.set(file, new Set());
+          continue;
+        }
+        const h = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(l);
+        if (h) {
+          b = Number(h[1]);
+          continue;
+        }
+        if (!file || l.startsWith('---') || l.startsWith('diff ') || l.startsWith('\\')) continue;
+        if (l.startsWith('+')) m.get(file)!.add(b++);
+        else if (!l.startsWith('-')) b++;
+      }
+      return m;
+    };
+    for (const [key, flag] of entries) {
+      const item = store.kataItems().find((k) => k.key === key)!;
+      expect(item, key).toBeDefined();
+      expect(kataUnitKey(item)).toBe(flag.unitKey);
+      if (flag.clean) {
+        // S4 deviation 1: one key entry, in 'repo': what the PR fixes, never a defect of the PR
+        expect(item.seededDefectKey.map((d) => d.evidence.in)).toEqual(['repo']);
+        continue;
+      }
+      const lines = added(item.diff);
+      for (const d of flag.decoys) {
+        for (let n = d.lineStart; n <= d.lineEnd; n++) expect(lines.get(d.path)?.has(n), `${key} ${d.path}:${n} is an added line`).toBe(true);
+        for (const def of item.seededDefectKey.filter((x) => x.evidence.in === 'patched' && x.evidence.path === d.path)) {
+          expect(d.lineEnd < def.evidence.lineStart || d.lineStart > def.evidence.lineEnd, `${key} decoy ${d.id} overlaps a defect`).toBe(true);
+        }
+      }
+    }
+
+    setKataFlags(flags);
+    try {
+      const before = KataStatsResponse.parse((await api('GET', '/stats/katas')).json);
+      const l = await ladder();
+      const unitOf = (unitKey: string) => {
+        const u = l.units.find((x) => x.key === unitKey);
+        expect(u, unitKey).toBeDefined();
+        return u!.id;
+      };
+      const [cleanKey, cleanFlag] = entries.find(([, f]) => f.clean)!;
+      const [decoyKey, decoyFlag] = entries.find(([, f]) => !f.clean)!;
+      const cleanUnit = unitOf(cleanFlag.unitKey);
+      const decoyUnit = unitOf(decoyFlag.unitKey);
+      // before the answer the two look the same
+      const pre = await Promise.all([cleanUnit, decoyUnit].map(async (id) => KataReviewResponse.parse((await api('GET', `/units/${id}/kata/review`)).json)));
+      expect(pre[0]).toEqual({ verdictAsked: true, verdict: null, key: null, scored: null });
+      expect(pre[1]).toEqual(pre[0]);
+      // the clean PR: approve -> pass
+      expect((await api('POST', `/units/${cleanUnit}/kata/approve`, {})).status).toBe(200);
+      const cr = KataReviewResponse.parse((await api('GET', `/units/${cleanUnit}/kata/review`)).json);
+      expect(cr.key).toMatchObject({ clean: true, fixes: ['d1'], decoys: [] });
+      const cs = KataVerdictScoreResponse.parse((await api('POST', `/units/${cleanUnit}/kata/verdict-score`, {})).json);
+      expect(cs).toMatchObject({ passed: true, score: 1, xp: { amount: 15 } });
+      // the decoy PR: a finding that cites a decoy line, marked flagged -> no pass, G1 one more miss
+      const n1 = decoyFlag.decoys[0]!;
+      const f = await api('POST', `/units/${decoyUnit}/kata/findings`, {
+        findings: [{ scenario: 'this line reads oddly', evidence: `${n1.path}:${n1.lineStart}`, consequence: 'a reader may be confused' }],
+      });
+      expect(f.status, f.text).toBe(200);
+      const dr = KataReviewResponse.parse((await api('GET', `/units/${decoyUnit}/kata/review`)).json);
+      expect(dr.verdict).toBe('block');
+      expect(dr.key!.decoys.map((d) => d.cited)).toEqual(decoyFlag.decoys.map((_, i) => i === 0));
+      const dk = KataKeyResponse.parse((await api('GET', `/units/${decoyUnit}/kata/key`)).json);
+      const perDefect = Object.fromEntries(dk.defects.map((d) => [d.id, 'missed']));
+      const perDecoy = Object.fromEntries(decoyFlag.decoys.map((d, i) => [d.id, i === 0 ? 'flagged' : 'clear']));
+      const ds = KataVerdictScoreResponse.parse((await api('POST', `/units/${decoyUnit}/kata/verdict-score`, { perDefect, perDecoy })).json);
+      expect(ds).toMatchObject({ verdict: 'block', clean: false, passed: false, caught: 0, decoysFlagged: 1, decoysTotal: decoyFlag.decoys.length, score: 0 });
+      const decoyItem = store.kataItems().find((k) => k.key === decoyKey)!;
+      const patched = decoyItem.seededDefectKey.filter((d) => d.evidence.in === 'patched').length;
+      const after = KataStatsResponse.parse((await api('GET', '/stats/katas')).json);
+      expect(after.katasScored).toBe(before.katasScored + 2);
+      expect(after.defectsCaught).toBe(before.defectsCaught + 1);
+      expect(after.defectsTotal).toBe(before.defectsTotal + 1 + patched + 1);
+      expect(cleanKey).not.toBe(decoyKey);
+    } finally {
+      setKataFlags(null);
+    }
   });
 });

@@ -110,3 +110,95 @@ describe('explain-back: open-book G2, the answer floor, the Claude prompt', () =
     expect(writes[0]).toContain('q1k1');
   });
 });
+
+// rv3 S5 (W9 / F10): kata precision on the pane. A flagged kata (mock flagKata = content/seed/kata-flags.json) asks
+// approve | block before any key; a clean PR passes on approve and fails on any finding; on a decoy PR a finding on a
+// decoy line is a false positive. An unflagged kata keeps the plain findings flow (no verdict control).
+describe('rv3 W9: approve / block on flagged katas', () => {
+  const KATA = Number(Object.keys(kataFixtures)[0]);
+
+  it('an unflagged kata shows no verdict control: the plain "Submit findings" flow and catch score', async () => {
+    const { user } = renderApp(`/play/${KATA}`, createMockApi());
+    await screen.findByTestId('diff');
+    expect(screen.queryByTestId('kata-verdict')).toBeNull();
+    expect(screen.queryByTestId('kata-verdict-intro')).toBeNull();
+    for (const field of ['scenario', 'evidence', 'consequence']) await user.type(screen.getByRole('textbox', { name: `Finding 1 ${field}` }), 'x');
+    await user.click(screen.getByRole('button', { name: /Submit findings/ }));
+    expect(await screen.findByRole('button', { name: /Submit catch score/ })).toBeInTheDocument();
+    expect(screen.queryByTestId('kata-decoys')).toBeNull();
+  });
+
+  it('a clean PR: approve is stored before any key, then the key says "approve was right" and shows what the PR fixes; the score passes', async () => {
+    const api = createMockApi();
+    api.flagKata(KATA, { clean: true });
+    const calls: string[] = [];
+    const spy: BootQuestApi = new Proxy(api, {
+      get: (t, p) => {
+        const v = Reflect.get(t, p) as unknown;
+        return typeof v === 'function' ? (...a: unknown[]) => (calls.push(String(p)), (v as (...x: unknown[]) => unknown).apply(t, a)) : v;
+      },
+    });
+    const { user } = renderApp(`/play/${KATA}`, spy);
+    expect(await screen.findByTestId('kata-verdict-intro')).toHaveTextContent('Some PRs are clean');
+    expect(screen.getByText('Pick a verdict first.')).toBeInTheDocument();
+    expect(screen.queryByRole('textbox', { name: 'Finding 1 scenario' })).toBeNull();
+    await user.click(screen.getByRole('radio', { name: 'Approve' }));
+    expect(calls).not.toContain('getKataKey');
+    await user.click(screen.getByRole('button', { name: /Approve this PR/ }));
+    expect(calls.indexOf('approveKata')).toBeLessThan(calls.indexOf('getKataKey'));
+    expect(await screen.findByTestId('kata-clean')).toHaveTextContent('This PR is clean: approve was the right verdict.');
+    expect(screen.getByTestId('kata-verdict-stored')).toHaveTextContent('Your verdict: approve');
+    expect(within(screen.getByTestId('kata-fixes')).getAllByRole('listitem').length).toBe(kataFixtures[String(KATA)]!.defects.length);
+    expect(screen.queryByRole('radio', { name: 'd1 caught' })).toBeNull(); // nothing to mark on a clean PR
+    await user.click(screen.getByRole('button', { name: /Submit verdict score/ }));
+    await user.click(screen.getByRole('button', { name: 'File verdict score' }));
+    expect(await screen.findByTestId('verdict-result')).toHaveTextContent('Passed');
+    expect(calls).toContain('verdictScoreKata');
+    expect(calls).not.toContain('selfScoreKata');
+    const stats = await api.getKataStats();
+    expect(stats).toMatchObject({ katasScored: 1, defectsCaught: 1, defectsTotal: 1 });
+  });
+
+  it('a clean PR blocked with a finding fails; the key says a finding on a clean PR fails it', async () => {
+    const api = createMockApi();
+    api.flagKata(KATA, { clean: true });
+    const { user } = renderApp(`/play/${KATA}`, api);
+    await screen.findByTestId('kata-verdict');
+    await user.click(screen.getByRole('radio', { name: 'Block' }));
+    for (const field of ['scenario', 'evidence', 'consequence']) await user.type(screen.getByRole('textbox', { name: `Finding 1 ${field}` }), 'x');
+    await user.click(screen.getByRole('button', { name: /Block with these findings/ }));
+    expect(await screen.findByTestId('kata-clean')).toHaveTextContent('any finding fails it');
+    await user.click(screen.getByRole('button', { name: /Submit verdict score/ }));
+    await user.click(screen.getByRole('button', { name: 'File verdict score' }));
+    expect(await screen.findByTestId('verdict-result')).toHaveTextContent('Not passed');
+    expect(await api.getKataStats()).toMatchObject({ katasScored: 1, defectsCaught: 0, defectsTotal: 1 });
+  });
+
+  it('a decoy PR: the decoy lines appear only after the findings; a cited decoy is pre-set "I flagged it" and counts as a false positive', async () => {
+    const api = createMockApi();
+    api.flagKata(KATA, {
+      decoys: [
+        { path: 'src/orders.js', lineStart: 3, lineEnd: 3, why: 'a reworded comment' },
+        { path: 'src/orders.js', lineStart: 7, lineEnd: 7, why: 'a rename' },
+      ],
+    });
+    const { user } = renderApp(`/play/${KATA}`, api);
+    await screen.findByTestId('kata-verdict');
+    expect(document.body.textContent).not.toContain('a reworded comment');
+    await user.click(screen.getByRole('radio', { name: 'Block' }));
+    await user.type(screen.getByRole('textbox', { name: 'Finding 1 scenario' }), 'the comment is unclear');
+    await user.type(screen.getByRole('textbox', { name: 'Finding 1 evidence' }), 'src/orders.js:3');
+    await user.type(screen.getByRole('textbox', { name: 'Finding 1 consequence' }), 'confusion');
+    await user.click(screen.getByRole('button', { name: /Block with these findings/ }));
+    const decoys = await screen.findByTestId('kata-decoys');
+    expect(decoys).toHaveTextContent('a reworded comment');
+    expect(screen.getByRole('radio', { name: 'n1 flagged' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: 'n2 clear' })).toBeChecked();
+    for (const d of kataFixtures[String(KATA)]!.defects.map((_, i) => `d${i + 1}`)) await user.click(screen.getByRole('radio', { name: `${d} caught` }));
+    await user.click(screen.getByRole('button', { name: /Submit verdict score/ }));
+    expect(screen.getByRole('alertdialog')).toHaveTextContent('1 decoy line(s) flagged (false positives: the kata does not pass)');
+    await user.click(screen.getByRole('button', { name: 'File verdict score' }));
+    expect(await screen.findByTestId('verdict-result')).toHaveTextContent('Not passed');
+    expect(screen.getByTestId('verdict-result')).toHaveTextContent('1/2 decoy line(s) flagged');
+  });
+});
