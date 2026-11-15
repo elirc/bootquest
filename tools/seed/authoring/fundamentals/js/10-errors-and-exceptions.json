@@ -5,7 +5,7 @@
   "title": "Errors & exceptions",
   "level": "intermediate",
   "summary": "Throwing real Error objects, built-in error types, custom error classes with cause, try/catch/finally semantics, async errors, and turning errors into safe HTTP responses.",
-  "lesson": "## Throw Error objects\n\nYou can `throw` any value, but only `Error` objects carry a `stack` trace and a `name`. `throw 'not found'` gives the catcher a bare string with no stack, which makes production logs useless.\n\n```js\nthrow new Error('order 42 not found');\n```\n\nBuilt-in types you will meet: `TypeError` (reading a property of `undefined`, calling a non-function), `ReferenceError` (unknown variable, TDZ), `RangeError` (`new Array(-1)`, a bad numeric argument), `SyntaxError` (`JSON.parse` of invalid text). Throw `TypeError` / `RangeError` yourself for bad arguments.\n\n## Custom error classes\n\n```js\nclass NotFoundError extends Error {\n  name = 'NotFoundError';             // otherwise name stays 'Error'\n  constructor(entity, id, options) {\n    super(`${entity} ${id} not found`, options);\n    this.entity = entity;\n  }\n}\ntry { ... } catch (err) {\n  if (err instanceof NotFoundError) return res.status(404) ...\n  throw err;                            // never swallow what you do not handle\n}\n```\n\nA subclass keeps `name === 'Error'` unless you set it, so `String(err)` would print `Error: ...`. `instanceof` lets callers branch on the kind of failure.\n\n**cause** (ES2022) chains errors without losing the original: `throw new Error('could not load user', { cause: err })`. The low-level error and its stack stay available as `err.cause`.\n\n## try / catch / finally\n\n- `finally` runs whether the block returned, threw, or completed: use it to release resources (close files, clear timers, release locks).\n- A `return` inside `finally` **overrides** the try block's return or throw. Never return from finally.\n- `catch {` without a binding is allowed when you do not need the error.\n\n## Async errors\n\n`try/catch` only catches errors thrown **synchronously in that call stack**, or in an `await`ed promise:\n\n```js\ntry { setTimeout(() => { throw new Error('x'); }, 0); } catch { /* never runs */ }\ntry { await fetchUser(id); } catch (err) { /* catches the rejection */ }\n```\n\nA rejected promise nobody handles is an **unhandled rejection**; since Node 15 it crashes the process by default. Always `await` or attach `.catch`, and never start a promise you forget.\n\n## Errors at the API boundary\n\nMap known errors to status codes in ONE place (an error middleware), and never send internal messages or stacks to clients:\n\n- validation problem: 400 with field details\n- missing resource: 404\n- conflict (duplicate, stale version): 409\n- anything unexpected: 500 with a generic message; log the real error (with cause) server-side\n\nThe RFC 9457 \"problem details\" shape (`{ type, title, status, detail }`) is a good default response body.",
+  "lesson": "## Throw Error objects\n\nYou can `throw` any value, but only `Error` objects carry a `stack` trace and a `name`. `throw 'not found'` gives the catcher a bare string with no stack, which makes production logs useless. In `catch (e) { log(e.stack); }` a thrown string logs undefined: no file, no line, no call chain.\n\n```js\nthrow new Error('order 42 not found');\n```\n\nBuilt-in types you will meet: `TypeError` (reading a property of `undefined`, calling a non-function), `ReferenceError` (unknown variable, TDZ), `RangeError` (`new Array(-1)`, a bad numeric argument), `SyntaxError` (`JSON.parse` of invalid text). Throw `TypeError` / `RangeError` yourself for bad arguments.\n\n## Custom error classes\n\n```js\nclass NotFoundError extends Error {\n  name = 'NotFoundError';             // otherwise name stays 'Error'\n  constructor(entity, id, options) {\n    super(`${entity} ${id} not found`, options);\n    this.entity = entity;\n  }\n}\ntry { ... } catch (err) {\n  if (err instanceof NotFoundError) return res.status(404) ...\n  throw err;                            // never swallow what you do not handle\n}\n```\n\nA subclass keeps `name === 'Error'` unless you set it, so `String(err)` would print `Error: ...`. `instanceof` lets callers branch on the kind of failure. A base class can set the name once for every subclass with `this.name = new.target.name` in its constructor.\n\n**cause** (ES2022) chains errors without losing the original: `throw new Error('could not load user', { cause: err })`. The low-level error and its stack stay available as `err.cause`.\n\n## try / catch / finally\n\n- `finally` runs whether the block returned, threw, or completed: use it to release resources (close files, clear timers, release locks).\n- A `return` inside `finally` **overrides** the try block's return or throw. Never return from finally.\n- `catch {` without a binding is allowed when you do not need the error.\n\n`try { return compute(); } finally { lock.release(); }` returns the value and still releases the lock. A `catch` that only logs and carries on is the most common way real errors disappear.\n\n## Async errors\n\n`try/catch` only catches errors thrown **synchronously in that call stack**, or in an `await`ed promise:\n\n```js\ntry { setTimeout(() => { throw new Error('x'); }, 0); } catch { /* never runs */ }\ntry { await fetchUser(id); } catch (err) { /* catches the rejection */ }\n```\n\nA rejected promise nobody handles is an **unhandled rejection**; since Node 15 it crashes the process by default. Always `await` or attach `.catch`, and never start a promise you forget. An `async` function never throws at its call site: it returns a rejected promise, so `try { save(); } catch {}` without `await` catches nothing.\n\n## Errors at the API boundary\n\nMap known errors to status codes in ONE place (an error middleware), and never send internal messages or stacks to clients:\n\n- validation problem: 400 with field details\n- missing resource: 404\n- conflict (duplicate, stale version): 409\n- anything unexpected: 500 with a generic message; log the real error (with cause) server-side\n\nThe RFC 9457 \"problem details\" shape (`{ type, title, status, detail }`) is a good default response body. Give every 500 a reference that is both logged and returned, such as a request id in the problem's `instance` member, so support can find the real error without exposing it.",
   "quiz": [
     {
       "prompt": "Why should you throw `new Error(\"...\")` rather than a string?",
@@ -27,7 +27,7 @@
         "`undefined`"
       ],
       "answer": 1,
-      "explanation": "name is inherited from Error.prototype unless the subclass sets it, so logs would show \"Error: x\"."
+      "explanation": "`name` is not an own property of the instance: it is read through the prototype chain, and `Error.prototype.name` is 'Error'. `extends` does not copy the class name into it, so it is neither 'NotFound' nor empty, and `String(err)` prints 'Error: x'. Set `name = 'NotFound'` as a class field, or `this.name = new.target.name` once in a base class, so logs show the real kind."
     },
     {
       "prompt": "What does `(() => { try { return \"try\"; } finally { return \"finally\"; } })()` return?",
@@ -38,7 +38,7 @@
         "It throws"
       ],
       "answer": 1,
-      "explanation": "A return in finally overrides the try block's return (and would even swallow a thrown error). Avoid returning from finally."
+      "explanation": "A finally block runs after the try block, even when the try block returns. When finally executes its own return, that completion replaces the pending one, so the value 'try' is discarded. The same rule lets a return in finally swallow a thrown error, which is why linters flag it with the `no-unsafe-finally` rule. Use finally only for cleanup."
     },
     {
       "prompt": "Does `try { setTimeout(() => { throw new Error(\"x\"); }, 0); } catch {}` catch the error?",
@@ -49,7 +49,7 @@
         "In browsers, yes: timers share the caller's stack"
       ],
       "answer": 2,
-      "explanation": "By the time the timer fires, the try block has long finished. Handle errors inside the callback, or use promises and await."
+      "explanation": "setTimeout only schedules the callback and returns at once, so the try block finishes without an error. When the timer fires, the event loop calls the callback from a new, empty stack, and the old try/catch is no longer on it. In Node the throw becomes an uncaught exception and the process exits. Strict mode and browsers change nothing. Catch inside the callback, or wrap the timer in a promise and await it."
     },
     {
       "prompt": "Which built-in error does `null.x` throw?",
@@ -60,7 +60,7 @@
         "`TypeError`"
       ],
       "answer": 3,
-      "explanation": "Reading a property of null or undefined is a TypeError. ReferenceError is for unknown names."
+      "explanation": "A property read first turns the base value into an object, and null and undefined have no object form, so `null.x` fails with \"Cannot read properties of null\". ReferenceError is for a name that does not exist, RangeError for a value outside its allowed range, and SyntaxError for code or JSON that cannot be parsed. Optional chaining, `obj?.x`, returns undefined instead."
     },
     {
       "prompt": "What is `cause` in `new Error(\"load failed\", { cause: err })` for?",
@@ -71,7 +71,7 @@
         "It replaces the stack trace with the stack of err"
       ],
       "answer": 0,
-      "explanation": "Wrapping with cause adds context while preserving the low-level failure for logging. The original message and stack are not lost."
+      "explanation": "The `cause` option, added in ES2022, stores the lower-level error on the new one as `err.cause`. You add context such as 'load failed' for order 42, while the original failure, with its own message and stack, stays available for logs. It does not change the new error's stack, set an HTTP status or mark anything as retryable; those are decisions for your own code."
     },
     {
       "prompt": "In Node 22, what happens by default to a promise rejection that nothing handles?",
@@ -82,7 +82,7 @@
         "It is retried once before the process exits"
       ],
       "answer": 2,
-      "explanation": "Since Node 15 the default mode for unhandled rejections is to throw, terminating the process."
+      "explanation": "Since Node 15 the default `--unhandled-rejections` mode is `throw`: a rejection that still has no handler once the current tick ends is raised as an uncaught exception, and with no `uncaughtException` listener the process exits with code 1. It is not just a warning, nothing is retried, and a catch attached a few milliseconds later is too late. Await the promise or attach `.catch` where it is created."
     },
     {
       "prompt": "An unexpected database error reaches your error middleware. What should the client receive?",
@@ -93,7 +93,7 @@
         "A 200 with an error field describing the failure"
       ],
       "answer": 1,
-      "explanation": "Internal messages and stacks leak implementation details. Log them with their cause; answer with a generic 500."
+      "explanation": "The error middleware is where internal failures meet the client. A database error's message and stack can reveal table names, queries or file paths, so they belong in the server log, together with the cause and a request id. The client gets status 500 and a generic body, ideally in the problem-details shape. A 404 would misreport a server fault as a missing record, and a 200 hides the failure from monitoring."
     },
     {
       "prompt": "Which error type fits `setPageSize(-5)` best?",
@@ -104,7 +104,7 @@
         "`EvalError`"
       ],
       "answer": 2,
-      "explanation": "RangeError signals a value outside the allowed range; TypeError signals a value of the wrong kind."
+      "explanation": "RangeError is the built-in type for a value of the right kind that falls outside the allowed range, which is exactly a negative page size; `new Array(-1)` throws one too. SyntaxError is for text that cannot be parsed, ReferenceError for an unknown name, and EvalError is a legacy type the language no longer throws. Use TypeError when the argument has the wrong kind, such as a string."
     },
     {
       "prompt": "In a catch block you only know how to handle NotFoundError. What should you do with other errors?",
@@ -115,7 +115,7 @@
         "Rethrow them"
       ],
       "answer": 3,
-      "explanation": "Catch what you can handle and rethrow the rest, so they reach a layer that can deal with them."
+      "explanation": "Catch only what you can handle: map NotFoundError to its response and `throw err` for everything else. Returning null, or logging and continuing, turns a real failure such as a lost database connection into a silent wrong result. Converting other errors to NotFoundError lies about what happened and sends a 404 for a server fault. Errors you pass on reach a layer that can deal with them, such as the error middleware."
     }
   ],
   "flashcards": [
@@ -186,7 +186,7 @@
           "code": "const root = new Error('schema mismatch');\nassert.equal(new mod.ValidationError([], { cause: root }).cause, root);"
         }
       ],
-      "explanation": "Name fields make the classes print and log properly; `instanceof` picks the response:\n\n```js\nexport function toProblem(err) {\n  if (err instanceof NotFoundError) return { status: 404, title: 'Not Found', detail: err.message };\n  if (err instanceof ValidationError) return { status: 400, title: 'Validation failed', errors: err.details };\n  return { status: 500, title: 'Internal Server Error' };\n}\n```\n\nThe fallback deliberately ignores the message: for an unknown error it may contain SQL, file paths or secrets. Log it server-side instead.",
+      "explanation": "Name fields make the classes print and log properly; `instanceof` picks the response:\n\n```js\nexport function toProblem(err) {\n  if (err instanceof NotFoundError) return { status: 404, title: 'Not Found', detail: err.message };\n  if (err instanceof ValidationError) return { status: 400, title: 'Validation failed', errors: err.details };\n  return { status: 500, title: 'Internal Server Error' };\n}\n```\n\nThe fallback deliberately ignores the message: for an unknown error it may contain SQL, file paths or secrets, so log it server-side instead. Without the `name` field a subclass still reports 'Error', and the test \"the classes are real, named Errors\" fails. Calling `super('Validation failed')` without `options` drops the cause, and \"a ValidationError keeps its cause\" fails. Branching on `err.name` instead of `instanceof` crashes on `toProblem(undefined)`, so \"unexpected errors never leak their message\" fails with a TypeError.",
       "hints": [
         "Each response is decided by which class the error is an instance of. Anything unrecognised gets the same generic answer.",
         "Give each error class its own name, have the validation error pass its fixed message and options up to the parent class, and choose the problem shape by checking which class the error belongs to.",
@@ -227,7 +227,7 @@
           "code": "const root = new Error('schema mismatch');\nassert.equal(new mod.ValidationError([], { cause: root }).cause, root);"
         }
       ],
-      "explanation": "The fallback copies `err.message` into `detail`, so an unexpected error's SQL, file path or secret goes to the client. Known errors (404, 400) carry a message written for clients; an unknown error gets only a generic 500 body, and its message is logged server-side.",
+      "explanation": "The fallback copies `err.message` into `detail`, so an unexpected error's SQL, file path or secret goes to the client. The test \"unexpected errors never leak their message\" fails on the first assertion: the 500 body has a `detail` key holding the SQL text. Known errors (404, 400) carry a message written for clients, not internal details; an unknown error gets only a generic 500 body, and its message is logged server-side. Deleting `detail` from the fallback is the whole fix, and it also stops the crash on a thrown `undefined`.",
       "hints": [
         "Throw an Error whose message contains a SQL string and look at the response.",
         "The 500 branch copies the message of an error you know nothing about.",
