@@ -249,9 +249,9 @@ describe('bootquest CLI against the real server', () => {
     expect(r.code).toBe(0);
     expect(r.stdout).toMatch(/^BootQuest today: \d{4}-\d{2}-\d{2} {2}\(http:\/\/127\.0\.0\.1:\d+\)$/m);
     expect(r.stdout).toMatch(/^Slate: \d+\/\d+ done \(\w+\)$/m);
-    expect(r.stdout).toMatch(/^ {2}\[[x ]\] .*drill set/m);
+    expect(r.stdout).toMatch(/^ {2}\[[x ]\] .*(Fundamentals step|senior rep|drill set)/m); // rv C: the default slate is a Fundamentals step + a senior rep
     expect(r.stdout).toMatch(/^Reviews due: \d+$/m);
-    expect(r.stdout).toMatch(/^Streak: \d+ days? \(longest \d+\) - today (complete|not complete yet)$/m);
+    expect(r.stdout).toMatch(/^Streak: \d+ days? \(longest \d+\) - today (complete|not complete yet)( - .*)?$/m);
     expect(r.stdout).toMatch(/^Freeze tokens: \d+$/m);
     expect(r.stdout).toMatch(/^Next up:$/m);
   });
