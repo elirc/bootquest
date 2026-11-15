@@ -40,9 +40,9 @@ import { xpOnDay } from './xp.ts';
  * Slate settings (ab wave A1, migration 017): the learner's choice of tracks
  * and set size is an append-only ledger (slate_setting). slateShape(db, day)
  * reads, per track, the latest row with effective_day <= day; a track with no
- * row is on the slate (when track.slate_drills = 1) with the unconfigured
- * default size DEFAULT_DRILL_SET_SIZE = 1, so day one asks for one drill per
- * track. The settings service always writes effective_day = tomorrow, so a
+ * row is OFF the slate (rv wave C, D3: the default day is the Fundamentals step
+ * plus a senior rep), and a track's size falls back to DEFAULT_DRILL_SET_SIZE = 1
+ * when no row sets one. The settings service always writes effective_day = tomorrow, so a
  * change never reshapes today's open slate or any closed day, and the size never
  * ramps on its own (no hidden growth when the learner starts passing drills).
  * track.slate_drills stays the capability flag (the track gives drill slots at
