@@ -140,15 +140,21 @@ describe('seed:lint:keyideas: schema, counts, keys', () => {
     expect(msgs(big(51))).toContain(': the recap opens after 41 passed scope units (max 40): use a whole-count recapAfter or a narrower scope');
     expect(msgs(big(129, { recapAfter: 27 }))).toEqual([]);
     expect(keyIdeasReport(big(129, { recapAfter: 27 })).perSection[0]).toMatchObject({ scopeUnits: 129, recapUnits: 27 });
-    // a pending section (scheduled fix) is reported apart, and a pending entry that no longer applies is a problem
-    const pend = estate({ agentic: section(Array.from({ length: 10 }, (_, i) => idea(`i-${i}`)), { section: 'agentic', scope: ['big/c1/'] }) });
+    // a pending section (scheduled fix) is reported apart, and a pending entry that no longer applies is a problem.
+    // rv3 S4 emptied the real list, so the mechanism runs on an artificial entry.
+    const PEND = { 'demo-bank': 'a later wave' };
+    const pend = estate({ 'demo-bank': section(Array.from({ length: 10 }, (_, i) => idea(`i-${i}`)), { section: 'demo-bank', scope: ['big/c1/'] }) });
     put(pend, 'packs/big/c1.json', { format: 'bootquest-pack@1', units: many(60) });
-    const r = keyIdeasReport(pend);
+    const r = keyIdeasReport(pend, readEstate(pend), PEND);
     expect(r.problems).toEqual([]);
-    expect(r.pending).toEqual([{ section: 'agentic', recapUnits: 48, owner: RECAP_UNITS_PENDING.agentic }]);
-    expect(formatKeyIdeasReport(r)).toContain(`PENDING agentic: the recap opens after 48 passed units (max ${MAX_RECAP_UNITS}); fix scheduled: rv3 S4`);
-    const fixed = estate({ agentic: section(Array.from({ length: 10 }, (_, i) => idea(`i-${i}`)), { section: 'agentic' }) });
-    expect(msgs(fixed)).toContain(': RECAP_UNITS_PENDING lists this section but its recap opens after 4 unit(s), within 40: remove the entry');
+    expect(r.pending).toEqual([{ section: 'demo-bank', recapUnits: 48, owner: 'a later wave' }]);
+    expect(formatKeyIdeasReport(r)).toContain(`PENDING demo-bank: the recap opens after 48 passed units (max ${MAX_RECAP_UNITS}); fix scheduled: a later wave`);
+    const fixed = estate({ 'demo-bank': section(Array.from({ length: 10 }, (_, i) => idea(`i-${i}`)), { section: 'demo-bank' }) });
+    expect(keyIdeasReport(fixed, readEstate(fixed), PEND).problems.map((x) => x.message)).toContain('RECAP_UNITS_PENDING lists this section but its recap opens after 4 unit(s), within 40: remove the entry');
+    // without an entry the same big section is a problem, not pending
+    expect(keyIdeasReport(pend).pending).toEqual([]);
+    // rv3 S4: the real list is empty (agentic 25, review-katas 17)
+    expect(RECAP_UNITS_PENDING).toEqual({});
   });
 
   it('word limits, duplicate ids and a section that does not match its file name', () => {

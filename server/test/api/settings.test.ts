@@ -74,6 +74,7 @@ describe('A1 GET/PUT /api/settings/slate', () => {
       ['js', false, 1, false],
       ['csharp', false, 1, false],
       ['java', false, 1, false],
+      ['agentic', false, 1, false], // rv3 028: slate-capable, off until the learner turns it on (O13)
       ['sysdesign', false, 1, false],
     ]);
     expect(s.tomorrowTracks).toEqual(s.todayTracks);
@@ -100,6 +101,7 @@ describe('A1 GET/PUT /api/settings/slate', () => {
       ['js', false, 1],
       ['csharp', false, 1],
       ['java', true, 3],
+      ['agentic', false, 1],
       ['sysdesign', true, 3],
     ]);
     expect(ctx.db.all<{ effective_day: string }>('SELECT DISTINCT effective_day FROM slate_setting')).toEqual([{ effective_day: '2026-10-02' }]);
@@ -124,15 +126,15 @@ describe('A1 GET/PUT /api/settings/slate', () => {
 
   it('presets: full = 5 per track, default = every drill set off again (rv wave C); rows are appended, never rewritten', async () => {
     const full = SlateSettingsResponse.parse((await put(ctx, { preset: 'full' })).body);
-    expect(full.tomorrowTracks.map((t) => [t.enabled, t.size])).toEqual(Array(4).fill([true, 5]));
-    expect(rows(ctx)).toBe(4);
+    expect(full.tomorrowTracks.map((t) => [t.enabled, t.size])).toEqual(Array(5).fill([true, 5])); // rv3 028: agentic is one of the five slate-capable tracks
+    expect(rows(ctx)).toBe(5);
     const def = SlateSettingsResponse.parse((await put(ctx, { preset: 'default' })).body);
-    expect(def.tomorrowTracks.map((t) => [t.enabled, t.size, t.configured])).toEqual(Array(4).fill([false, 1, true]));
-    expect(rows(ctx)).toBe(8);
+    expect(def.tomorrowTracks.map((t) => [t.enabled, t.size, t.configured])).toEqual(Array(5).fill([false, 1, true]));
+    expect(rows(ctx)).toBe(10);
     // an unlisted track keeps tomorrow's shape
     const one = SlateSettingsResponse.parse((await put(ctx, { tracks: [{ trackId: 'java', enabled: true, size: 2 }] })).body);
-    expect(one.tomorrowTracks.map((t) => t.size)).toEqual([1, 1, 2, 1]);
-    expect(rows(ctx)).toBe(9);
+    expect(one.tomorrowTracks.map((t) => t.size)).toEqual([1, 1, 2, 1, 1]);
+    expect(rows(ctx)).toBe(11);
   });
 
   it('refusals write nothing: bad shape, unknown / locked / drill-less track, duplicates, size bounds (every track off is allowed now)', async () => {
@@ -149,6 +151,8 @@ describe('A1 GET/PUT /api/settings/slate', () => {
       [{ tracks: [{ trackId: 'agentic', enabled: true }] }, 'body.tracks.0.trackId'],
       [{ tracks: [{ trackId: 'js', enabled: true }, { trackId: 'js', enabled: false }] }, 'body.tracks.1.trackId'],
     ];
+    // rv3 028 gave agentic a drill slot; take it away here so the drill-less refusal is still tested
+    ctx.db.run(`UPDATE track SET slate_drills = 0 WHERE id = 'agentic'`);
     for (const [body, path] of cases) expectError(await put(ctx, body), 400, 'VALIDATION', path);
     ctx.db.run(`UPDATE track SET locked = 1 WHERE id = 'java'`);
     expectError(await put(ctx, { tracks: [{ trackId: 'java', enabled: true }] }), 400, 'VALIDATION', 'body.tracks.0.trackId');

@@ -159,6 +159,7 @@ describe('A1 slate settings are read as of the day (append-only, effective tomor
       ['js', false, 1, false],
       ['csharp', true, 1, true],
       ['java', true, 7, true],
+      ['agentic', false, 1, false],
       ['sysdesign', false, 1, false],
     ]);
   });
@@ -168,7 +169,7 @@ describe('A1 slate settings are read as of the day (append-only, effective tomor
     ctx.db.run(`UPDATE track SET slate_drills = 0 WHERE id = 'csharp'`);
     setting(ctx.db, 'csharp', true, 5, '2026-09-01');
     expect(composeSlate(ctx.db, ctx.clock).items.some((i) => i.slot === 'drill:csharp')).toBe(false);
-    expect(slateShape(ctx.db, '2026-10-01').map((s) => s.trackId)).toEqual(['js', 'java', 'sysdesign']);
+    expect(slateShape(ctx.db, '2026-10-01').map((s) => s.trackId)).toEqual(['js', 'java', 'agentic', 'sysdesign']);
   });
 
   it('slate_setting is append-only', () => {
@@ -265,5 +266,36 @@ describe('A1 local-midnight boundary (ring review S7-on-S1 SHOULD-1)', () => {
     expect(statuses.get('2026-10-01')).toBeUndefined(); // before the first action: renders none
     expect(statuses.get('2026-10-02')).toBe('missed'); // the 23:59 attempt's own local day
     expect(statuses.get('2026-10-03')).toBe('missed');
+  });
+});
+
+describe('rv3 028: the agentic drill slot is a capability, OFF by default (PLAN O13)', () => {
+  const ctx = useTempDb();
+  const agenticDrills = (n = 8): number[] => Array.from({ length: n }, () => makeUnit(ctx.db, ctx.clock, { kind: 'drill', track: 'agentic' }));
+
+  it('a fresh DB: agentic is slate-capable but unconfigured and off, and the default slate is unchanged even with the bank loaded', () => {
+    expect(ctx.db.get<{ s: number }>(`SELECT slate_drills AS s FROM track WHERE id = 'agentic'`)!.s).toBe(1);
+    expect(ctx.db.get('SELECT 1 AS x FROM slate_setting LIMIT 1')).toBeUndefined(); // 028 writes no setting row
+    stock(ctx.db, ctx.clock);
+    agenticDrills();
+    expect(slateShape(ctx.db, '2026-10-01').find((s) => s.trackId === 'agentic')).toMatchObject({ enabled: false, size: DEFAULT_DRILL_SET_SIZE, configured: false });
+    expect(shapeOf(ctx.db, ctx.clock)).toEqual(DEFAULT_SHAPE);
+    expect(composeSlate(ctx.db, ctx.clock).items.some((i) => i.slot === 'drill:agentic')).toBe(false);
+  });
+
+  it('turning drill:agentic on serves agentic drills from tomorrow; today stays as it was', () => {
+    stock(ctx.db, ctx.clock);
+    agenticDrills();
+    expect(shapeOf(ctx.db, ctx.clock)).toEqual(DEFAULT_SHAPE);
+    putSlateSettings({ db: ctx.db, clock: ctx.clock }, { tracks: [{ trackId: 'agentic', enabled: true, size: 2 }] });
+    expect(shapeOf(ctx.db, ctx.clock)).toEqual(DEFAULT_SHAPE);
+    ctx.clock.advance(DAY_MS);
+    expect(shapeOf(ctx.db, ctx.clock)).toEqual(['drill:jsx1', 'drill:agenticx2']);
+  });
+
+  it('switched on with no agentic drill units, the slot is dropped (as for any exhausted bank)', () => {
+    stock(ctx.db, ctx.clock);
+    setting(ctx.db, 'agentic', true, 3, '2026-09-01');
+    expect(composeSlate(ctx.db, ctx.clock).items.some((i) => i.slot === 'drill:agentic')).toBe(false);
   });
 });

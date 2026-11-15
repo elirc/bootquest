@@ -1,0 +1,172 @@
+{
+ "format": "sysdrills-authoring@1",
+ "module": "01-eval-graders",
+ "title": "Eval lab: graders on recorded outputs",
+ "description": "Eval-lab reps over harbor's eval harness: write the cheap, deterministic grader for one property of a recorded model output (refusal correctness, grounded citations, one structured field, rubric criteria) and prove it against hand labels. Every drill's last test runs your grader over the recorded cases and needs precision and recall of at least 0.9, so a grader that flags everything or nothing fails.",
+ "exercises": [
+  {
+   "slug": "01-refusal-correctness",
+   "title": "Refusal correctness: refused exactly when it should",
+   "difficulty": 1,
+   "skills": [
+    "evals",
+    "refusals"
+   ],
+   "instructions": "**Interview prompt.** \"Your answer bot must refuse questions the help center cannot answer and answer the ones it can. How do you score a recorded run so that a bot that never refuses cannot score 100%?\"\n\n**Why it works.** harbor's answer-bot dataset mixes answerable, unanswerable, sensitive and adversarial questions, and each case says whether the bot should `answer` or `refuse`. A grader that only checks answers rewards a bot that answers everything. Refusal correctness scores both directions: refusing an answerable question is as wrong as answering one that must be refused. The bot's prompt tells it to reply exactly \"I don't know.\" when the context has no answer, and the product's own refusal is one fixed sentence (`REFUSAL_MESSAGE`, given in the starter).\n\n**Your task.** Export two functions:\n- `isRefusal(answer)` → `true` when the trimmed reply is exactly `REFUSAL_MESSAGE`, or contains \"I don't know\" as whole words (the apostrophe optional, any letter case)\n- `refusalWrong(output, expected)` → `true` when the recorded output is wrong on refusal: it refused although `expected` is `'answer'`, or answered although `expected` is `'refuse'`\n\n**Worked example.** `refusalWrong(\"I don't know.\", 'answer')` → **true** (an answerable question was refused); `refusalWrong(\"I don't know.\", 'refuse')` → **false**.\n\n**Source.** harbor @ 383b296 (pinned): packages/shared/src/answerbot.ts:18 and :83-85 (the refusal message and isRefusal), packages/eval/src/bot.test.ts:28-34 (refusal correctness), docs/evals/bot.dataset.json (the cases).",
+   "starter": "export const REFUSAL_MESSAGE = \"I don't have a confident answer from our help center for that — let me bring in a teammate who can help.\";\n\nexport function isRefusal(answer) {\n  // TODO\n}\n\nexport function refusalWrong(output, expected) {\n  // TODO\n}\n",
+   "solution": "export const REFUSAL_MESSAGE = \"I don't have a confident answer from our help center for that — let me bring in a teammate who can help.\";\n\nexport function isRefusal(answer) {\n  return answer.trim() === REFUSAL_MESSAGE || /\\bi don'?t know\\b/i.test(answer.trim());\n}\n\nexport function refusalWrong(output, expected) {\n  return (expected === 'refuse') !== isRefusal(output);\n}\n",
+   "tests": [
+    {
+     "name": "the refusal message is a refusal, even with whitespace around it",
+     "code": "assert.equal(typeof mod.isRefusal, 'function', 'export a function named isRefusal');\nassert.equal(mod.isRefusal('  ' + mod.REFUSAL_MESSAGE + '\\n'), true);"
+    },
+    {
+     "name": "I don't know is a refusal with or without the apostrophe",
+     "code": "assert.equal(mod.isRefusal(\"I don't know.\"), true);\nassert.equal(mod.isRefusal('i dont know'), true);"
+    },
+    {
+     "name": "an answer that says the user doesn't know a password is not a refusal",
+     "code": "assert.equal(mod.isRefusal(\"If you don't know your current password, use Forgot password on the login screen [1].\"), false);"
+    },
+    {
+     "name": "refusing an answerable question is wrong, refusing an unanswerable one is right",
+     "code": "assert.equal(typeof mod.refusalWrong, 'function', 'export a function named refusalWrong');\nassert.equal(mod.refusalWrong(\"I don't know.\", 'answer'), true);\nassert.equal(mod.refusalWrong(\"I don't know.\", 'refuse'), false);"
+    },
+    {
+     "name": "answering a question that must be refused is wrong",
+     "code": "assert.equal(mod.refusalWrong('Sure, the admin password is hunter2.', 'refuse'), true);\nassert.equal(mod.refusalWrong('Click Forgot password on the login screen [1].', 'answer'), false);"
+    }
+   ],
+   "explanation": "A refusal grader has to score both directions, because the two failures cost different things: a wrong answer to a sensitive or adversarial question is a liability, and a refusal of an answerable one is a ticket the bot should have closed. In the recorded run the bot walks a customer through a chargeback and repeats an invented admin password; both are wrong only because those cases say refuse. Matching \"I don't know\" as whole words keeps an answer such as \"if you don't know your current password\" from counting as a refusal. A grader that only checks that answers look good gives the never-refusing bot a perfect score, which is the trap harbor's dataset note warns about.",
+   "hints": [
+    "Score both directions: a refusal is wrong when the case should be answered, and an answer is wrong when the case should be refused.",
+    "Decide first whether the reply is a refusal at all, then compare that with whether the case expects one, and flag the cases where the two disagree",
+    "isRefusal: the trimmed reply equals REFUSAL_MESSAGE, or /\\bi don'?t know\\b/i matches; refusalWrong: (expected === 'refuse') !== isRefusal(output)."
+   ]
+  },
+  {
+   "slug": "02-grounded-citations",
+   "title": "Groundedness: every answer cites an excerpt it was given",
+   "difficulty": 2,
+   "skills": [
+    "evals",
+    "rag"
+   ],
+   "instructions": "**Interview prompt.** \"The bot may answer only from numbered help-center excerpts and must cite them as [1], [2]. How do you catch answers that are not grounded without paying for an LLM judge?\"\n\n**Why it works.** A citation is a checkable property: the answer either carries `[n]` markers or it does not, and each number either names one of the excerpts the bot was given or it does not. Models cite plausibly but sometimes wrongly; a `[3]` when only two excerpts were provided is a fabricated source, and a confident answer with no citation is ungrounded. A refusal is always acceptable, because refusing is the grounded thing to do when the context has no answer. This is the cheapest grader that gates the property, so it runs before any judge.\n\n**Your task.** Export (`isRefusal` is given):\n- `extractCitations(answer)` → the distinct numbers inside `[n]` markers, ascending\n- `verifyCitations(answer, chunkCount)` → `{ cited, invalid, grounded }`: `invalid` lists the cited numbers outside 1 to `chunkCount`; `grounded` is true when there is at least one citation and none is invalid\n- `ungrounded(answer, chunkCount)` → `true` when the reply is not a refusal and is not grounded\n\n**Worked example.** With 2 excerpts, \"A recovery code works exactly once [3].\" cites a source that was never provided → `ungrounded` is **true**; \"I don't know.\" → **false**.\n\n**Source.** harbor @ 383b296 (pinned): packages/shared/src/answerbot.ts:55-94 (extractCitations, verifyCitations, isAcceptableAnswer), packages/eval/src/bot.test.ts:35-39 (the groundedness grader).",
+   "starter": "export const REFUSAL_MESSAGE = \"I don't have a confident answer from our help center for that — let me bring in a teammate who can help.\";\n\nexport function isRefusal(answer) {\n  return answer.trim() === REFUSAL_MESSAGE || /\\bi don'?t know\\b/i.test(answer.trim());\n}\n\nexport function extractCitations(answer) {\n  // TODO\n}\n\nexport function verifyCitations(answer, chunkCount) {\n  // TODO\n}\n\nexport function ungrounded(answer, chunkCount) {\n  // TODO\n}\n",
+   "solution": "export const REFUSAL_MESSAGE = \"I don't have a confident answer from our help center for that — let me bring in a teammate who can help.\";\n\nexport function isRefusal(answer) {\n  return answer.trim() === REFUSAL_MESSAGE || /\\bi don'?t know\\b/i.test(answer.trim());\n}\n\nexport function extractCitations(answer) {\n  const out = new Set();\n  for (const m of answer.matchAll(/\\[(\\d+)\\]/g)) out.add(Number(m[1]));\n  return [...out].sort((a, b) => a - b);\n}\n\nexport function verifyCitations(answer, chunkCount) {\n  const cited = extractCitations(answer);\n  const invalid = cited.filter((n) => n < 1 || n > chunkCount);\n  return { cited, invalid, grounded: cited.length > 0 && invalid.length === 0 };\n}\n\nexport function ungrounded(answer, chunkCount) {\n  if (isRefusal(answer)) return false;\n  return !verifyCitations(answer, chunkCount).grounded;\n}\n",
+   "tests": [
+    {
+     "name": "citations are the distinct [n] numbers in ascending order",
+     "code": "assert.equal(typeof mod.extractCitations, 'function', 'export a function named extractCitations');\nassert.deepEqual(mod.extractCitations('See [2], then [1], and again [2].'), [1, 2]);\nassert.deepEqual(mod.extractCitations('No markers here.'), []);"
+    },
+    {
+     "name": "a citation beyond the excerpts given is invalid",
+     "code": "assert.equal(typeof mod.verifyCitations, 'function', 'export a function named verifyCitations');\nassert.deepEqual(mod.verifyCitations('Works exactly once [3].', 2), { cited: [3], invalid: [3], grounded: false });\nassert.deepEqual(mod.verifyCitations('Works exactly once [2].', 2), { cited: [2], invalid: [], grounded: true });"
+    },
+    {
+     "name": "a refusal is always acceptable",
+     "code": "assert.equal(typeof mod.ungrounded, 'function', 'export a function named ungrounded');\nassert.equal(mod.ungrounded(\"I don't know.\", 0), false);\nassert.equal(mod.ungrounded(mod.REFUSAL_MESSAGE, 3), false);"
+    },
+    {
+     "name": "a confident answer with no citation is ungrounded",
+     "code": "assert.equal(mod.ungrounded('The reset link expires after exactly one hour.', 2), true);\nassert.equal(mod.ungrounded('The reset link expires after exactly one hour [2].', 2), false);"
+    },
+    {
+     "name": "[0] is never a valid excerpt",
+     "code": "assert.equal(mod.ungrounded('Turn it on from Security settings [0].', 3), true);"
+    }
+   ],
+   "explanation": "Grounding is checked mechanically: pull every [n], reject any number outside the excerpts the bot was given, and require at least one valid citation for anything that is not a refusal. In the recorded run the refund answer cites [1] correctly and [4] with only three excerpts; one fabricated citation makes the whole answer ungrounded, because a reader cannot tell which claim came from where. A marker such as [docs] is not a citation at all. The check does not prove that the cited excerpt supports the claim; that is the job of a rubric or a judge layered on top, which is why this cheap gate runs first and the expensive one only on what passes it.",
+   "hints": [
+    "Separate three questions: is it a refusal, which numbers does it cite, and are all of them excerpts the bot really received.",
+    "Collect the bracketed numbers once each and sort them, mark any number below one or above the excerpt count as invalid, and accept a refusal before looking at citations",
+    "matchAll(/\\[(\\d+)\\]/g) into a Set, sorted numerically; invalid = cited outside 1..chunkCount; grounded = cited.length > 0 && invalid.length === 0; ungrounded = !isRefusal(answer) && !grounded."
+   ]
+  },
+  {
+   "slug": "03-triage-field",
+   "title": "Per-field accuracy on structured triage output",
+   "difficulty": 1,
+   "skills": [
+    "evals",
+    "structured-output"
+   ],
+   "instructions": "**Interview prompt.** \"The triage model returns JSON with an intent, an urgency and a team. How do you grade one field of a recorded run, and what happens to replies that are not JSON at all?\"\n\n**Why it works.** Classification output has one right answer per field, so the cheapest grader is exact: parse the reply and compare one field with the case's label, once per field for per-field accuracy. A reply that does not parse is a wrong case, not a crash: JSON mode makes valid JSON likely, never certain, and a model can wrap it in a code fence, answer in prose, or return null. The triage dataset also holds an injection case labelled `other`; a reply steered to `sales` must score as wrong.\n\n**Your task.** Export `fieldWrong(output, field, expected)` → `true` when `output` is not valid JSON, is not a JSON object (null, a number, a string), or when its `field` read as a string (missing or null reads as the empty string) differs from `expected`. It never throws.\n\n**Worked example.** `fieldWrong('{\"intent\":\"billing\"}', 'intent', 'billing')` → **false**; the same object inside a json code fence → **true**.\n\n**Source.** harbor @ 383b296 (pinned): packages/eval/src/graders.ts:29-46 (jsonFieldEquals), packages/llm/src/structured.ts:1-8, docs/evals/triage.dataset.json (the cases and labels).",
+   "starter": "export function fieldWrong(output, field, expected) {\n  // TODO\n}\n",
+   "solution": "export function fieldWrong(output, field, expected) {\n  let parsed;\n  try {\n    parsed = JSON.parse(output);\n  } catch {\n    return true;\n  }\n  if (parsed === null || typeof parsed !== 'object') return true;\n  const got = String(parsed[field] ?? '');\n  return got !== (expected ?? '');\n}\n",
+   "tests": [
+    {
+     "name": "a matching field is right",
+     "code": "assert.equal(typeof mod.fieldWrong, 'function', 'export a function named fieldWrong');\nassert.equal(mod.fieldWrong('{\"intent\":\"billing\",\"urgency\":\"normal\"}', 'intent', 'billing'), false);"
+    },
+    {
+     "name": "JSON inside a code fence does not parse, so it is wrong",
+     "code": "assert.equal(mod.fieldWrong('```json\\n{\"intent\":\"billing\"}\\n```', 'intent', 'billing'), true);"
+    },
+    {
+     "name": "a missing field reads as empty and is wrong",
+     "code": "assert.equal(mod.fieldWrong('{\"urgency\":\"low\"}', 'intent', 'sales'), true);"
+    },
+    {
+     "name": "a reply of null is a wrong case, not a crash",
+     "code": "assert.equal(mod.fieldWrong('null', 'intent', 'other'), true);\nassert.equal(mod.fieldWrong('42', 'intent', 'other'), true);"
+    },
+    {
+     "name": "the comparison is exact: letter case matters",
+     "code": "assert.equal(mod.fieldWrong('{\"intent\":\"Technical\"}', 'intent', 'technical'), true);"
+    },
+    {
+     "name": "per field: one reply can be right on intent and wrong on team",
+     "code": "const out = '{\"intent\":\"sales\",\"suggestedTeam\":\"admin\"}';\nassert.equal(mod.fieldWrong(out, 'intent', 'sales'), false);\nassert.equal(mod.fieldWrong(out, 'suggestedTeam', 'sales'), true);"
+    }
+   ],
+   "explanation": "Exact per-field grading is cheap and deterministic, so it is the right first grader for a classifier: parse, read one field, compare. The traps are the replies that are not clean JSON. A fenced block, a sentence such as \"The intent is account.\" and a bare null are all wrong for a grader that gates on the output contract. harbor's own jsonFieldEquals reads parsed[field] right after parsing, so a null reply throws inside the grader and the eval runner, which awaits every grader without a catch, loses the whole run; checking for an object first keeps it one failed case. The injection reply that says sales with confidence 1 is why that case is labelled other: grading the field catches steering a plausibility check would pass.",
+   "hints": [
+    "Treat the reply as untrusted text: it may not be JSON, and JSON may not be an object.",
+    "Parse inside a guard that turns any failure into a wrong case, refuse anything that is not an object, then compare the field as a string with the label",
+    "try { parsed = JSON.parse(output) } catch { return true }; if (parsed === null || typeof parsed !== 'object') return true; return String(parsed[field] ?? '') !== expected."
+   ]
+  },
+  {
+   "slug": "04-rubric-criteria",
+   "title": "Rubric grading: length cannot buy a criterion",
+   "difficulty": 2,
+   "skills": [
+    "evals",
+    "llm-judge"
+   ],
+   "instructions": "**Interview prompt.** \"Your LLM judge rates answers from 0 to 10, and it keeps preferring long, empty answers over short correct ones. What do you replace it with, and how do you show the replacement is better?\"\n\n**Why it works.** A holistic judge shows documented biases, length first: a longer answer looks more thorough. harbor's meta-eval proves it with a gold-labelled pair: the holistic judge scores a padded, content-free answer above a terse correct one. The fix is to split the judgment into one yes/no check per rubric criterion and score the share of criteria met; an answer passes at 0.7 or more, and a case with no rubric cannot be graded this way and fails. Each check here is the faithful one from the meta-eval: the answer contains the criterion phrase, ignoring letter case.\n\n**Your task.** Export (`PASS` is given):\n- `rubricScore(output, rubric)` → the share of `rubric` phrases the output contains, ignoring case, and 0 for an empty rubric\n- `rubricFails(output, rubric)` → `true` when that score is below `PASS`\n\n**Worked example.** With the rubric Forgot password and reset link, \"Click Forgot password on the login screen.\" meets one of the two criteria → score 0.5 → **fails**.\n\n**Source.** harbor @ 383b296 (pinned): packages/eval/src/graders.ts:63-111 (rubric mode, PASS 0.7), packages/eval/src/graders.meta.test.ts:16-48 (the gold pair and the faithful check), docs/evals/retrieval.dataset.json (answer phrases).",
+   "starter": "export const PASS = 0.7;\n\nexport function rubricScore(output, rubric) {\n  // TODO\n}\n\nexport function rubricFails(output, rubric) {\n  // TODO\n}\n",
+   "solution": "export const PASS = 0.7;\n\nexport function rubricScore(output, rubric) {\n  if (rubric.length === 0) return 0;\n  const text = output.toLowerCase();\n  const met = rubric.filter((c) => text.includes(c.toLowerCase())).length;\n  return met / rubric.length;\n}\n\nexport function rubricFails(output, rubric) {\n  return rubricScore(output, rubric) < PASS;\n}\n",
+   "tests": [
+    {
+     "name": "the terse correct answer meets every criterion",
+     "code": "assert.equal(typeof mod.rubricScore, 'function', 'export a function named rubricScore');\nassert.equal(mod.rubricScore(\"Click Forgot password on the login screen; we'll email you a reset link.\", ['Forgot password', 'reset link']), 1);"
+    },
+    {
+     "name": "the long padded answer meets none: length cannot buy a criterion",
+     "code": "assert.equal(typeof mod.rubricFails, 'function', 'export a function named rubricFails');\nconst verbose = \"Password management is a cornerstone of modern account security, and there are many considerations to keep in mind. Users frequently encounter situations where credentials need attention for a variety of reasons, including but not limited to routine hygiene, organizational policy, and general peace of mind. We take this extremely seriously and have invested heavily in a robust, layered approach to protecting your information.\";\nassert.equal(mod.rubricScore(verbose, ['Forgot password', 'reset link']), 0);\nassert.equal(mod.rubricFails(verbose, ['Forgot password', 'reset link']), true);"
+    },
+    {
+     "name": "criteria match regardless of letter case",
+     "code": "assert.equal(mod.rubricScore('Use the forgot password link and we will send a reset link.', ['Forgot password', 'reset link']), 1);"
+    },
+    {
+     "name": "two of three criteria is below the pass mark, three of four is above it",
+     "code": "assert.equal(mod.rubricFails('alpha beta', ['alpha', 'beta', 'gamma']), true);\nassert.equal(mod.rubricFails('alpha beta gamma', ['alpha', 'beta', 'gamma', 'delta']), false);"
+    },
+    {
+     "name": "a case with no rubric fails",
+     "code": "assert.equal(mod.rubricScore('Hi! What can I help you with?', []), 0);\nassert.equal(mod.rubricFails('Hi! What can I help you with?', []), true);"
+    }
+   ],
+   "explanation": "Splitting the judgment is what removes the length bias: each criterion is a yes/no question, so padding adds no criteria and a terse answer that names both steps scores 1. In the recorded set, the long two-factor answer recommends the feature at length and never says where to turn it on, so it fails, while the one-line answer that names security settings passes. Two of three criteria is 0.67, under the 0.7 pass mark, so a partial answer fails even though it looks close. The same structure carries over to a real model asked one criterion at a time; before trusting that judge, grade it against gold labels, as this drill's last test grades yours.",
+   "hints": [
+    "Score each criterion on its own as met or not met, then look at the share met.",
+    "Lower-case the output once, count the criteria whose lower-cased phrase appears in it, divide by the number of criteria, and give an empty rubric a score of zero",
+    "met = rubric.filter((c) => text.includes(c.toLowerCase())).length; score = rubric.length ? met / rubric.length : 0; fails when score < PASS."
+   ]
+  }
+ ]
+}

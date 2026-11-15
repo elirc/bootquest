@@ -1,0 +1,407 @@
+{
+ "name": "agenttools-mastermorphic-katas",
+ "checkout": ".cache/checkouts/mastermorphic@c9b8310208022f9d8293ddf9bfe31ac291759ede",
+ "katas": [
+  {
+   "id": "todo-write-appends",
+   "title": "Tool PR: todoWrite keeps the earlier todos, so the model can send only the items that changed",
+   "difficulty": "easy",
+   "agentPattern": "tool-design",
+   "provenance": {
+    "path": "morphic/lib/tools/todo.ts",
+    "find": "export function createTodoTools() {"
+   },
+   "contextFiles": [
+    {
+     "path": "morphic/lib/tools/todo.mjs",
+     "repoPath": "morphic/lib/tools/todo.ts",
+     "kind": "adapted",
+     "lines": {
+      "start": 29,
+      "end": 59
+     },
+     "content": "// Adapted from mastermorphic morphic/lib/tools/todo.ts:29-59 @ c9b8310: the `ai` tool() wrapper is a\n// plain object and the zod input schema (todo.ts:4-27) is left out. That schema gives every todo a\n// priority (enum, default 'medium') and describes `todos` as \"The complete list of todos\". The execute\n// body is verbatim.\nexport function createTodoTools() {\n  // Session-scoped todos storage - isolated per tool instance\n  let sessionTodos = []\n  const todoWrite = {\n    description:\n      'Create or update todos to track progress on complex tasks. Use this to maintain a list of action items. The response includes completedCount and totalCount to verify task completion.',\n    execute: async ({ todos, progressMessage }) => {\n      // Update session todos - ensure priority is always set\n      sessionTodos = todos.map(todo => ({\n        ...todo,\n        priority: todo.priority || 'medium'\n      }))\n\n      // Calculate progress\n      const completedCount = todos.filter(t => t.status === 'completed').length\n      const totalCount = todos.length\n\n      return {\n        success: true,\n        message: progressMessage || `Updated ${totalCount} todos`,\n        completedCount,\n        totalCount,\n        todos: sessionTodos\n      }\n    }\n  }\n\n  return { todoWrite }\n}\n"
+    }
+   ],
+   "edits": [
+    {
+     "path": "morphic/lib/tools/todo.mjs",
+     "find": "      // Update session todos - ensure priority is always set\n      sessionTodos = todos.map(todo => ({\n        ...todo,\n        priority: todo.priority || 'medium'\n      }))\n\n      // Calculate progress\n      const completedCount = todos.filter(t => t.status === 'completed').length\n      const totalCount = todos.length\n",
+     "replace": "      // Keep the earlier todos: the model only has to send new or changed items now\n      sessionTodos = [\n        ...sessionTodos,\n        ...todos.map(todo => ({\n          ...todo,\n          priority: todo.priority || 'medium'\n        }))\n      ]\n\n      // Calculate progress\n      const completedCount = sessionTodos.filter(t => t.status === 'completed').length\n      const totalCount = sessionTodos.length\n"
+    }
+   ],
+   "defects": [
+    {
+     "scenario": "The tool call times out on the client and the agent loop sends the same todoWrite again.",
+     "in": "patched",
+     "path": "morphic/lib/tools/todo.mjs",
+     "find": "        ...sessionTodos,",
+     "consequence": "Every todo is stored twice and totalCount doubles. The tool is no longer safe to call twice with the same input, and nothing deduplicates by id."
+    },
+    {
+     "scenario": "What the model is told to send: the input schema describes todos as the complete list.",
+     "in": "repo",
+     "path": "morphic/lib/tools/todo.ts",
+     "find": "  todos: z.array(todoItemSchema).describe('The complete list of todos'),",
+     "consequence": "The model keeps sending the whole list, so every ordinary call duplicates it, and a task marked completed leaves its pending copy behind. Behaviour and contract change together: merge by id, or keep the replace semantics."
+    }
+   ],
+   "test": {
+    "module": "morphic/lib/tools/todo.mjs",
+    "check": {
+     "type": "drill-js",
+     "language": "js",
+     "timeoutMs": 8000,
+     "tests": [
+      {
+       "name": "sending the same list twice keeps one copy of each todo",
+       "code": "const { todoWrite } = mod.createTodoTools(); const todos = [{ id: 'a', content: 'read the spec', status: 'pending', timestamp: '2026-01-01T00:00:00Z' }, { id: 'b', content: 'write the summary', status: 'pending', timestamp: '2026-01-01T00:00:00Z' }]; await todoWrite.execute({ todos }); const r = await todoWrite.execute({ todos }); assert.equal(r.totalCount, 2); assert.equal(r.todos.length, 2);"
+      },
+      {
+       "name": "a full list with a task completed replaces the old one",
+       "code": "const { todoWrite } = mod.createTodoTools(); await todoWrite.execute({ todos: [{ id: 'a', content: 'read', status: 'pending', timestamp: 't' }] }); const r = await todoWrite.execute({ todos: [{ id: 'a', content: 'read', status: 'completed', timestamp: 't' }] }); assert.equal(r.totalCount, 1); assert.equal(r.completedCount, 1);"
+      },
+      {
+       "name": "a todo sent without a priority gets medium",
+       "code": "const { todoWrite } = mod.createTodoTools(); const r = await todoWrite.execute({ todos: [{ id: 'a', content: 'read', status: 'pending', timestamp: 't' }] }); assert.equal(r.todos[0].priority, 'medium');"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "fetch-returns-whole-page",
+   "title": "Tool PR: fetch returns the whole page, so long articles are no longer cut off",
+   "difficulty": "easy",
+   "agentPattern": "tool-design",
+   "provenance": {
+    "path": "morphic/lib/tools/fetch.ts",
+    "find": "const CONTENT_CHARACTER_LIMIT = 50000"
+   },
+   "contextFiles": [
+    {
+     "path": "morphic/lib/tools/fetch.mjs",
+     "repoPath": "morphic/lib/tools/fetch.ts",
+     "kind": "adapted",
+     "lines": {
+      "start": 6,
+      "end": 88
+     },
+     "content": "// Adapted from mastermorphic morphic/lib/tools/fetch.ts:6-88 @ c9b8310: the \"regular\" path the fetch\n// tool takes by default (fetch.ts:160-192), with the TypeScript types removed and the function\n// exported. The body is verbatim. The tool's description (fetch.ts:162) tells the model that \"regular\"\n// does NOT support PDFs and will fail on PDF URLs, and to use the \"api\" type for them.\nconst CONTENT_CHARACTER_LIMIT = 50000\nconst TITLE_CHARACTER_LIMIT = 100\n\nexport async function fetchRegularData(url) {\n  try {\n    const controller = new AbortController()\n    const timeoutId = setTimeout(() => controller.abort(), 10000) // 10 second timeout\n\n    const response = await fetch(url, {\n      signal: controller.signal,\n      headers: {\n        'User-Agent': 'Mozilla/5.0 (compatible; Morphic/1.0)',\n        Accept:\n          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'\n      }\n    })\n\n    clearTimeout(timeoutId)\n\n    if (!response.ok) {\n      throw new Error(`HTTP ${response.status}: ${response.statusText}`)\n    }\n\n    const contentType = response.headers.get('content-type') || ''\n    if (\n      !contentType.includes('text/html') &&\n      !contentType.includes('text/plain')\n    ) {\n      throw new Error(`Unsupported content type: ${contentType}`)\n    }\n\n    const html = await response.text()\n\n    // Extract title\n    const titleMatch = html.match(/<title[^>]*>([^<]*)<\\/title>/i)\n    const rawTitle = titleMatch ? titleMatch[1].trim() : new URL(url).hostname\n    const title =\n      rawTitle.length > TITLE_CHARACTER_LIMIT\n        ? rawTitle.substring(0, TITLE_CHARACTER_LIMIT) + '...'\n        : rawTitle\n\n    // Process HTML content\n    let processedHtml = html\n      .replace(/<script[^>]*>[\\s\\S]*?<\\/script>/gi, '') // Remove scripts\n      .replace(/<style[^>]*>[\\s\\S]*?<\\/style>/gi, '') // Remove styles\n\n    // Replace img tags with alt text or [IMAGE] markers\n    processedHtml = processedHtml\n      .replace(/<img[^>]+alt\\s*=\\s*[\"']([^\"']+)[\"'][^>]*>/gi, ' [IMAGE: $1] ')\n      .replace(/<img[^>]+src\\s*=\\s*[\"']([^\"']+)[\"'][^>]*>/gi, ' [IMAGE] ')\n      .replace(/<img[^>]*>/gi, ' [IMAGE] ')\n\n    // Extract text content\n    const textContent = processedHtml\n      .replace(/<[^>]*>/g, ' ') // Remove remaining HTML tags\n      .replace(/\\s+/g, ' ') // Normalize whitespace\n      .trim()\n\n    // Limit content length\n    const truncatedContent =\n      textContent.length > CONTENT_CHARACTER_LIMIT\n        ? textContent.substring(0, CONTENT_CHARACTER_LIMIT) + '...[truncated]'\n        : textContent\n\n    return {\n      results: [\n        {\n          title,\n          content: truncatedContent,\n          url\n        }\n      ],\n      query: '',\n      images: []\n    }\n  } catch (error) {\n    if (error instanceof Error && error.name === 'AbortError') {\n      throw new Error('Request timeout after 10 seconds')\n    }\n    console.error('Fetch error:', error)\n    throw error instanceof Error ? error : new Error('Unknown fetch error')\n  }\n}\n"
+    }
+   ],
+   "edits": [
+    {
+     "path": "morphic/lib/tools/fetch.mjs",
+     "find": "    // Limit content length\n    const truncatedContent =\n      textContent.length > CONTENT_CHARACTER_LIMIT\n        ? textContent.substring(0, CONTENT_CHARACTER_LIMIT) + '...[truncated]'\n        : textContent\n",
+     "replace": "    // Return the whole page: cutting long articles off lost the conclusions users asked about\n    const truncatedContent = textContent\n"
+    }
+   ],
+   "defects": [
+    {
+     "scenario": "The model fetches a 3 MB documentation page or a long forum thread.",
+     "in": "patched",
+     "path": "morphic/lib/tools/fetch.mjs",
+     "find": "    const truncatedContent = textContent",
+     "consequence": "All of it lands in one tool result. The output has no bound any more, so one call can push the conversation out of the context window or fail the next model call, and every later turn pays for the page again."
+    },
+    {
+     "scenario": "The other fetch paths still cut the content at CONTENT_CHARACTER_LIMIT.",
+     "in": "repo",
+     "path": "morphic/lib/tools/fetch.ts",
+     "find": "    const content = json.data.content.slice(0, CONTENT_CHARACTER_LIMIT)",
+     "consequence": "The Jina and Tavily paths keep the limit, so the same URL now returns a different size by type. An output limit belongs to the tool as a whole; a long page needs paging or a summary step, not a removed limit."
+    }
+   ],
+   "test": {
+    "module": "morphic/lib/tools/fetch.mjs",
+    "check": {
+     "type": "drill-js",
+     "language": "js",
+     "timeoutMs": 8000,
+     "tests": [
+      {
+       "name": "a long page is cut at the content limit and says so",
+       "code": "globalThis.fetch = async () => ({ ok: true, status: 200, statusText: 'OK', headers: { get: (h) => (h.toLowerCase() === 'content-type' ? \"text/html; charset=utf-8\" : null) }, text: async () => '<html><head><title>Long read</title></head><body><p>' + 'word '.repeat(20000) + '</p></body></html>' }); const r = await mod.fetchRegularData('https://example.test/long'); const c = r.results[0].content; assert.ok(c.length <= 50000 + '...[truncated]'.length, 'content is ' + c.length + ' characters'); assert.ok(c.endsWith('...[truncated]'));"
+      },
+      {
+       "name": "a short page comes back whole, with its title",
+       "code": "globalThis.fetch = async () => ({ ok: true, status: 200, statusText: 'OK', headers: { get: (h) => (h.toLowerCase() === 'content-type' ? \"text/html\" : null) }, text: async () => '<html><head><title>Short</title></head><body><p>Hello there.</p></body></html>' }); const r = await mod.fetchRegularData('https://example.test/short'); assert.equal(r.results[0].title, 'Short'); assert.equal(r.results[0].content, 'Short Hello there.');"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "fetch-reads-pdf-as-text",
+   "title": "Tool PR: fetch stops failing on PDFs and other content types and reads them as text",
+   "difficulty": "medium",
+   "agentPattern": "tool-design",
+   "provenance": {
+    "path": "morphic/lib/tools/fetch.ts",
+    "find": "      throw new Error(`Unsupported content type: ${contentType}`)"
+   },
+   "contextFiles": [
+    {
+     "path": "morphic/lib/tools/fetch.mjs",
+     "repoPath": "morphic/lib/tools/fetch.ts",
+     "kind": "adapted",
+     "lines": {
+      "start": 6,
+      "end": 88
+     },
+     "content": "// Adapted from mastermorphic morphic/lib/tools/fetch.ts:6-88 @ c9b8310: the \"regular\" path the fetch\n// tool takes by default (fetch.ts:160-192), with the TypeScript types removed and the function\n// exported. The body is verbatim. The tool's description (fetch.ts:162) tells the model that \"regular\"\n// does NOT support PDFs and will fail on PDF URLs, and to use the \"api\" type for them.\nconst CONTENT_CHARACTER_LIMIT = 50000\nconst TITLE_CHARACTER_LIMIT = 100\n\nexport async function fetchRegularData(url) {\n  try {\n    const controller = new AbortController()\n    const timeoutId = setTimeout(() => controller.abort(), 10000) // 10 second timeout\n\n    const response = await fetch(url, {\n      signal: controller.signal,\n      headers: {\n        'User-Agent': 'Mozilla/5.0 (compatible; Morphic/1.0)',\n        Accept:\n          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'\n      }\n    })\n\n    clearTimeout(timeoutId)\n\n    if (!response.ok) {\n      throw new Error(`HTTP ${response.status}: ${response.statusText}`)\n    }\n\n    const contentType = response.headers.get('content-type') || ''\n    if (\n      !contentType.includes('text/html') &&\n      !contentType.includes('text/plain')\n    ) {\n      throw new Error(`Unsupported content type: ${contentType}`)\n    }\n\n    const html = await response.text()\n\n    // Extract title\n    const titleMatch = html.match(/<title[^>]*>([^<]*)<\\/title>/i)\n    const rawTitle = titleMatch ? titleMatch[1].trim() : new URL(url).hostname\n    const title =\n      rawTitle.length > TITLE_CHARACTER_LIMIT\n        ? rawTitle.substring(0, TITLE_CHARACTER_LIMIT) + '...'\n        : rawTitle\n\n    // Process HTML content\n    let processedHtml = html\n      .replace(/<script[^>]*>[\\s\\S]*?<\\/script>/gi, '') // Remove scripts\n      .replace(/<style[^>]*>[\\s\\S]*?<\\/style>/gi, '') // Remove styles\n\n    // Replace img tags with alt text or [IMAGE] markers\n    processedHtml = processedHtml\n      .replace(/<img[^>]+alt\\s*=\\s*[\"']([^\"']+)[\"'][^>]*>/gi, ' [IMAGE: $1] ')\n      .replace(/<img[^>]+src\\s*=\\s*[\"']([^\"']+)[\"'][^>]*>/gi, ' [IMAGE] ')\n      .replace(/<img[^>]*>/gi, ' [IMAGE] ')\n\n    // Extract text content\n    const textContent = processedHtml\n      .replace(/<[^>]*>/g, ' ') // Remove remaining HTML tags\n      .replace(/\\s+/g, ' ') // Normalize whitespace\n      .trim()\n\n    // Limit content length\n    const truncatedContent =\n      textContent.length > CONTENT_CHARACTER_LIMIT\n        ? textContent.substring(0, CONTENT_CHARACTER_LIMIT) + '...[truncated]'\n        : textContent\n\n    return {\n      results: [\n        {\n          title,\n          content: truncatedContent,\n          url\n        }\n      ],\n      query: '',\n      images: []\n    }\n  } catch (error) {\n    if (error instanceof Error && error.name === 'AbortError') {\n      throw new Error('Request timeout after 10 seconds')\n    }\n    console.error('Fetch error:', error)\n    throw error instanceof Error ? error : new Error('Unknown fetch error')\n  }\n}\n"
+    }
+   ],
+   "edits": [
+    {
+     "path": "morphic/lib/tools/fetch.mjs",
+     "find": "    const contentType = response.headers.get('content-type') || ''\n    if (\n      !contentType.includes('text/html') &&\n      !contentType.includes('text/plain')\n    ) {\n      throw new Error(`Unsupported content type: ${contentType}`)\n    }\n\n",
+     "replace": "    // Read any content type as text instead of failing: PDFs and JSON still carry readable words\n"
+    }
+   ],
+   "defects": [
+    {
+     "scenario": "The model fetches https://example.com/report.pdf with the default type.",
+     "in": "patched",
+     "path": "morphic/lib/tools/fetch.mjs",
+     "find": "    // Read any content type as text instead of failing: PDFs and JSON still carry readable words",
+     "consequence": "The PDF bytes come back as content, decoded as text and stripped of anything tag-like: pages of noise and no error. The model summarises garbage or invents the report instead of getting the failure that tells it to retry with type \"api\"."
+    },
+    {
+     "scenario": "The tool contract the model plans with: the description still says the regular type does NOT support PDFs and will fail on PDF URLs.",
+     "in": "repo",
+     "path": "morphic/lib/tools/fetch.ts",
+     "find": "  description:\n    'Fetch content from any URL.",
+     "span": 2,
+     "consequence": "Behaviour and description now disagree. A tool that changes what it accepts must change its description, and a clear error is the signal the model needs to switch to the mode that can read the file."
+    }
+   ],
+   "test": {
+    "module": "morphic/lib/tools/fetch.mjs",
+    "check": {
+     "type": "drill-js",
+     "language": "js",
+     "timeoutMs": 8000,
+     "tests": [
+      {
+       "name": "a PDF URL fails with an error the model can act on",
+       "code": "globalThis.fetch = async () => ({ ok: true, status: 200, statusText: 'OK', headers: { get: (h) => (h.toLowerCase() === 'content-type' ? \"application/pdf\" : null) }, text: async () => '%PDF-1.7 binary stream' }); await assert.rejects(() => mod.fetchRegularData('https://example.test/report.pdf'), /Unsupported content type: application\\/pdf/);"
+      },
+      {
+       "name": "an HTML page is read",
+       "code": "globalThis.fetch = async () => ({ ok: true, status: 200, statusText: 'OK', headers: { get: (h) => (h.toLowerCase() === 'content-type' ? \"text/html\" : null) }, text: async () => '<html><head><title>Docs</title></head><body>Install it.</body></html>' }); const r = await mod.fetchRegularData('https://example.test/docs'); assert.equal(r.results[0].title, 'Docs');"
+      },
+      {
+       "name": "a plain-text page is read",
+       "code": "globalThis.fetch = async () => ({ ok: true, status: 200, statusText: 'OK', headers: { get: (h) => (h.toLowerCase() === 'content-type' ? \"text/plain\" : null) }, text: async () => 'just text' }); const r = await mod.fetchRegularData('https://example.test/notes.txt'); assert.equal(r.results[0].content, 'just text');"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "search-errors-as-empty-results",
+   "title": "Tool PR: search never fails the chat: a provider error returns an empty result set",
+   "difficulty": "medium",
+   "agentPattern": "tool-design",
+   "provenance": {
+    "path": "morphic/lib/tools/search.ts",
+    "find": "        // Re-throw the error to let AI SDK handle it properly"
+   },
+   "contextFiles": [
+    {
+     "path": "morphic/lib/tools/search.mjs",
+     "repoPath": "morphic/lib/tools/search.ts",
+     "kind": "adapted",
+     "lines": {
+      "start": 20,
+      "end": 167
+     },
+     "content": "// Adapted from mastermorphic morphic/lib/tools/search.ts:20-167 @ c9b8310: the `ai` tool() wrapper is a\n// plain object; the model-specific schema, the provider selection and the searxng / Brave branches are\n// replaced by one injected provider (the shape createSearchProvider returns, search.ts:111). The error\n// handling and the citation mapping are verbatim.\nexport function createSearchTool(searchProvider) {\n  return {\n    async *execute(\n      {\n        query,\n        max_results = 20,\n        search_depth = 'basic', // Default for standard schema\n        include_domains = [],\n        exclude_domains = []\n      },\n      context\n    ) {\n      // Yield initial searching state\n      yield {\n        state: 'searching',\n        query\n      }\n      // Ensure max_results is at least 10\n      const minResults = 10\n      const effectiveMaxResults = Math.max(\n        max_results || minResults,\n        minResults\n      )\n      let searchResult\n\n      try {\n        searchResult = await searchProvider.search(\n          query,\n          effectiveMaxResults,\n          search_depth,\n          include_domains,\n          exclude_domains\n        )\n      } catch (error) {\n        console.error('Search API error:', error)\n        // Re-throw the error to let AI SDK handle it properly\n        throw error instanceof Error ? error : new Error('Unknown search error')\n      }\n\n      // Add citation mapping and toolCallId to search results\n      if (searchResult.results && searchResult.results.length > 0) {\n        const citationMap = {}\n        searchResult.results.forEach((result, index) => {\n          citationMap[index + 1] = result // Citation numbers start at 1\n        })\n        searchResult.citationMap = citationMap\n      }\n\n      // Add toolCallId from context\n      if (context?.toolCallId) {\n        searchResult.toolCallId = context.toolCallId\n      }\n\n      // Yield final results with complete state\n      yield {\n        state: 'complete',\n        ...searchResult\n      }\n    }\n  }\n}\n"
+    }
+   ],
+   "edits": [
+    {
+     "path": "morphic/lib/tools/search.mjs",
+     "find": "        // Re-throw the error to let AI SDK handle it properly\n        throw error instanceof Error ? error : new Error('Unknown search error')\n",
+     "replace": "        // A provider outage should not end the chat: answer with an empty result set\n        searchResult = { results: [], images: [], query, number_of_results: 0 }\n"
+    }
+   ],
+   "defects": [
+    {
+     "scenario": "The search provider rejects the call: an expired API key, a rate limit or a timeout.",
+     "in": "patched",
+     "path": "morphic/lib/tools/search.mjs",
+     "find": "        searchResult = { results: [], images: [], query, number_of_results: 0 }",
+     "consequence": "The tool reports a successful search with zero results. The model reads \"nothing found\", answers from memory or tells the user there are no sources, and no one learns that search is down."
+    },
+    {
+     "scenario": "What else returns that shape: the search() helper answers exactly this object when there is genuinely no result.",
+     "in": "repo",
+     "path": "morphic/lib/tools/search.ts",
+     "find": "  if (!result) {\n    return { results: [], images: [], query, number_of_results: 0 }",
+     "consequence": "After the PR an outage and an empty search are the same value to every caller. A tool error has to stay an error the model can see and report; the line the PR replaced said so."
+    }
+   ],
+   "test": {
+    "module": "morphic/lib/tools/search.mjs",
+    "check": {
+     "type": "drill-js",
+     "language": "js",
+     "timeoutMs": 8000,
+     "tests": [
+      {
+       "name": "a provider error reaches the caller as an error",
+       "code": "const tool = mod.createSearchTool({ search: async () => { throw new Error('401 invalid api key'); } }); const run = async () => { for await (const chunk of tool.execute({ query: 'q' }, {})) void chunk; }; await assert.rejects(run, /401 invalid api key/);"
+      },
+      {
+       "name": "results get citation numbers starting at 1",
+       "code": "const tool = mod.createSearchTool({ search: async () => ({ results: [{ title: 'a', url: 'https://a.test', content: 'x' }, { title: 'b', url: 'https://b.test', content: 'y' }], images: [], query: 'q' }) }); let last; for await (const chunk of tool.execute({ query: 'q' }, { toolCallId: 't1' })) last = chunk; assert.equal(last.state, 'complete'); assert.equal(last.citationMap[1].url, 'https://a.test'); assert.equal(last.toolCallId, 't1');"
+      },
+      {
+       "name": "max_results below 10 is raised to 10",
+       "code": "let asked; const tool = mod.createSearchTool({ search: async (q, n) => { asked = n; return { results: [], images: [], query: q }; } }); for await (const chunk of tool.execute({ query: 'q', max_results: 3 }, {})) void chunk; assert.equal(asked, 10);"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "fetch-timeout-covers-body",
+   "title": "Agent PR: fetch keeps its 10 s timeout running until the page body is read",
+   "difficulty": "medium",
+   "agentPattern": "clean",
+   "clean": true,
+   "provenance": {
+    "path": "morphic/lib/tools/fetch.ts",
+    "find": "    const timeoutId = setTimeout(() => controller.abort(), 10000) // 10 second timeout"
+   },
+   "contextFiles": [
+    {
+     "path": "morphic/lib/tools/fetch.ts",
+     "repoPath": "morphic/lib/tools/fetch.ts",
+     "kind": "verbatim"
+    }
+   ],
+   "edits": [
+    {
+     "path": "morphic/lib/tools/fetch.ts",
+     "find": "async function fetchRegularData(url: string): Promise<SearchResultsType> {\n  try {\n    const controller = new AbortController()\n    const timeoutId = setTimeout(() => controller.abort(), 10000) // 10 second timeout\n",
+     "replace": "async function fetchRegularData(url: string): Promise<SearchResultsType> {\n  let timeoutId: ReturnType<typeof setTimeout> | undefined\n  try {\n    const controller = new AbortController()\n    timeoutId = setTimeout(() => controller.abort(), 10000) // 10 second timeout\n"
+    },
+    {
+     "path": "morphic/lib/tools/fetch.ts",
+     "find": "    })\n\n    clearTimeout(timeoutId)\n\n",
+     "replace": "    })\n\n"
+    },
+    {
+     "path": "morphic/lib/tools/fetch.ts",
+     "find": "    console.error('Fetch error:', error)\n    throw error instanceof Error ? error : new Error('Unknown fetch error')\n  }\n}\n",
+     "replace": "    console.error('Fetch error:', error)\n    throw error instanceof Error ? error : new Error('Unknown fetch error')\n  } finally {\n    // the timer now also covers reading the body, and is cleared on every path\n    clearTimeout(timeoutId)\n  }\n}\n"
+    }
+   ],
+   "defects": [
+    {
+     "scenario": "Before this PR (the shipped code): a server sends its headers at once and then trickles the body.",
+     "in": "repo",
+     "path": "morphic/lib/tools/fetch.ts",
+     "find": "    clearTimeout(timeoutId)",
+     "consequence": "The shipped code clears the timer as soon as the headers arrive, so response.text() can wait without limit. The PR keeps the abort armed through the body read and clears it in finally on every path; the existing AbortError branch already turns that abort into the timeout message. Approve it."
+    }
+   ]
+  },
+  {
+   "id": "todo-progress-counts-in-progress",
+   "title": "Agent PR: todo tool tidy-up: a clearer progress message, and in-progress work counts towards progress",
+   "difficulty": "easy",
+   "agentPattern": "decoys",
+   "provenance": {
+    "path": "morphic/lib/tools/todo.ts",
+    "find": "      const completedCount = todos.filter(t => t.status === 'completed').length"
+   },
+   "contextFiles": [
+    {
+     "path": "morphic/lib/tools/todo.mjs",
+     "repoPath": "morphic/lib/tools/todo.ts",
+     "kind": "adapted",
+     "lines": {
+      "start": 29,
+      "end": 59
+     },
+     "content": "// Adapted from mastermorphic morphic/lib/tools/todo.ts:29-59 @ c9b8310: the `ai` tool() wrapper is a\n// plain object and the zod input schema (todo.ts:4-27) is left out. That schema gives every todo a\n// priority (enum, default 'medium') and describes `todos` as \"The complete list of todos\". The execute\n// body is verbatim.\nexport function createTodoTools() {\n  // Session-scoped todos storage - isolated per tool instance\n  let sessionTodos = []\n  const todoWrite = {\n    description:\n      'Create or update todos to track progress on complex tasks. Use this to maintain a list of action items. The response includes completedCount and totalCount to verify task completion.',\n    execute: async ({ todos, progressMessage }) => {\n      // Update session todos - ensure priority is always set\n      sessionTodos = todos.map(todo => ({\n        ...todo,\n        priority: todo.priority || 'medium'\n      }))\n\n      // Calculate progress\n      const completedCount = todos.filter(t => t.status === 'completed').length\n      const totalCount = todos.length\n\n      return {\n        success: true,\n        message: progressMessage || `Updated ${totalCount} todos`,\n        completedCount,\n        totalCount,\n        todos: sessionTodos\n      }\n    }\n  }\n\n  return { todoWrite }\n}\n"
+    }
+   ],
+   "edits": [
+    {
+     "path": "morphic/lib/tools/todo.mjs",
+     "find": "      // Update session todos - ensure priority is always set",
+     "replace": "      // Replace the session list; every todo gets a priority"
+    },
+    {
+     "path": "morphic/lib/tools/todo.mjs",
+     "find": "        priority: todo.priority || 'medium'",
+     "replace": "        priority: todo.priority ?? 'medium'"
+    },
+    {
+     "path": "morphic/lib/tools/todo.mjs",
+     "find": "      const completedCount = todos.filter(t => t.status === 'completed').length",
+     "replace": "      const completedCount = todos.filter(t => t.status !== 'pending').length // started work counts as progress"
+    },
+    {
+     "path": "morphic/lib/tools/todo.mjs",
+     "find": "        message: progressMessage || `Updated ${totalCount} todos`,",
+     "replace": "        message: progressMessage || `Updated ${totalCount} todo(s)`,"
+    }
+   ],
+   "defects": [
+    {
+     "scenario": "Three todos: one completed, two in_progress.",
+     "in": "patched",
+     "path": "morphic/lib/tools/todo.mjs",
+     "find": "      const completedCount = todos.filter(t => t.status !== 'pending').length // started work counts as progress",
+     "consequence": "completedCount is 3 of 3. The tool description tells the model to use completedCount and totalCount to verify task completion, so the agent reads \"all done\" and stops with two tasks unfinished."
+    }
+   ],
+   "decoys": [
+    {
+     "path": "morphic/lib/tools/todo.mjs",
+     "find": "      // Replace the session list; every todo gets a priority",
+     "why": "a reworded comment"
+    },
+    {
+     "path": "morphic/lib/tools/todo.mjs",
+     "find": "        priority: todo.priority ?? 'medium'",
+     "why": "the schema's priority is an enum with a default, so it is never an empty string: || and ?? agree"
+    },
+    {
+     "path": "morphic/lib/tools/todo.mjs",
+     "find": "        message: progressMessage || `Updated ${totalCount} todo(s)`,",
+     "why": "message wording only"
+    }
+   ],
+   "test": {
+    "module": "morphic/lib/tools/todo.mjs",
+    "check": {
+     "type": "drill-js",
+     "language": "js",
+     "timeoutMs": 8000,
+     "tests": [
+      {
+       "name": "completedCount counts only completed todos",
+       "code": "const { todoWrite } = mod.createTodoTools(); const r = await todoWrite.execute({ todos: [{ id: 'a', content: 'x', status: 'completed', timestamp: 't' }, { id: 'b', content: 'y', status: 'in_progress', timestamp: 't' }, { id: 'c', content: 'z', status: 'in_progress', timestamp: 't' }] }); assert.equal(r.completedCount, 1); assert.equal(r.totalCount, 3);"
+      },
+      {
+       "name": "a new full list replaces the old one",
+       "code": "const { todoWrite } = mod.createTodoTools(); const todos = [{ id: 'a', content: 'read the spec', status: 'pending', timestamp: '2026-01-01T00:00:00Z' }, { id: 'b', content: 'write the summary', status: 'pending', timestamp: '2026-01-01T00:00:00Z' }]; await todoWrite.execute({ todos }); const r = await todoWrite.execute({ todos: todos.slice(0, 1) }); assert.equal(r.totalCount, 1);"
+      },
+      {
+       "name": "a todo sent without a priority gets medium",
+       "code": "const { todoWrite } = mod.createTodoTools(); const r = await todoWrite.execute({ todos: [{ id: 'a', content: 'read', status: 'pending', timestamp: 't' }] }); assert.equal(r.todos[0].priority, 'medium');"
+      }
+     ]
+    }
+   }
+  }
+ ]
+}
