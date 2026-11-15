@@ -141,13 +141,13 @@ describe('seed:lint:keyideas: schema, counts, keys', () => {
     expect(msgs(big(129, { recapAfter: 27 }))).toEqual([]);
     expect(keyIdeasReport(big(129, { recapAfter: 27 })).perSection[0]).toMatchObject({ scopeUnits: 129, recapUnits: 27 });
     // a pending section (scheduled fix) is reported apart, and a pending entry that no longer applies is a problem
-    const pend = estate({ sysdrills: section(Array.from({ length: 18 }, (_, i) => idea(`i-${i}`)), { section: 'sysdrills', scope: ['big/c1/'] }) });
+    const pend = estate({ agentic: section(Array.from({ length: 10 }, (_, i) => idea(`i-${i}`)), { section: 'agentic', scope: ['big/c1/'] }) });
     put(pend, 'packs/big/c1.json', { format: 'bootquest-pack@1', units: many(60) });
     const r = keyIdeasReport(pend);
     expect(r.problems).toEqual([]);
-    expect(r.pending).toEqual([{ section: 'sysdrills', recapUnits: 48, owner: RECAP_UNITS_PENDING.sysdrills }]);
-    expect(formatKeyIdeasReport(r)).toContain(`PENDING sysdrills: the recap opens after 48 passed units (max ${MAX_RECAP_UNITS}); fix scheduled: rv3 S1 content patch`);
-    const fixed = estate({ sysdrills: section(Array.from({ length: 18 }, (_, i) => idea(`i-${i}`)), { section: 'sysdrills' }) });
+    expect(r.pending).toEqual([{ section: 'agentic', recapUnits: 48, owner: RECAP_UNITS_PENDING.agentic }]);
+    expect(formatKeyIdeasReport(r)).toContain(`PENDING agentic: the recap opens after 48 passed units (max ${MAX_RECAP_UNITS}); fix scheduled: rv3 S4`);
+    const fixed = estate({ agentic: section(Array.from({ length: 10 }, (_, i) => idea(`i-${i}`)), { section: 'agentic' }) });
     expect(msgs(fixed)).toContain(': RECAP_UNITS_PENDING lists this section but its recap opens after 4 unit(s), within 40: remove the entry');
   });
 

@@ -40,31 +40,20 @@ export const MAX_SIBLINGS = 3;
 export const MAX_RECAP_UNITS = 40;
 /**
  * Sections over MAX_RECAP_UNITS whose fix is scheduled elsewhere (reported, not a problem). An entry that is no
- * longer over the limit IS a problem: remove it. Fixed by the rv3 S1 content patch (rv3/S1-REPORT.md): the four
- * banks and sysdrills. Fixed by rv3 S4 (it owns those files): agentic, review-katas.
+ * longer over the limit IS a problem: remove it. The rv3 S1 content patch fixed the four banks and sysdrills.
+ * Fixed by rv3 S4 (it owns those files): agentic, review-katas.
  */
 export const RECAP_UNITS_PENDING: Readonly<Record<string, string>> = {
-  'bank-bootforge': 'rv3 S1 content patch',
-  'bank-csharp': 'rv3 S1 content patch',
-  'bank-java': 'rv3 S1 content patch',
-  'bank-jstrain': 'rv3 S1 content patch',
-  sysdrills: 'rv3 S1 content patch',
   agentic: 'rv3 S4',
   'review-katas': 'rv3 S4',
 };
 const DEFAULT_RECAP_AFTER = 0.8;
 /**
- * rv3 MF-4: idea-sentence leaks found when the check was added, whose rewrite is scheduled: the rv3 S1 content
- * patch (bank-jstrain, campaign-*: rv3/S1-REPORT.md) or rv3 S3 (it owns content/keyideas/fund-js-*.json). Key "<file>|<idea id>|<keyed item id>". Listed apart, not a
+ * rv3 MF-4: idea-sentence leaks found when the check was added, whose rewrite is scheduled with rv3 S3 (it owns
+ * content/keyideas/fund-js-*.json; the S1 content patch rewrote the bank-jstrain and campaign-* ones). Key "<file>|<idea id>|<keyed item id>". Listed apart, not a
  * problem; an entry that no longer fires IS a problem: remove it.
  */
 export const IDEA_LEAK_PENDING: Readonly<Record<string, string>> = {
-  'bank-jstrain.json|async-control-primitives|seed:quests:organized-build-agenthelpdesk/quiz/a18e3b8872690ae1': 'rv3 S1 content patch',
-  'campaign-authz-tenancy.json|ownership-on-every-path|fund:js/18-http-apis-in-node/q01': 'rv3 S1 content patch',
-  'campaign-authz-tenancy.json|not-found-for-other-tenants|fund:js/18-http-apis-in-node/q03': 'rv3 S1 content patch',
-  'campaign-migrations-rollout.json|expand-contract-each-its-own-deploy|fund:js/29-schema-changes-under-live-traffic/q02': 'rv3 S1 content patch',
-  'campaign-queues-outbox.json|claim-with-a-conditional-update|eb:zz8--astraupskill-02-CONCEPTS.md q2.kp1': 'rv3 S1 content patch',
-  'campaign-retries-timeouts.json|every-call-has-a-deadline|eb:sysdesign--relay--workflow-engine-ops q1.kp4': 'rv3 S1 content patch',
 };
 
 /** Passed scope units a recap needs (the server's rule, engines/keyideas.ts recapProgress). */
