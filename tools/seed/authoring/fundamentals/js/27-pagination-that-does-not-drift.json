@@ -5,7 +5,7 @@
   "title": "Pagination that does not drift",
   "level": "advanced",
   "summary": "Why offset pages repeat and skip rows, keyset pagination on (createdAt, id), opaque cursors treated as untrusted input, and hasMore without a count query.",
-  "lesson": "## Offset pages drift\n\n`LIMIT 20 OFFSET 40` means \"skip 40 rows of whatever the result is right now\". The result moves between requests.\n\n**Story 1: the duplicated post.** A feed is sorted newest first. A user loads page 1. Three new posts arrive. Page 2 (`OFFSET 20`) now begins three rows earlier in the old numbering, so the last three posts of page 1 appear again.\n\n**Story 2: the skipped invoice.** An export job walks invoices with offsets while an admin deletes one from page 1. Every later row moves up by one, so the first row of page 2 slides into page 1's range and is never exported. Nobody notices until the totals disagree.\n\nOffsets are also slow deep down: the database produces and throws away every skipped row.\n\n## Keyset pagination\n\nInstead of a position, remember the **last row you saw** and ask for rows strictly after it in the sort order:\n\n```sql\nSELECT * FROM posts\nWHERE created_at < :c OR (created_at = :c AND id < :i)\nORDER BY created_at DESC, id DESC\nLIMIT 21\n```\n\nInserts above the cursor and deletes anywhere cannot change what \"after this row\" means, so there are no duplicates and no gaps. With an index on `(created_at, id)` the database seeks straight to the cursor.\n\nTwo rules make it correct:\n\n- The sort key must be **unique**. `created_at` alone is not: rows sharing a timestamp straddle a page boundary and get skipped (with `<`) or repeated (with `<=`). Add `id` as a tie-breaker and compare the pair.\n- Compare **values**; do not look the cursor row up. That row may have been deleted since, and the comparison still works.\n\nThe price: no \"jump to page 7\", only next and previous.\n\n## Opaque cursors\n\nSend the position as one string, for example base64url of `{\"createdAt\":…,\"id\":…}`. Opaque means clients must not build or parse it, so you may change its contents later. It does **not** mean secret or trusted: base64 is readable, and a cursor is user input. Decode defensively. Bad base64, bad JSON and wrong types all become a 400, never a 500, and you copy out only the fields you expect, so extras are dropped.\n\n## hasMore without COUNT\n\n`SELECT COUNT(*)` on every page request scans the table for a number that is stale on arrival. Instead fetch **one row more than the page size**: if the extra row comes back there is another page, and you drop it before responding. Checking \"did I get a full page\" is wrong when the last page is exactly full.\n\n## Clamp the limit\n\nWhatever the client asks for, the server decides: a default when `limit` is missing, a minimum of 1, and a maximum such as 100.",
+  "lesson": "## Offset pages drift\n\n`LIMIT 20 OFFSET 40` means \"skip 40 rows of whatever the result is right now\". The result moves between requests.\n\n**Story 1: the duplicated post.** A feed is sorted newest first. A user loads page 1. Three new posts arrive. Page 2 (`OFFSET 20`) now begins three rows earlier in the old numbering, so the last three posts of page 1 appear again.\n\n**Story 2: the skipped invoice.** An export job walks invoices with offsets while an admin deletes one from page 1. Every later row moves up by one, so the first row of page 2 slides into page 1's range and is never exported. Nobody notices until the totals disagree.\n\nOffsets are also slow deep down: the database produces and throws away every skipped row.\n\n## Keyset pagination\n\nInstead of a position, remember the **last row you saw** and ask for rows strictly after it in the sort order:\n\n```sql\nSELECT * FROM posts\nWHERE created_at < :c OR (created_at = :c AND id < :i)\nORDER BY created_at DESC, id DESC\nLIMIT 21\n```\n\nInserts above the cursor and deletes anywhere cannot change what \"after this row\" means, so there are no duplicates and no gaps. With an index on `(created_at, id)` the database seeks straight to the cursor.\n\nTwo rules make it correct:\n\n- The sort key must be **unique**. `created_at` alone is not: rows sharing a timestamp straddle a page boundary and get skipped (with `<`) or repeated (with `<=`). Add `id` as a tie-breaker and compare the pair.\n- Compare **values**; do not look the cursor row up. That row may have been deleted since, and the comparison still works.\n\nThe price: no \"jump to page 7\", only next and previous.\n\n## Opaque cursors\n\nSend the position as one string, for example base64url of `{\"createdAt\":…,\"id\":…}`. Opaque means clients must not build or parse it, so you may change its contents later. It does **not** mean secret or trusted: base64 is readable, and a cursor is user input. Decode defensively. Bad base64, bad JSON and wrong types all become a 400, never a 500, and you copy out only the fields you expect, so extras are dropped.\n\n## hasMore without COUNT\n\n`SELECT COUNT(*)` on every page request scans the table for a number that is stale on arrival. Instead fetch **one row more than the page size**: if the extra row comes back there is another page, and you drop it before responding. Checking \"did I get a full page\" is wrong when the last page is exactly full.\n\n## Clamp the limit\n\nWhatever the client asks for, the server decides: a default when `limit` is missing, a minimum of 1, and a maximum such as 100. That keeps one request from asking the database for a million rows, and it keeps the page size a decision of the API rather than of the caller.",
   "quiz": [
     {
       "prompt": "A feed is sorted newest first and paged with OFFSET. Three posts are added after the user loads page 1. What does page 2 show?",
@@ -38,7 +38,7 @@
         "It is returned, because ties are broken by rowid"
       ],
       "answer": 2,
-      "explanation": "The second row's timestamp equals the cursor's, so a strict comparison excludes it. Using <= instead would repeat the first row."
+      "explanation": "The second row's timestamp equals the cursor's, so the strict `created_at < ?` excludes it, and no later page asks for that timestamp again: the row is skipped for good. It is not returned twice or moved to the end, and nothing breaks the tie by rowid unless the ORDER BY says so. Switching to <= would repeat the first row instead. Add the id as a tie-breaker."
     },
     {
       "prompt": "What must be true of the sort key used for keyset pagination?",
@@ -49,7 +49,7 @@
         "It must order rows uniquely, such as time plus id"
       ],
       "answer": 3,
-      "explanation": "Any columns work as long as no two rows compare equal. A tie-breaker such as the id makes a non-unique column safe."
+      "explanation": "Any columns work as long as no two rows compare equal in the sort, because the cursor has to name one exact position. A timestamp alone is not enough, whatever its precision, since two rows can still share it, and nothing requires a single auto-increment column. A tie-breaker such as the id makes a non-unique column safe."
     },
     {
       "prompt": "The row a cursor was built from has since been deleted. What should a keyset query return for that cursor?",
@@ -71,7 +71,7 @@
         "It never expires, so clients may keep it indefinitely"
       ],
       "answer": 2,
-      "explanation": "Opaque is a contract about who may interpret the string. Base64 is readable by anyone, and whatever comes back is still client input."
+      "explanation": "Opaque is a contract about who may interpret the string: clients pass it back untouched, so the server may change its format at any time. It is not encryption, since base64 is readable by anyone, and it does not let the server trust it: whatever comes back is client input and is validated like any other. Cursors can still expire."
     },
     {
       "prompt": "A request carries a cursor that does not decode to valid JSON. Which response is right?",
@@ -82,7 +82,7 @@
         "404, because the page the cursor points at does not exist"
       ],
       "answer": 0,
-      "explanation": "A malformed cursor is a bad request. A 500 blames the server, and silently restarting sends a buggy client round the first page forever."
+      "explanation": "A cursor that does not decode is malformed client input, so the answer is 400 Bad Request. A 500 blames the server for the client's mistake, and quietly serving the first page sends a buggy client round the same page forever. A 404 suggests that data is gone when the request itself was wrong."
     },
     {
       "prompt": "How do you compute hasMore for a page of 20 without a COUNT query?",
@@ -93,7 +93,7 @@
         "Ask for 21 rows and see whether the extra one arrives"
       ],
       "answer": 3,
-      "explanation": "The extra row answers the question inside the same query. A full page of exactly 20 says nothing about whether a 21st row exists."
+      "explanation": "Fetching one row more than the page size answers the question inside the same query: if a 21st row arrives there is more, and it is dropped from the response. A full page of exactly 20 says nothing about whether a 21st exists, and the last id plus one may be a deleted row while later ids still exist."
     },
     {
       "prompt": "A list is sorted ascending by `(price, id)`, and page 1 ended at price 20, id 7. Which WHERE clause starts page 2?",
@@ -104,7 +104,7 @@
         "`WHERE price > 20 OR id > 7`"
       ],
       "answer": 1,
-      "explanation": "The row comparison means price above 20, or price 20 with an id above 7, which is exactly \"after the last row\". The AND forms skip higher-priced rows with small ids, and the OR form brings back cheaper rows with large ids."
+      "explanation": "The row comparison means price above 20, or price 20 with an id above 7, which is exactly \"after the last row\". The tempting AND forms skip higher-priced rows with small ids, and the OR form brings back cheaper rows with large ids."
     },
     {
       "prompt": "An API's page size has default 20, minimum 1 and maximum 100. What sizes do `?limit=0`, `?limit=500` and a request with no limit get?",
