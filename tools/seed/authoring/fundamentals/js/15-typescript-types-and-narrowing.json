@@ -5,7 +5,7 @@
   "title": "TypeScript: types & narrowing",
   "level": "advanced",
   "summary": "Structural typing, excess property checks, unknown versus any, unions and narrowing with typeof, in, instanceof and discriminants, exhaustive checks with never, and why types vanish at runtime.",
-  "lesson": "## Types are structural and erased\n\nTypeScript checks **shapes**: any value with the required properties fits a type, whatever it was declared as. And every type is **erased** at compile time: at runtime there is only JavaScript. You cannot ask \"is this a User?\" with a type; you must check the data.\n\n```ts\ninterface User { id: string; name: string; email?: string }\n\nconst extra = { id: '1', name: 'a', role: 'admin' };\nconst ok: User = extra;                                     // fine: it has id and name\nconst bad: User = { id: '1', name: 'a', role: 'admin' };    // error: excess property 'role'\n```\n\nThe **excess property check** applies only to a fresh object literal assigned directly: it catches typos like `emial`.\n\n## Optional properties and strict null checks\n\n`email?: string` has type `string | undefined`. With `strict` on (always turn it on), you must handle undefined before using it: `user.email ?? 'none'` or an `if`.\n\n## any versus unknown\n\n- `any` switches checking off: `an.toUpperCase()` compiles even if `an` is a number. It spreads silently.\n- `unknown` means \"could be anything, prove it first\": `un.toUpperCase()` is an error until you narrow. Use `unknown` for `JSON.parse` results, `catch` variables and external input.\n\n## Unions and narrowing\n\nA value of type `string | number` only allows what both members allow. **Narrowing** refines the type inside a branch:\n\n```ts\nfunction format(v: string | number) {\n  if (typeof v === 'string') return v.toUpperCase();   // v: string here\n  return v.toFixed(2);                                  // v: number here\n}\n```\n\nNarrowing tools: `typeof`, `instanceof`, `'key' in obj`, equality checks, truthiness, and **user-defined type guards**: `function isUser(x: unknown): x is User`.\n\n## Discriminated unions\n\nGive each variant a literal **tag**, and switching on it narrows to that variant:\n\n```ts\ntype Shape = { kind: 'circle'; r: number } | { kind: 'square'; side: number };\n\nfunction area(s: Shape): number {\n  switch (s.kind) {\n    case 'circle': return Math.PI * s.r ** 2;\n    case 'square': return s.side ** 2;\n    default: { const never: never = s; return never; }   // exhaustive check\n  }\n}\n```\n\nAdd a `{ kind: 'tri' }` variant later and the `never` assignment becomes a compile error at every switch that forgot it. That is how unions model API results (`{ ok: true; data } | { ok: false; error }`), events and reducer actions safely.\n\n## Literal types and as const\n\n`const method = 'GET'` has the literal type `'GET'`; `let method = 'GET'` widens to `string`. `as const` makes arrays and objects deeply readonly with literal types: `['a', 'b'] as const` is `readonly ['a', 'b']`.\n\n## Assertions do not check anything\n\n`value as User` tells the compiler \"trust me\"; it converts and validates nothing. `'hello' as unknown as number` compiles. Data from HTTP requests, the database or `JSON.parse` must be **validated at runtime** (hand-written guards, or a schema library such as Zod that produces both the check and the type). This is the single most common TypeScript bug in CRUD code: typing a request body is not validating it.\n\n## interface versus type\n\nBoth describe object shapes. Interfaces can be **merged** (two `interface X` declarations combine) and extended; `type` aliases cannot be redeclared but can express unions, tuples and mapped types. Pick one convention per codebase.",
+  "lesson": "## Types are structural and erased\n\nTypeScript checks **shapes**: any value with the required properties fits a type, whatever it was declared as. And every type is **erased** at compile time: at runtime there is only JavaScript. You cannot ask \"is this a User?\" with a type; you must check the data.\n\n```ts\ninterface User { id: string; name: string; email?: string }\n\nconst extra = { id: '1', name: 'a', role: 'admin' };\nconst ok: User = extra;                                     // fine: it has id and name\nconst bad: User = { id: '1', name: 'a', role: 'admin' };    // error: excess property 'role'\n```\n\nThe **excess property check** applies only to a fresh object literal assigned directly: it catches typos like `emial`.\n\n## Optional properties and strict null checks\n\n`email?: string` has type `string | undefined`. With `strict` on (always turn it on), you must handle undefined before using it: `user.email ?? 'none'` or an `if`.\n\nThe bug it prevents: without `strict`, `user.email.toLowerCase()` compiles and throws `TypeError: Cannot read properties of undefined` for every user who has no email. `strict` also turns on `noImplicitAny` and stricter function checks, so start every new project with it.\n\n## any versus unknown\n\n- `any` switches checking off: `an.toUpperCase()` compiles even if `an` is a number. It spreads silently.\n- `unknown` means \"could be anything, prove it first\": `un.toUpperCase()` is an error until you narrow. Use `unknown` for `JSON.parse` results, `catch` variables and external input.\n\n## Unions and narrowing\n\nA value of type `string | number` only allows what both members allow. **Narrowing** refines the type inside a branch:\n\n```ts\nfunction format(v: string | number) {\n  if (typeof v === 'string') return v.toUpperCase();   // v: string here\n  return v.toFixed(2);                                  // v: number here\n}\n```\n\nNarrowing tools: `typeof`, `instanceof`, `'key' in obj`, equality checks, truthiness, and **user-defined type guards**: `function isUser(x: unknown): x is User`.\n\nThe compiler follows control flow, so an early exit narrows too: after `if (!user) return;` the rest of the function sees `user` without `null` or `undefined`, and `Array.isArray(v)` narrows to the array member.\n\n## Discriminated unions\n\nGive each variant a literal **tag**, and switching on it narrows to that variant:\n\n```ts\ntype Shape = { kind: 'circle'; r: number } | { kind: 'square'; side: number };\n\nfunction area(s: Shape): number {\n  switch (s.kind) {\n    case 'circle': return Math.PI * s.r ** 2;\n    case 'square': return s.side ** 2;\n    default: { const never: never = s; return never; }   // exhaustive check\n  }\n}\n```\n\nAdd a `{ kind: 'tri' }` variant later and the `never` assignment becomes a compile error at every switch that forgot it. That is how unions model API results (`{ ok: true; data } | { ok: false; error }`), events and reducer actions safely.\n\n## Literal types and as const\n\n`const method = 'GET'` has the literal type `'GET'`; `let method = 'GET'` widens to `string`. `as const` makes arrays and objects deeply readonly with literal types: `['a', 'b'] as const` is `readonly ['a', 'b']`.\n\nThe widening shows up when the value is passed on: a function that takes `method: 'GET' | 'POST'` rejects a `let method = 'GET'`, because its type is `string`. `const ROLES = ['admin', 'user'] as const` gives `(typeof ROLES)[number]`, the union `'admin' | 'user'`, from one list.\n\n## Assertions do not check anything\n\n`value as User` tells the compiler \"trust me\"; it converts and validates nothing. `'hello' as unknown as number` compiles. Data from HTTP requests, the database or `JSON.parse` must be **validated at runtime** (hand-written guards, or a schema library such as Zod that produces both the check and the type). This is the single most common TypeScript bug in CRUD code: typing a request body is not validating it.\n\n## interface versus type\n\nBoth describe object shapes. Interfaces can be **merged** (two `interface X` declarations combine) and extended; `type` aliases cannot be redeclared but can express unions, tuples and mapped types. Pick one convention per codebase.\n\nOne concrete difference: `interface Admin extends User { id: number }` is an error at the declaration because `id` conflicts with `string`, while `type Admin = User & { id: number }` compiles and quietly makes `id` type `never`.",
   "quiz": [
     {
       "prompt": "`const u: User = { id: \"1\", name: \"a\", role: \"admin\" };` (User has id and name) gives...",
@@ -16,7 +16,7 @@
         "A type error that role must be optional"
       ],
       "answer": 1,
-      "explanation": "Fresh object literals assigned directly get an excess property check, which catches typos."
+      "explanation": "An object literal written straight into a typed slot gets an extra check: every property it lists must exist in the target type. `User` has no `role`, so tsc reports that the literal may only specify known properties. The check exists to catch typos like `emial`. It is a compile-time error, not a runtime one, and the message is about an unknown property, not about role needing to be optional."
     },
     {
       "prompt": "Assigning a VARIABLE `extra` holding `{ id, name, role }` to a `User`...",
@@ -27,7 +27,7 @@
         "Requires a cast such as extra as User to compile"
       ],
       "answer": 2,
-      "explanation": "A value with at least the required properties is assignable; extra properties are allowed when not a fresh literal. TypeScript is structural."
+      "explanation": "Assignability in TypeScript is structural: a value fits `User` if it has `id` and `name` with the right types, whatever else it carries. The stricter check for unknown keys is reserved for an object literal written at the assignment itself; once the object sits in a variable, the wider shape is accepted without any cast. Types are erased, so nothing strips the extra key at runtime either: the object still carries it."
     },
     {
       "prompt": "Which statement about `unknown` versus `any` is true?",
@@ -38,7 +38,7 @@
         "unknown is for values that may be null or undefined"
       ],
       "answer": 1,
-      "explanation": "unknown forces you to prove what a value is; any silently turns the type checker off."
+      "explanation": "`any` accepts every value and allows every operation on it: property reads, calls and assignments all compile, and the `any` spreads into whatever it touches. `unknown` also accepts every value, but allows almost nothing until `typeof`, `instanceof` or a guard proves what it holds. So they are not the same, and `unknown` is not about null: `string | null | undefined` is how to say maybe missing."
     },
     {
       "prompt": "Inside `if (typeof v === \"string\") { ... }` where `v: string | number`, the type of v is...",
@@ -49,7 +49,7 @@
         "`string`"
       ],
       "answer": 3,
-      "explanation": "typeof checks narrow the union inside the branch (and to number in the other branch)."
+      "explanation": "The compiler understands `typeof v === \"string\"` as a narrowing guard. Inside the true branch only the `string` member of the union can hold, so `v.toUpperCase()` compiles there; after that branch returns, the rest of the function sees `number`. The type does not widen to `unknown`, and `never` would mean no member is left, which happens only after both members are ruled out."
     },
     {
       "prompt": "What is the purpose of `const never: never = s;` in the default branch of a switch over a discriminated union?",
@@ -60,7 +60,7 @@
         "Required syntax: switch over a union needs a default"
       ],
       "answer": 0,
-      "explanation": "If every variant is handled, s is never there; a new unhandled variant makes the assignment a type error."
+      "explanation": "Each `case` removes its variant from the type of `s`, so in the default branch only unhandled variants remain. When every variant has a case, nothing is left, `s` is `never`, and the assignment compiles. Add a variant without a case and `s` is that variant there, which is not assignable to `never`. It is a compile-time check only: nothing throws at runtime unless you add a throw, and a switch needs no default."
     },
     {
       "prompt": "What does `const user = req.body as User;` guarantee at runtime?",
@@ -71,7 +71,7 @@
         "That body was parsed and checked against the User type"
       ],
       "answer": 2,
-      "explanation": "Types vanish at runtime. Validate external input with a guard or a schema library. Assertions validate nothing."
+      "explanation": "`as User` is an instruction to the type checker, not code: the emitted JavaScript is just `const user = req.body;`. No field is checked, no null test runs and nothing is parsed, so a body of `{}` or `null` passes through and fails later, far from the cause. For a real guarantee, check the body with a hand-written guard or a schema library such as Zod, and derive the type from that check."
     },
     {
       "prompt": "With `strict`, what is the type of `user.email` when `email?: string`?",
@@ -82,7 +82,7 @@
         "`string | undefined`"
       ],
       "answer": 3,
-      "explanation": "Optional properties may be missing, so TypeScript adds undefined to their type."
+      "explanation": "An optional property may be absent, and reading an absent property gives `undefined`, so under `strictNullChecks` TypeScript adds `undefined` to the type of the read. It never adds `null`: null is a value someone stores on purpose, and the type allows it only if you write `string | null`. Without `strict` the read is typed plain `string`, which is how `user.email.toLowerCase()` slips through."
     },
     {
       "prompt": "`const method = \"GET\"` versus `let method = \"GET\"`: what are their types?",
@@ -93,7 +93,7 @@
         "string and string"
       ],
       "answer": 0,
-      "explanation": "const keeps the literal type because it cannot change; let widens to string."
+      "explanation": "A `const` binding can never be reassigned, so TypeScript keeps the narrowest type of its initializer, the literal. A `let` may later hold any other string, so its type widens to `string`; giving it the literal type would forbid `method = 'POST'`. Reading the pair the other way round is a common mistake. To keep a literal on a `let`, annotate it or use `as const`."
     },
     {
       "prompt": "What does `function isUser(x: unknown): x is User` add over returning boolean?",
@@ -104,7 +104,7 @@
         "It makes x readonly inside the function body"
       ],
       "answer": 2,
-      "explanation": "A type predicate tells the compiler what a true result proves. You still write the actual checks."
+      "explanation": "The return type `x is User` tells the compiler what a `true` result proves. At the call site, `if (isUser(data)) { ... }` then narrows `data` inside the branch, which a plain boolean return cannot do. The body is still yours to write: TypeScript generates no runtime check from the type, and it trusts the predicate even when the body is wrong. It does not make x readonly either."
     },
     {
       "prompt": "Which can be declared twice and merge into one?",
@@ -115,7 +115,7 @@
         "A const variable"
       ],
       "answer": 1,
-      "explanation": "Interfaces merge (declaration merging); redeclaring a type alias, a class or a const is a duplicate identifier or redeclaration error."
+      "explanation": "Two `interface Box` declarations in the same scope combine into one type with the members of both. This declaration merging is how libraries add fields to global or third-party types. A type alias names one fixed type, so a second one with the same name is a duplicate identifier error; so is a second class with the same name, and a second const is a redeclaration error."
     }
   ],
   "flashcards": [
@@ -186,7 +186,7 @@
           "code": "const r = mod.parseEvent({ type: 'signup', email: 'a@b.io', amountCents: 5 });\nassert.deepEqual(Object.keys(r.event), ['type', 'email']);"
         }
       ],
-      "explanation": "Check that you have an object, branch on the tag, validate the fields of that branch, and build the output from scratch:\n\n```js\nif (input.type === 'purchase') {\n  const { amountCents, currency } = input;\n  if (!Number.isInteger(amountCents) || amountCents <= 0) return fail('amountCents must be a positive whole number');\n  if (!CURRENCIES.has(currency)) return fail('unsupported currency');\n  return { ok: true, event: { type: 'purchase', amountCents, currency } };\n}\n```\n\nReturning `{ ...input }` would pass the happy-path tests and fail \"extra keys dropped\": copying unknown keys is how mass-assignment bugs (`admin: true`) get in.",
+      "explanation": "Check that you have an object, branch on the tag, validate the fields of that branch, and build the output from scratch:\n\n```js\nif (input.type === 'purchase') {\n  const { amountCents, currency } = input;\n  if (!Number.isInteger(amountCents) || amountCents <= 0) return fail('amountCents must be a positive whole number');\n  if (!CURRENCIES.has(currency)) return fail('unsupported currency');\n  return { ok: true, event: { type: 'purchase', amountCents, currency } };\n}\n```\n\nReturning `{ ...input }` from the signup branch keeps \"a valid purchase\" and the rejection tests green, but \"a valid signup, extra keys dropped\" fails: copying unknown keys is how mass-assignment bugs (`admin: true`) get in. Testing only `typeof input !== 'object'` instead of also checking `input === null` makes \"non-objects and unknown tags are invalid, never thrown\" fail, since reading `null.type` throws. A loose email pattern such as `/.+@.+/` accepts `a@b@c`, and \"variant fields are checked\" fails.",
       "hints": [
         "Check that the input is a non-null object first. Only then is reading input.type safe.",
         "Branch on the tag, check every field of that variant for its exact type and format, such as whole numbers, the pattern and a known currency, and build a new object containing only those fields.",
@@ -227,7 +227,7 @@
           "code": "const r = mod.parseEvent({ type: 'signup', email: 'a@b.io', amountCents: 5 });\nassert.deepEqual(Object.keys(r.event), ['type', 'email']);"
         }
       ],
-      "explanation": "`{ ...input }` returns every key the client sent, so a signup can smuggle `admin: true` or purchase fields into the parsed event: the mass-assignment bug. Build the output from scratch with only the validated fields, as the purchase branch already does.",
+      "explanation": "`{ ...input }` returns every key the client sent, so a signup can smuggle `admin: true` or purchase fields into the parsed event: the mass-assignment bug. Build the output from scratch with only the validated fields, as the purchase branch already does.\n\nTwo tests fail on the starter: \"a valid signup, extra keys dropped\" sees `admin: true` in the event, and \"a signup cannot smuggle purchase fields\" sees `amountCents`. The validation itself is right, so the rejection tests pass, which is why the bug survives a review that only checks the error paths. Deleting `admin` with a blocklist rather than building the object from an allowlist would still let `amountCents` through.",
       "hints": [
         "Send a signup with an extra admin: true field and inspect the parsed event.",
         "The spread copies every key the client sent, not only the ones you validated.",
