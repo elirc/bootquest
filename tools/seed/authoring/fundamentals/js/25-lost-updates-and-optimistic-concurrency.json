@@ -16,7 +16,7 @@
         "Node throws a concurrency error when the second read starts"
       ],
       "answer": 2,
-      "explanation": "Both reads happen before either write, so both see a free seat. Nothing in an unconditional write notices the other request."
+      "explanation": "With two requests in flight, both reads can finish before either write, so both see a free seat and both checks pass. An unconditional write does not look at what is stored, so the second one overwrites the first and each request reports success. Nothing makes the second request wait, and no duplicate-key error fires unless the schema itself has a unique constraint."
     },
     {
       "prompt": "Why can a single-threaded Node server still lose an update?",
@@ -38,7 +38,7 @@
         "Nothing was written: the row is gone or its version has moved on"
       ],
       "answer": 3,
-      "explanation": "The WHERE clause matched no row, so no row changed. The handler must report that instead of answering as if the save worked."
+      "explanation": "The WHERE clause matched no row, so nothing was written: the row was deleted, or another save moved its version on. A count of 0 is not a deadlock rollback or an overflow, and an identical body would still match and count as one changed row. The handler must report the conflict instead of answering as if the save worked."
     },
     {
       "prompt": "A client saves an edit based on version 3, but the row is now at version 5. Which response fits?",
@@ -49,7 +49,7 @@
         "503 Service Unavailable, so the client resends the same body later"
       ],
       "answer": 1,
-      "explanation": "The edit was made against data that has changed. Applying it would erase two other saves; resending the same body can never succeed."
+      "explanation": "The edit was made against version 3, and the row has had two other saves since. Applying it on top of version 5 would silently erase those saves, and resending the same body later can never succeed, so a 503 misleads the client too. 409 Conflict with the current row lets the user redo the edit on fresh data."
     },
     {
       "prompt": "Why is version checking called optimistic concurrency control?",
@@ -60,7 +60,7 @@
         "It lets the last writer win, expecting edits to overlap rarely"
       ],
       "answer": 1,
-      "explanation": "The optimism is about conflicts being rare, so nobody waits on a lock. The write still verifies, and a mismatch is reported."
+      "explanation": "The optimism is about conflicts being rare: nobody takes a lock while the user edits, so nobody waits. The write still verifies the version and reports a mismatch, which is what separates it from last writer wins, where the later save silently overwrites. Locking the row early, before the edit, is the pessimistic approach."
     },
     {
       "prompt": "A server-side stock decrement hits a version conflict and retries. What must each retry do?",
@@ -93,7 +93,7 @@
         "No, but only because the second read may be served from a stale cache"
       ],
       "answer": 2,
-      "explanation": "A second check only narrows the gap. The gap closes when the check and the write are one conditional operation."
+      "explanation": "A second check only narrows the gap: another request can still write between that read and the write, and the unconditional write then overwrites it. Two reads that return the same version number prove nothing about what happens after them. The gap closes only when the check and the write are one conditional statement, such as `UPDATE ... WHERE version = ?`."
     },
     {
       "prompt": "A client sends `PUT /docs/7` with `If-Match: \"v3\"`, but the document is now at ETag `\"v5\"`. What must the server do with the new body?",
