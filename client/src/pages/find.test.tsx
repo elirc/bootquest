@@ -48,9 +48,9 @@ describe('dashboard: slate targets come with GET /dashboard (no fan-out)', () =>
     const page = calls.filter((c) => c !== 'getReviewQueue');
     // merged ab wave: S4's 3 reads + S3's Due now (/due) and Weak spots (/stats/weak) panels + S1's focus card (/settings/slate)
     // f52 U6: + the hero's one Fundamentals ladder (the first language track on the slate); the
-    // settings read is shared by the hero and the focus card
-    expect(new Set(page)).toEqual(new Set(['getDashboard', 'getCompetencies', 'getTracks', 'getDue', 'getWeakSpots', 'getSlateSettings', 'getFundamentals']));
-    expect(page.length).toBeLessThanOrEqual(7);
+    // settings read is shared by the hero and the focus card (rv2: +1 for the key-ideas tile)
+    expect(new Set(page)).toEqual(new Set(['getDashboard', 'getCompetencies', 'getTracks', 'getDue', 'getWeakSpots', 'getSlateSettings', 'getFundamentals', 'getKeyIdeas']));
+    expect(page.length).toBeLessThanOrEqual(8);
     expect(calls.filter((c) => c === 'getSlateSettings')).toHaveLength(1);
     expect(args.getFundamentals).toEqual([['js']]);
     expect(calls.filter((c) => c === 'getReviewQueue')).toHaveLength(1);
