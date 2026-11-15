@@ -57,6 +57,8 @@ import {
   type WeekResponse,
   type CalibrationResponse,
   type ConfidenceResponse,
+  type KataReviewResponse,
+  type KataVerdictScoreResponse,
   type RecapPromptsResponse,
   type RecapRevealResponse,
   type RecapSubmitResponse,
@@ -240,5 +242,9 @@ export function createHttpApi(baseUrl = '/api', fetchImpl: typeof fetch = (...a)
     // rv2 S3 (F9)
     tagConfidence: (attemptId, confidence) => post<ConfidenceResponse>(`/attempts/${attemptId}/confidence`, { confidence }),
     getCalibration: () => call<CalibrationResponse>('/stats/calibration'),
+    // rv3 S5 (W9): kata verdicts (whitelisted bodies; the review read never rejects)
+    getKataReview: (id) => call<KataReviewResponse>(`${unit(id)}/kata/review`).catch(() => null),
+    approveKata: (id, b) => post<AnswerRecordedResponse>(`${unit(id)}/kata/approve`, { selfAssisted: b.selfAssisted }),
+    verdictScoreKata: (id, b) => post<KataVerdictScoreResponse>(`${unit(id)}/kata/verdict-score`, { perDefect: b.perDefect, perDecoy: b.perDecoy }),
   };
 }
