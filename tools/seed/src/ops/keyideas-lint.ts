@@ -40,13 +40,10 @@ export const MAX_SIBLINGS = 3;
 export const MAX_RECAP_UNITS = 40;
 /**
  * Sections over MAX_RECAP_UNITS whose fix is scheduled elsewhere (reported, not a problem). An entry that is no
- * longer over the limit IS a problem: remove it. The rv3 S1 content patch fixed the four banks and sysdrills.
- * Fixed by rv3 S4 (it owns those files): agentic, review-katas.
+ * longer over the limit IS a problem: remove it. The rv3 S1 content patch fixed the four banks and sysdrills; rv3 S4
+ * fixed agentic (recapAfter 25) and review-katas (recapAfter 17). Empty: every recap opens within the limit.
  */
-export const RECAP_UNITS_PENDING: Readonly<Record<string, string>> = {
-  agentic: 'rv3 S4',
-  'review-katas': 'rv3 S4',
-};
+export const RECAP_UNITS_PENDING: Readonly<Record<string, string>> = {};
 const DEFAULT_RECAP_AFTER = 0.8;
 /**
  * rv3 MF-4: idea-sentence leaks found when the check was added, whose rewrite is scheduled with rv3 S3 (it owns
@@ -277,7 +274,8 @@ export interface KeyIdeasReport {
   leaks: number;
 }
 
-export function keyIdeasReport(contentDir: string, estate: Estate = readEstate(contentDir)): KeyIdeasReport {
+/** `recapPending` defaults to RECAP_UNITS_PENDING; tests pass their own to exercise the pending mechanism. */
+export function keyIdeasReport(contentDir: string, estate: Estate = readEstate(contentDir), recapPending: Readonly<Record<string, string>> = RECAP_UNITS_PENDING): KeyIdeasReport {
   const dir = join(contentDir, 'keyideas');
   const problems: KeyIdeasProblem[] = [];
   const perSection: KeyIdeasReport['perSection'] = [];
@@ -317,7 +315,7 @@ export function keyIdeasReport(contentDir: string, estate: Estate = readEstate(c
     perSection.push({ section: s.section, ideas: s.ideas.length, scopeUnits: covered.size, recapUnits });
     if (s.recapAfter !== undefined && s.recapAfter > 1 && s.recapAfter > covered.size) p(`recapAfter ${s.recapAfter} is more than the ${covered.size} live scope unit(s)`);
     // rv3 MF-2: the recap must be reachable: at most MAX_RECAP_UNITS passed scope units
-    const owner = RECAP_UNITS_PENDING[s.section];
+    const owner = recapPending[s.section];
     if (recapUnits > MAX_RECAP_UNITS) {
       if (owner) pending.push({ section: s.section, recapUnits, owner });
       else p(`the recap opens after ${recapUnits} passed scope units (max ${MAX_RECAP_UNITS}): use a whole-count recapAfter or a narrower scope`);
