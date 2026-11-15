@@ -444,7 +444,7 @@
           ]
         }
       ],
-      "explanation": "The limiter sees requests, so fewer, fuller requests finish sooner.\n\nFor `sendSeconds(1000000, 500, 50)`:\n- requests = ceil(1,000,000 ÷ 500) = 2,000\n- 2,000 ÷ 50/s = **40 s**\n- versus 1,000,000 ÷ 50 = 20,000 s (~5½ h) sent one by one\n\nUnder someone else's rate limit, batch size is the only lever you have — ask for the maximum batch size before you ask for a higher limit.",
+      "explanation": "The partner's limiter counts requests, not records, so batch size is the only lever you control. Fill whole batches, send the leftover records as one more request, and divide the request count by the allowed rate. For the first test, 1,000,000 records in batches of 500 take 2,000 requests; at 50 requests a second the sync takes 40 seconds, against 20,000 seconds, about 5.5 hours, one record at a time.\n\nPlain division without rounding up drops the partial batch: 1,001 records in batches of 500 come out as 2.002 requests, and \"1,001 records in batches of 500 -> partial batch rounds up to 3\" fails. Dividing the records, rather than the requests, by the rate applies the limit to the wrong unit, and \"2,000 requests at 50/s -> 40 s\" fails with 20,000. Ask the partner for the maximum batch size before you ask for a higher limit.",
       "hints": [
         "The rate limit only counts requests — how many records ride in each request is up to you.",
         "Fill whole batches and send the leftover records as one more request. The rate limit counts requests, not records, so the duration is the request count spread over the allowed request rate.",
@@ -512,7 +512,7 @@
           ]
         }
       ],
-      "explanation": "Fan-out multiplies one write by the follower count.\n\nFor `celebrityLagSec(50000000, 100000)`:\n- one post = 50,000,000 timeline writes\n- 50,000,000 ÷ 100,000 deliveries/s = **500 s** (~8 minutes) before the LAST follower's timeline has the post\n\nThis one number is why real feeds go hybrid — push for normal users, pull (merge at read time) for celebrities.",
+      "explanation": "Fan-out on write copies each post into every follower's timeline, so the steady delivery load is posts per second times the average follower count. For the first test, 100 posts a second with 200 followers each is 20,000 timeline writes a second. A celebrity post enqueues one write per follower at once, and the delivery cap sets how fast that queue drains: 50,000,000 followers at 100,000 writes a second leave the last follower waiting 500 seconds, over 8 minutes.\n\nGetting the ratio upside down, the cap over the followers, answers 0.002 seconds, and \"50,000,000 followers at 100,000/s -> 500 s\" fails. The boundary where followers equal the cap gives 1 either way, which is why the larger tests are there. Sizing the workers for the 20,000-a-second average hides the burst entirely. This one number is why real feeds go hybrid: push for normal users, pull at read time for celebrities.",
       "hints": [
         "Push-model timelines copy each post into every follower's timeline, so a post costs one write per follower.",
         "Fan-out on write turns each post into one write per follower, so the write rate scales with the follower count. One celebrity post queues a write per follower, and the delivery cap sets how fast that queue drains.",
@@ -580,7 +580,7 @@
           ]
         }
       ],
-      "explanation": "Reject the excess so the rest stays fast.\n\nFor `shedPermille(50000, 20000)`:\n- shed = 50,000 − 20,000 = 30,000/s\n- 30,000 × 1000 ÷ 50,000 = **600‰**\n\nAt 2.5× overload you reject 60% so the 40% you admit stay fast; admit everything and 100% of users get timeouts.",
+      "explanation": "A server pushed past capacity does not serve its capacity slowly: queues grow without bound and every request times out. Shedding the excess at the door with fast 503s keeps the admitted requests fast. The excess is the arrivals above capacity, never below zero. For the first test, 30,000 requests a second at a 20,000-a-second service means shedding 10,000 a second, a third of the traffic.\n\nLeaving out the clamp answers a negative shed rate when traffic is under capacity, and \"under capacity -> shed nothing (boundary)\" fails, as does the 0 per-mille test. Measuring the share against capacity instead of arrivals answers 1,500‰ for 50,000 a second at 20,000, more than all of the traffic, and \"50,000/s at 20,000/s capacity -> 600 per-mille\" fails. At 2.5× overload you reject 60% so the 40% you admit stay fast; admit everything and every user gets a timeout.",
       "hints": [
         "Past capacity, admitting more does not serve more — it makes every request slow. Only the excess has to go.",
         "Only the excess above capacity has to go, and a service under capacity sheds nothing. For the share, compare the shed rate with the arrival rate, not with the capacity, and express it out of 1,000.",
