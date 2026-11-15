@@ -57,7 +57,7 @@
           ]
         }
       ],
-      "explanation": "Selectivity is matched rows as a share of the table.\n\nFor `selectivityPermille(50000, 10000000)`:\n- 50,000 × 1000 = 50,000,000\n- 50,000,000 / 10,000,000 = **5‰** (0.5% of the table)\n\nAn index earns its keep at a few per-mille like this; a 4-value status column returns 250‰ per value even before skew, so on its own it is rarely worth an index.",
+      "explanation": "Under the uniform model every distinct value owns the same slice of the table, so rows per value are the total divided by the distinct count. For the first test, 10,000,000 orders over 2,000 customers give 5,000 rows per customer. Selectivity is the matched rows as a share of the table, scaled to per-mille before you divide: 5,000 of 10,000,000 rows is 0.5‰.\n\nThe unit is the trap. Scaling by 100 gives a percentage, so 50,000 of 10,000,000 rows comes out as 0.5 instead of 5, and both \"50,000 of 10,000,000 rows -> 5 per-mille\" and the half-the-table test fail. An index earns its keep at a few per-mille. A 4-value status column returns 250‰ per value even before skew, so the planner reads the table straight through rather than hop through an index to a quarter of it.",
       "hints": [
         "Under a uniform distribution every distinct value owns the same number of rows.",
         "Under a uniform spread every distinct value owns an equal slice of the rows. Selectivity is the matched rows as a share of the table, scaled to parts per thousand before you divide.",
@@ -120,7 +120,7 @@
           ]
         }
       ],
-      "explanation": "The index visits every row with that status; the filter throws most of them away.\n\nFor `wastedReads(8000000, 4, 500)`:\n- examined = 8,000,000 / 4 = 2,000,000\n- wasted = 2,000,000 − 500 = **1,999,500** rows\n\nThat 2,000,000-examined-for-500-returned gap is exactly what EXPLAIN shows you; a composite `(status, customer_id)` index closes it, so the rows examined fall to the rows returned.",
+      "explanation": "An index narrows only by its own column. The status index hands the executor every row with that status, total divided by distinct statuses under the uniform model, and the customer_id filter then throws most of them away. For the first test, 8,000,000 orders over 4 statuses means 2,000,000 rows examined; for 500 rows returned, 1,999,500 of those reads are wasted.\n\nThe wrong turn is to count waste against the whole table, as if the database scanned all 8,000,000 rows. That answers 7,999,500, and \"2,000,000 examined for 500 returned -> 1,999,500 wasted\" fails, along with the boundary test where the index already matches exactly. The gap between examined and returned is what EXPLAIN shows you. A composite (status, customer_id) index closes it, so the rows examined fall to the rows returned.",
       "hints": [
         "An index on status can only narrow by status — the customer_id check happens after each row is fetched.",
         "The index narrows only by its own column, so one status's slice of the table gets examined, and every examined row beyond those the query actually sends back is wasted filtering.",
@@ -263,7 +263,7 @@
       ],
       "explanation": "Same tree walk; the difference is one heap page per row versus one leaf page per hundred rows.\n\nFor the 2,000-match query on a 3-level tree:\n- non-covering: `indexLookupReads(3, 2000)` = 3 + 2,000 = 2,003 pages\n- covering: `coveringLookupReads(3, 2000, 100)` = 3 + 2,000 / 100 = 3 + 20 = **23 pages**\n\nRoughly 87× fewer reads: that is what adding the needed columns with `INCLUDE` buys, paid for with a fatter index and slower writes.",
       "hints": [
-        "If the index lacks a column the query needs, every match costs a trip to the table (the heap).",
+        "If the index lacks a column the query needs, every match costs a trip to the table, the heap.",
         "Both lookups pay the tree walk. The non-covering one then pays one table page per matched row, and the covering one pays only the leaf pages those matches fill.",
         "nonCovering = levels + rowsMatched. covering = levels + rowsMatched ÷ entriesPerLeaf."
       ]
@@ -321,7 +321,7 @@
           ]
         }
       ],
-      "explanation": "Each page re-scans everything before it, so a crawl sums an arithmetic series.\n\nFor `rowsScannedThroughPage(20, 100)`:\n- 1 + 2 + … + 100 = 100 × 101 / 2 = 5,050 page-widths\n- 5,050 × 20 = **101,000** rows\n\nKeyset pagination reads the same 100 pages for 20 × 100 = 2,000 rows — this is why infinite scroll and export jobs use a cursor, not OFFSET.",
+      "explanation": "OFFSET does not skip work: to serve page p the database reads the rows of every earlier page, throws them away, and then reads the page itself, so the cost is the page size times the page number. For the first test, page 1 at 20 rows per page reads 20 rows. A crawler that fetches pages 1 to 100 pays 20 × (1 + 2 + ... + 100) = 20 × 5,050 = 101,000 rows.\n\nTwo slips show up here. Counting only the skipped rows leaves out the page itself, so page 1 costs 0 and \"page 1 of 20 -> 20 rows (boundary)\" fails. Charging the crawler once per page, as keyset pagination would, answers 2,000 and fails \"crawling pages 1-100 of 20 -> 101,000 rows\": with OFFSET every page re-reads everything before it, so the total grows with the square of the page count. That is why export jobs and infinite scroll use a cursor.",
       "hints": [
         "OFFSET n still reads the n rows it skips — they are just thrown away.",
         "OFFSET still reads the rows it skips, so a page costs every row up to and including it. A crawl pays that for each page in turn, which is the page size times the sum of the page numbers from one up.",
@@ -379,7 +379,7 @@
           ]
         }
       ],
-      "explanation": "Count the structures one insert touches, then scale to a day.\n\nFor `indexWritesPerDay(500, 4)`:\n- writes per insert = 1 + 4 = 5\n- inserts per day = 500 × 86,400 = 43,200,000\n- writes per day = 43,200,000 × 5 = **216,000,000**\n\nEach secondary index is a whole extra B-tree to keep up to date, so \"just add an index\" speeds one read path and taxes every future write.",
+      "explanation": "An insert writes the table once and then each secondary index once more, because every index is its own B-tree that must stay in step. For the first test, a table with no secondary indexes still costs 1 write per insert. At 500 inserts a second with 4 indexes that is 5 writes per insert, 500 × 86,400 = 43,200,000 inserts a day, and 216,000,000 writes a day.\n\nThe common miscount is to count only the indexes and forget the table write itself. That answers 0 for a table with no indexes, and \"no secondary indexes -> 1 write per insert (boundary)\" fails, as does every other test. Each added index speeds one read path and taxes every future write, so the fifth index on a 500-insert-a-second table costs 43,200,000 extra writes a day.",
       "hints": [
         "An index is a separate sorted structure — it is updated on every insert, not just the table.",
         "Every insert touches the table once and each secondary index once. Scale by the inserts per second and by the seconds in a day for the daily total.",
@@ -508,7 +508,7 @@
           ]
         }
       ],
-      "explanation": "Free headroom divided by daily growth.\n\nFor `daysUntilRamFull(64000000000, 16000000000, 100, 4800000)`:\n- headroom = 64,000,000,000 − 16,000,000,000 = 48,000,000,000 bytes\n- growth per day = 100 × 4,800,000 = 480,000,000 bytes\n- days = 48,000,000,000 / 480,000,000 = **100 days**\n\nPut that date in the capacity plan: a bigger box, partitioning, or archiving cold rows has to land before the index spills to disk, not after.",
+      "explanation": "Index size is the entry count times the bytes per entry. For the first test, 100,000,000 rows of 40 bytes make a 4,000,000,000-byte index, 4 GB. The days left are the free headroom, RAM minus what is already used, divided by the bytes the index gains per day.\n\nThe tempting mistake is to divide the whole RAM by the daily growth and ignore what is already used. For 64 GB of RAM with 16 GB used and 480,000,000 bytes of growth a day it answers 133.3 days instead of 100, and \"64 GB RAM, 16 GB used, 100 B x 4,800,000 rows/day -> 100 days\" fails, as does the already-full boundary. Put the real date in the capacity plan: a bigger box, partitioning, or archiving cold rows has to land before the index spills to disk, not after.",
       "hints": [
         "Size = how many entries × how big each one is. Daily growth works the same way.",
         "The index is its entry count at its entry size. The free headroom is the RAM not yet used, and the index grows by one day's rows at that entry size, so count how many such days fit.",
