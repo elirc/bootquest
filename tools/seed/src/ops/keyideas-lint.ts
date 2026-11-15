@@ -65,12 +65,6 @@ export const IDEA_LEAK_PENDING: Readonly<Record<string, string>> = {
   'campaign-migrations-rollout.json|expand-contract-each-its-own-deploy|fund:js/29-schema-changes-under-live-traffic/q02': 'rv3 S1 content patch',
   'campaign-queues-outbox.json|claim-with-a-conditional-update|eb:zz8--astraupskill-02-CONCEPTS.md q2.kp1': 'rv3 S1 content patch',
   'campaign-retries-timeouts.json|every-call-has-a-deadline|eb:sysdesign--relay--workflow-engine-ops q1.kp4': 'rv3 S1 content patch',
-  'fund-js-core.json|this-from-call-site|fund:js/02-scope-hoisting-and-closures/q03': 'rv3 S3',
-  'fund-js-core.json|mutating-array-methods|pack:bootforge/functions-deep/applied-patterns/pure-functions/quiz-mutating-methods': 'rv3 S3',
-  'fund-js-core.json|mutating-array-methods|eb:trainjs--docs-lessons-02-functions-scope-data.md q3.kp4': 'rv3 S3',
-  'fund-js-senior.json|index-matches-query|eb:ww19--astraupskill-02-CONCEPTS.md q1.kp2': 'rv3 S3',
-  'fund-js-senior.json|keyset-pagination|eb:sysdesign--organized-experiment-ww48--pipeline-board-list-at-scale q1.kp2': 'rv3 S3',
-  'fund-js-senior.json|keyset-pagination|eb:sysdesign--organized-experiment-ww48--pipeline-board-list-at-scale q3.kp1': 'rv3 S3',
 };
 
 /** Passed scope units a recap needs (the server's rule, engines/keyideas.ts recapProgress). */
