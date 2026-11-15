@@ -5,7 +5,7 @@
   "title": "Classes",
   "level": "intermediate",
   "summary": "Class syntax over prototypes: constructors, fields, methods, getters, static members, true private #fields, extends and super, and when composition beats inheritance.",
-  "lesson": "## A class is a function plus a prototype\n\n```js\nclass Account {\n  #balance = 0;                 // private field: only code in this class body can touch it\n  static count = 0;             // on the class, not on instances\n\n  constructor(owner) {\n    this.owner = owner;         // public instance property\n    Account.count++;\n  }\n  deposit(cents) {              // method: lives on Account.prototype, shared by all instances\n    if (cents <= 0) throw new RangeError('deposit must be positive');\n    this.#balance += cents;\n    return this;\n  }\n  get balance() { return this.#balance; }   // read like a property\n  static open(owner) { return new Account(owner); }\n}\n```\n\n`typeof Account` is `'function'`; methods are shared on the prototype; `Object.keys(new Account('a'))` lists only own instance properties (`owner`), never methods, statics or private fields.\n\n## Class rules that bite\n\n- Classes are **not hoisted** like functions: using one before its declaration is a ReferenceError (temporal dead zone).\n- Class bodies are always **strict mode**.\n- Methods are **not bound**: `const d = acct.deposit; d(5)` throws, because `this` is undefined (topic 04).\n- A getter without a setter makes the property read-only: assigning to it throws a TypeError in strict code.\n\n## Private fields\n\n`#name` fields are truly private: `acct.#balance` outside the class is a **SyntaxError**, and they never show up in `Object.keys`, `JSON.stringify` or the console's property list. `#balance in obj` (inside the class) checks whether an object is a real instance. The older convention, a leading underscore (`_balance`), is only a naming hint.\n\n## Inheritance: extends and super\n\n```js\nclass Savings extends Account {\n  rate = 0.02;\n  constructor(owner, rate) {\n    super(owner);            // MUST run before any use of this\n    this.rate = rate;\n  }\n  deposit(cents) {\n    super.deposit(cents);    // call the parent's method\n    return this;\n  }\n}\n```\n\nIn a derived constructor, touching `this` before `super()` throws a ReferenceError. Order of initialisation: the parent constructor runs, then the child's fields are initialised, then the rest of the child constructor. `new Savings('a') instanceof Account` is true.\n\n## Composition over inheritance\n\nDeep hierarchies make every change risky: a child depends on its parent's internals. Prefer composing small objects (\"an Order HAS a PriceCalculator\") and keep inheritance for genuine \"is-a\" relationships with stable parents, such as custom Error subclasses (topic 10).\n\n## Serialising instances\n\n`JSON.stringify(acct)` includes only own enumerable public properties: no methods, no getters, no #private fields. Give classes an explicit `toJSON()` (or map to a DTO) when they cross an API boundary, and a static `fromJSON` to rebuild them.",
+  "lesson": "## A class is a function plus a prototype\n\n```js\nclass Account {\n  #balance = 0;                 // private field: only code in this class body can touch it\n  static count = 0;             // on the class, not on instances\n\n  constructor(owner) {\n    this.owner = owner;         // public instance property\n    Account.count++;\n  }\n  deposit(cents) {              // method: lives on Account.prototype, shared by all instances\n    if (cents <= 0) throw new RangeError('deposit must be positive');\n    this.#balance += cents;\n    return this;\n  }\n  get balance() { return this.#balance; }   // read like a property\n  static open(owner) { return new Account(owner); }\n}\n```\n\n`typeof Account` is `'function'`; methods are shared on the prototype; `Object.keys(new Account('a'))` lists only own instance properties (`owner`), never methods, statics or private fields.\n\nUnlike an ordinary function, a class cannot be called without `new`: `Account('a')` throws. `count` and `open` are statics, so `Account.open('a')` works while `acct.open` is undefined. `acct instanceof Account` is true because the instance's prototype is `Account.prototype`.\n\n## Class rules that bite\n\n- Classes are **not hoisted** like functions: using one before its declaration is a ReferenceError (temporal dead zone).\n- Class bodies are always **strict mode**.\n- Methods are **not bound**: `const d = acct.deposit; d(5)` throws, because `this` is undefined (topic 04).\n- A getter without a setter makes the property read-only: assigning to it throws a TypeError in strict code.\n\n## Private fields\n\n`#name` fields are truly private: `acct.#balance` outside the class is a **SyntaxError**, and they never show up in `Object.keys`, `JSON.stringify` or a `for...in` loop (browser DevTools can still display them while debugging). `#balance in obj` (inside the class) checks whether an object is a real instance. The older convention, a leading underscore (`_balance`), is only a naming hint.\n\n## Inheritance: extends and super\n\n```js\nclass Savings extends Account {\n  rate = 0.02;\n  constructor(owner, rate) {\n    super(owner);            // MUST run before any use of this\n    this.rate = rate;\n  }\n  deposit(cents) {\n    super.deposit(cents);    // call the parent's method\n    return this;\n  }\n}\n```\n\nIn a derived constructor, touching `this` before `super()` throws a ReferenceError. Order of initialisation: the parent constructor runs, then the child's fields are initialised, then the rest of the child constructor. `new Savings('a') instanceof Account` is true. Inside `deposit`, `super.deposit(cents)` runs the parent's version even though the child overrides it. The field `rate = 0.02` is set right after `super()` returns, which is why the next line of the constructor can overwrite it with the argument.\n\n## Composition over inheritance\n\nDeep hierarchies make every change risky: a child depends on its parent's internals. Prefer composing small objects (\"an Order HAS a PriceCalculator\") and keep inheritance for genuine \"is-a\" relationships with stable parents, such as custom Error subclasses (topic 10). A composed `Order` receives its calculator in the constructor (`new Order(lines, pricing)`), so a test can pass a fake `pricing` object, which a subclass cannot swap out.\n\n## Serialising instances\n\n`JSON.stringify(acct)` includes only own enumerable public properties: no methods, no getters, no #private fields. Give classes an explicit `toJSON()` (or map to a DTO) when they cross an API boundary, and a static `fromJSON` to rebuild them. `JSON.stringify` calls `toJSON()` when it exists and serialises its return value, so `toJSON() { return { owner: this.owner, balance: this.#balance }; }` exposes a private value on purpose. `JSON.parse` always returns plain objects: the prototype, and every method with it, is gone until `fromJSON` rebuilds the instance.",
   "quiz": [
     {
       "prompt": "What is `typeof Account` for `class Account {}`?",
@@ -16,7 +16,7 @@
         "`'undefined'`"
       ],
       "answer": 2,
-      "explanation": "A class is a special kind of function (a constructor) with a prototype object."
+      "explanation": "A class declaration creates a constructor function: the constructor body becomes its code, and the methods go onto `Account.prototype`. typeof has no 'class' result, and a callable object always reports 'function', never 'object'. What sets a class apart from an ordinary function is the call rule: `Account()` without `new` is refused with an error instead of running."
     },
     {
       "prompt": "In a derived class constructor, what happens if you write `this.x = 1` before `super()`?",
@@ -27,7 +27,7 @@
         "TypeError: this is undefined until super()"
       ],
       "answer": 1,
-      "explanation": "The derived instance does not exist until the parent constructor has run, so this is unusable before super()."
+      "explanation": "In a derived class the instance is created by the parent constructor, and `super()` is what runs it. Until then `this` is an uninitialised binding, much like a let in its temporal dead zone, so touching it throws; Node says \"Must call super constructor in derived class before accessing 'this'\". It never quietly works, and the error is not a TypeError, because the binding is missing rather than holding a bad value."
     },
     {
       "prompt": "`class C { f = 1; #p = 2; m() {} static s() {} }` What is `Object.keys(new C())`?",
@@ -38,7 +38,7 @@
         "`[]`"
       ],
       "answer": 0,
-      "explanation": "Only the public instance field is an own enumerable property. Methods are on the prototype, statics on the class, private fields are invisible."
+      "explanation": "Object.keys lists own enumerable string keys. A public field such as `f = 1` is defined on each instance during construction, so it qualifies. `m()` lives on the prototype and `s()` on the class itself, so neither is a key of the instance; a tempting `['f', 'm']` treats methods as own properties. `#p` is a private name, not a property at all, so no key list ever shows it."
     },
     {
       "prompt": "Accessing `obj.#p` OUTSIDE the class body that declares `#p` is...",
@@ -49,7 +49,7 @@
         "a SyntaxError"
       ],
       "answer": 3,
-      "explanation": "Private names are resolved at parse time and exist only inside their class body."
+      "explanation": "Private names are checked when the code is parsed, not when it runs. `#p` exists as a name only inside the class body that declares it, so `obj.#p` anywhere else cannot be compiled, and the whole script or module fails to load. That is why it is never a runtime TypeError or a quiet undefined. Inside the class, reading `#p` from an object that lacks it is the case that fails at runtime."
     },
     {
       "prompt": "What does `new C()` do on a line ABOVE `class C {}` in the same scope?",
@@ -60,7 +60,7 @@
         "It creates an empty object, because the class body has not run"
       ],
       "answer": 1,
-      "explanation": "Class declarations are in the temporal dead zone until their line runs."
+      "explanation": "A class declaration is hoisted the way let is: the name is registered for the whole scope but stays uninitialised until the declaration line runs. Using it earlier hits the temporal dead zone and throws, so it does not behave like a hoisted function declaration, and `new` never gets far enough to complain that C is not a constructor. No empty object is created either."
     },
     {
       "prompt": "Where does a method declared in a class body live?",
@@ -71,7 +71,7 @@
         "In a closure that each new instance creates"
       ],
       "answer": 2,
-      "explanation": "Methods are defined once on Class.prototype; arrow-function FIELDS are the ones copied per instance."
+      "explanation": "Methods written in a class body are defined once, as properties of `Class.prototype`; every instance reaches them through its prototype link, so `a.m === b.m`. The constructor does not copy them onto instances, and they are not statics: only members marked `static` live on the class itself. No per-instance closure is created. Arrow-function fields are the members that each instance gets its own copy of."
     },
     {
       "prompt": "Order of initialisation in `class B extends A { f = init(); constructor() { super(); body(); } }`?",
@@ -82,7 +82,7 @@
         "B's fields, then body(), then A's constructor"
       ],
       "answer": 0,
-      "explanation": "Derived fields are initialised right after super() returns, before the rest of the derived constructor."
+      "explanation": "`super()` runs the parent constructor A first, which creates the instance. As soon as it returns, the derived class initialises its own fields, so `init()` runs next, and only then does the rest of B's constructor reach `body()`. It is easy to assume fields come first because they are written first, but B's fields cannot run before A's constructor: there is no instance to put them on yet."
     },
     {
       "prompt": "What does `JSON.stringify(account)` include?",
@@ -93,7 +93,7 @@
         "Prototype getters and static members"
       ],
       "answer": 1,
-      "explanation": "No methods, getters, statics or private fields. Add toJSON() or map to a DTO for API output."
+      "explanation": "JSON.stringify walks the object's own enumerable string-keyed properties and serialises their values. Methods and getters live on the prototype, statics on the class, and #private fields are not properties, so none of them is visited. An own property holding a function, such as an arrow field, is skipped rather than turned into source text. To control the output, give the class a `toJSON()` method or map it to a plain DTO."
     },
     {
       "prompt": "A class has `get balance()` but no setter. In strict code, `acct.balance = 5` ...",
@@ -104,7 +104,7 @@
         "throws a TypeError"
       ],
       "answer": 3,
-      "explanation": "A getter-only accessor cannot be assigned; class bodies and modules are strict, so the assignment throws."
+      "explanation": "A getter without a setter defines an accessor property whose set part is missing. Assigning to it does not create an own property, because the accessor found on the prototype handles the assignment, and there is no setter to call. Class bodies and modules are strict, and strict code reports the failed assignment with an error. Only sloppy code would ignore it silently and keep the old value."
     },
     {
       "prompt": "Which situation suits inheritance best?",
@@ -115,7 +115,7 @@
         "Adding the same logging to every class in the app"
       ],
       "answer": 1,
-      "explanation": "Inheritance couples a child to its parent. Use composition for sharing behaviour; extend for true specialisation. A custom Error subclass is a typical example."
+      "explanation": "Inheritance ties the child to the parent's internals, so it pays off only when the child really is a kind of the parent and the parent rarely changes, as with `class ValidationError extends Error`. A helper shared between Order and User belongs in a module function, borrowing methods from an unrelated class calls for composition, and logging in every class is a cross-cutting concern for a wrapper or middleware."
     }
   ],
   "flashcards": [
@@ -187,7 +187,7 @@
           "code": "const a = new mod.Account('bo').deposit(750);\nconst json = JSON.parse(JSON.stringify(a));\nassert.deepEqual(json, { owner: 'bo', balance: 750 });\nconst b = mod.Account.fromJSON(json);\nassert.ok(b instanceof mod.Account);\nassert.equal(b.balance, 750);\nassert.equal(b.owner, 'bo');"
         }
       ],
-      "explanation": "A `#balance` field holds the state; every mutation goes through methods that validate first:\n\n```js\nwithdraw(cents) {\n  if (!amountOk(cents)) throw new RangeError('withdrawal must be a positive whole number of cents');\n  if (cents > this.#balance) throw new RangeError('insufficient funds');\n  this.#balance -= cents;\n  return this;\n}\n```\n\nBecause `#balance` is private, `JSON.stringify` would drop it; `toJSON` states the API shape explicitly, and `fromJSON` rebuilds through `deposit`, so even a restored balance passes the same validation.",
+      "explanation": "A `#balance` field holds the state; every mutation goes through methods that validate first:\n\n```js\nwithdraw(cents) {\n  if (!amountOk(cents)) throw new RangeError('withdrawal must be a positive whole number of cents');\n  if (cents > this.#balance) throw new RangeError('insufficient funds');\n  this.#balance -= cents;\n  return this;\n}\n```\n\n`amountOk` needs `Number.isInteger`, not just `c > 0`: with the shorter check `deposit(2.5)` is accepted and the test \"bad amounts throw RangeError\" fails. The overdraft guard must be `>`, not `>=`, or withdrawing the whole balance is refused and \"overdrawing throws and leaves the balance alone (boundary)\" fails. Because `#balance` is private, `JSON.stringify` would drop it; without `toJSON` the output is `{ owner }` only, and \"toJSON / fromJSON round-trip\" fails. `fromJSON` rebuilds through `deposit`, so a restored balance passes the same validation.",
       "hints": [
         "A public field would let any caller write the balance. JavaScript has a language-level private field syntax for this.",
         "Store the balance in a language-level private field, validate every amount as a positive whole number before changing it, expose it through a read-only accessor, and write the JSON shape out and back in yourself.",
@@ -229,7 +229,7 @@
           "code": "const a = new mod.Account('bo').deposit(750);\nconst json = JSON.parse(JSON.stringify(a));\nassert.deepEqual(json, { owner: 'bo', balance: 750 });\nconst b = mod.Account.fromJSON(json);\nassert.ok(b instanceof mod.Account);\nassert.equal(b.balance, 750);\nassert.equal(b.owner, 'bo');"
         }
       ],
-      "explanation": "`this.balance` is a public own property, so any caller can write `acct.balance = 1e9` and skip every check in `deposit` and `withdraw`; the test that the balance is not an own property catches it. Store it in `#balance` and add `get balance()`, so the only way to change it is through the validating methods.",
+      "explanation": "`this.balance` is a public own property, so any caller can write `acct.balance = 1e9` and skip every check in `deposit` and `withdraw`. The behaviour tests still pass, because the methods themselves validate correctly; only \"the balance is not an own property\" fails, since `Object.keys` lists `balance` next to `owner`. Store the value in `#balance` and add `get balance()` without a setter, so reading still works but the only way to change it is through the validating methods. `toJSON` then has to read `this.#balance`.",
       "hints": [
         "Try account.balance = 1000000 from outside the class. What stops it?",
         "A public field can be written by anyone, so the validation in deposit and withdraw is optional.",

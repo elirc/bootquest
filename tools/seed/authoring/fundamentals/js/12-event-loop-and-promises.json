@@ -5,7 +5,7 @@
   "title": "The event loop & promises",
   "level": "intermediate",
   "summary": "One thread, a call stack and queues: tasks versus microtasks, where process.nextTick fits, promise states and chaining, and why CPU-heavy work freezes a Node server.",
-  "lesson": "## One thread, many waiting jobs\n\nJavaScript runs your code on a single thread with a **call stack**. Slow work (timers, file and network I/O) is handed to the runtime, and its callback is queued for later. The **event loop** repeatedly takes the next job and runs it to completion; nothing interrupts a running function.\n\nTwo kinds of queue matter:\n\n- **Tasks** (macrotasks): timer callbacks, I/O callbacks, `setImmediate`, UI events.\n- **Microtasks**: promise reactions (`then`/`catch`/`finally` callbacks, the code after an `await`) and `queueMicrotask`.\n\nAfter each task, the **entire microtask queue is drained** before the next task starts. Node adds `process.nextTick`, a queue that runs ahead of promise microtasks.\n\n```js\n// a CommonJS script\nsetTimeout(() => log('timeout'), 0);\nPromise.resolve().then(() => log('promise'));\nprocess.nextTick(() => log('nextTick'));\nlog('sync');\n// sync, nextTick, promise, timeout\n```\n\nSynchronous code always finishes first; microtasks run before any timer. Two caveats: at the top level of an **ES module** the module body itself runs as part of a promise job, so promise callbacks queued there can run before nextTick callbacks; and in the main module the order of `setTimeout(fn, 0)` versus `setImmediate(fn)` is not guaranteed (inside an I/O callback, setImmediate always runs first). Do not write code that depends on those orders.\n\n## Promises\n\nA promise is **pending**, then settles exactly once: **fulfilled** with a value or **rejected** with a reason.\n\n- The executor in `new Promise((resolve, reject) => ...)` runs **synchronously**, immediately.\n- `then` returns a NEW promise. Returning a value fulfils it; returning a promise makes it follow that promise (flattening); **throwing** rejects it.\n- `catch(fn)` is `then(undefined, fn)`; after a catch that returns normally, the chain continues fulfilled.\n- `Promise.resolve(x)` / `Promise.reject(e)` create settled promises.\n\n```js\nfetchUser(id)\n  .then((u) => fetchOrders(u.id))   // flattened: the next then gets the orders\n  .then((orders) => orders.length)\n  .catch((err) => 0)                // any failure above lands here\n```\n\n`async` functions always return a promise; `await p` pauses the function (not the thread) and resumes it in a microtask when `p` settles.\n\n## Blocking the loop\n\nBecause jobs run to completion, a CPU-heavy loop (parsing a 200 MB JSON, a synchronous bcrypt, an accidental O(n^2) over a big array) stops EVERYTHING: a 10 ms timer waits until the loop is free, and a web server answers no other request meanwhile. Fixes: async/streaming APIs, chunking work with `setImmediate`, or moving it to a worker thread.\n\n## Starvation\n\nMicrotasks that keep queueing microtasks (or a recursive `process.nextTick`) prevent the loop from ever reaching timers and I/O. Recursion that should yield must go through a task (`setImmediate`, `setTimeout`).",
+  "lesson": "## One thread, many waiting jobs\n\nJavaScript runs your code on a single thread with a **call stack**. Slow work (timers, file and network I/O) is handed to the runtime, and its callback is queued for later. The **event loop** repeatedly takes the next job and runs it to completion; nothing interrupts a running function.\n\nTwo kinds of queue matter:\n\n- **Tasks** (macrotasks): timer callbacks, I/O callbacks, `setImmediate`, UI events.\n- **Microtasks**: promise reactions (`then`/`catch`/`finally` callbacks, the code after an `await`) and `queueMicrotask`.\n\nAfter each task, the **entire microtask queue is drained** before the next task starts. Node adds `process.nextTick`, a queue that runs ahead of promise microtasks.\n\n```js\n// a CommonJS script\nsetTimeout(() => log('timeout'), 0);\nPromise.resolve().then(() => log('promise'));\nprocess.nextTick(() => log('nextTick'));\nlog('sync');\n// sync, nextTick, promise, timeout\n```\n\nSynchronous code always finishes first; microtasks run before any timer. Two caveats: at the top level of an **ES module** the module body itself runs as part of a promise job, so promise callbacks queued there can run before nextTick callbacks; and in the main module the order of `setTimeout(fn, 0)` versus `setImmediate(fn)` is not guaranteed (inside an I/O callback, setImmediate always runs first). Do not write code that depends on those orders.\n\n## Promises\n\nA promise is **pending**, then settles exactly once: **fulfilled** with a value or **rejected** with a reason.\n\n- The executor in `new Promise((resolve, reject) => ...)` runs **synchronously**, immediately.\n- `then` returns a NEW promise. Returning a value fulfils it; returning a promise makes it follow that promise (flattening); **throwing** rejects it.\n- `catch(fn)` is `then(undefined, fn)`; after a catch that returns normally, the chain continues fulfilled.\n- `Promise.resolve(x)` / `Promise.reject(e)` create settled promises.\n\n```js\nfetchUser(id)\n  .then((u) => fetchOrders(u.id))   // flattened: the next then gets the orders\n  .then((orders) => orders.length)\n  .catch((err) => 0)                // any failure above lands here\n```\n\n`async` functions always return a promise; `await p` pauses the function (not the thread) and resumes it in a microtask when `p` settles.\n\n## Blocking the loop\n\nBecause jobs run to completion, a CPU-heavy loop (parsing a 200 MB JSON, a synchronous bcrypt, an accidental O(n^2) over a big array) stops EVERYTHING: a 10 ms timer waits until the loop is free, and a web server answers no other request meanwhile. Fixes: async/streaming APIs, chunking work with `setImmediate`, or moving it to a worker thread.\n\n## Starvation\n\nMicrotasks that keep queueing microtasks (or a recursive `process.nextTick`) prevent the loop from ever reaching timers and I/O. Recursion that should yield must go through a task (`setImmediate`, `setTimeout`).\n\nA concrete case: a function that schedules itself with `Promise.resolve().then(step)` a million times runs all million steps before a `setTimeout(fn, 0)` queued at the start gets its turn, and an HTTP server stays deaf for that whole time. The same loop written with `setImmediate(step)` lets timers and I/O run between iterations.",
   "quiz": [
     {
       "prompt": "In a CommonJS script: `setTimeout(() => log(\"T\"), 0); Promise.resolve().then(() => log(\"P\")); log(\"S\");` What is the order?",
@@ -16,7 +16,7 @@
         "P S T"
       ],
       "answer": 2,
-      "explanation": "Synchronous code first, then the microtask queue (the promise reaction), then the next task (the timer)."
+      "explanation": "The whole script is one task, so the synchronous `log` call runs to completion before anything queued can start. When the script ends, Node drains the microtask queue, which holds the promise reaction, and only then reaches the timers phase for the 0 ms timeout. A 0 ms delay means as soon as a task slot is free; reading it as \"before pending promise work\" is a common mistake."
     },
     {
       "prompt": "When does the executor function passed to `new Promise(executor)` run?",
@@ -27,7 +27,7 @@
         "After the current task, like a setTimeout callback"
       ],
       "answer": 0,
-      "explanation": "Only the reactions (then/catch callbacks) are asynchronous; the executor runs right away."
+      "explanation": "The constructor calls the executor before it returns, so `new Promise(() => log('a')); log('b')` logs a, then b. Only the reactions registered with `then` or `catch` are deferred to a microtask. Promises are also eager rather than lazily started: the work begins whether or not anyone calls `then`, which is why creating the promise for an HTTP request already sends it."
     },
     {
       "prompt": "What does `Promise.resolve(1).then(() => { throw new Error(\"x\"); })` produce?",
@@ -49,7 +49,7 @@
         "The original value"
       ],
       "answer": 1,
-      "explanation": "Returning a promise from then makes the chain adopt its eventual value: promises flatten."
+      "explanation": "When a `then` callback returns a thenable, the promise that `then` created does not fulfil with that object. It adopts the returned promise's state and waits for it to settle. So the next callback gets the number itself, never a promise object, and `undefined` would need a callback with no return. This flattening is what lets `fetchUser(id).then((u) => fetchOrders(u.id))` read as a sequence."
     },
     {
       "prompt": "In Node, which runs first after the current synchronous code in a CommonJS script: a `process.nextTick` callback or a promise `then` callback?",
@@ -71,7 +71,7 @@
         "At 10 ms, on a separate timer thread"
       ],
       "answer": 2,
-      "explanation": "Callbacks run only when the call stack is empty; a busy loop delays every timer and request."
+      "explanation": "A timer's delay is a minimum, not an exact time. After 10 ms the callback becomes eligible, but running JavaScript is never preempted: the busy loop keeps the only thread until it returns. The event loop checks expired timers only after that, so the callback runs late rather than being skipped, and no separate thread runs it in parallel. One slow loop delays every timer and request in the process."
     },
     {
       "prompt": "What does `await somePromise` pause?",
@@ -82,7 +82,7 @@
         "Every async function in the same file"
       ],
       "answer": 1,
-      "explanation": "await suspends that function and resumes it in a microtask when the promise settles. The event loop keeps running other work meanwhile."
+      "explanation": "`await` turns the rest of the function into a promise reaction. The function returns to its caller at that point, and its remaining code is queued as a microtask once the promise settles. The thread is free meanwhile, so the event loop keeps running timers, I/O callbacks and other requests, and other async functions in the same file carry on independently. Nothing blocks the process."
     },
     {
       "prompt": "What does `.catch((err) => 0)` do to the rest of the chain?",
@@ -93,7 +93,7 @@
         "The chain continues rejected with 0"
       ],
       "answer": 0,
-      "explanation": "A catch that returns normally recovers: subsequent thens see its return value."
+      "explanation": "`catch(fn)` is `then(undefined, fn)`, and like any `then` it returns a new promise that is settled by what the handler does. A handler that returns normally marks the failure as handled and fulfils that new promise. To keep the chain failing, the handler must rethrow or return `Promise.reject(err)`. Later `then` callbacks are not skipped; they run with the recovered value instead of err."
     },
     {
       "prompt": "Which of these is a MICROTASK?",
@@ -104,7 +104,7 @@
         "An incoming HTTP request handler"
       ],
       "answer": 2,
-      "explanation": "Promise reactions and queueMicrotask callbacks are microtasks; timers, immediates and I/O callbacks are tasks."
+      "explanation": "Microtasks are the jobs the engine itself queues: promise reactions, the continuation after an `await`, and `queueMicrotask` callbacks, all drained right after the current task. Work the runtime schedules from outside is a task that waits for its own turn of the event loop: a setTimeout with no delay, a setImmediate callback, and the handler for an incoming HTTP request."
     },
     {
       "prompt": "Your Node API becomes unresponsive while one request hashes a password with a synchronous function. Why?",
@@ -186,7 +186,7 @@
           "code": "const real = globalThis.clearTimeout;\nlet cleared = 0;\nglobalThis.clearTimeout = (t) => { cleared++; return real(t); };\ntry {\n  await mod.withTimeout(Promise.resolve(1), 1000);\n} finally {\n  globalThis.clearTimeout = real;\n}\nassert.ok(cleared >= 1, 'clearTimeout was never called');"
         }
       ],
-      "explanation": "`Promise.race` settles with whichever promise settles first; `finally` runs either way and clears the timer:\n\n```js\nlet timer;\nconst timeout = new Promise((_, reject) => {\n  timer = setTimeout(() => {\n    const err = new Error(`timed out after ${ms}ms`);\n    err.name = 'TimeoutError';\n    reject(err);\n  }, ms);\n});\nreturn Promise.race([promise, timeout]).finally(() => clearTimeout(timer));\n```\n\nWithout the `clearTimeout`, a server making thousands of fast calls keeps thousands of pointless timers alive (and a short script cannot exit until they fire).",
+      "explanation": "`Promise.race` settles with whichever promise settles first; `finally` runs either way and clears the timer:\n\n```js\nlet timer;\nconst timeout = new Promise((_, reject) => {\n  timer = setTimeout(() => {\n    const err = new Error(`timed out after ${ms}ms`);\n    err.name = 'TimeoutError';\n    reject(err);\n  }, ms);\n});\nreturn Promise.race([promise, timeout]).finally(() => clearTimeout(timer));\n```\n\nWithout the `clearTimeout`, a server making thousands of fast calls keeps thousands of pointless timers alive (and a short script cannot exit until they fire).\n\nTwo plausible slips and the tests that catch them. Rejecting with a plain `new Error(...)` and not setting `name` looks fine in a demo, but the test \"a slow promise loses with a TimeoutError\" fails, and callers cannot tell a timeout from any other failure. Returning the bare race without `.finally` makes \"the timer is cleared once the race is decided\" fail.",
       "hints": [
         "You cannot stop the original promise, but you can race it against a second promise that rejects later.",
         "Create a second promise that rejects with a named timeout error after the delay, let it compete with the original, and cancel the timer however the contest ends.",
@@ -227,7 +227,7 @@
           "code": "const real = globalThis.clearTimeout;\nlet cleared = 0;\nglobalThis.clearTimeout = (t) => { cleared++; return real(t); };\ntry {\n  await mod.withTimeout(Promise.resolve(1), 1000);\n} finally {\n  globalThis.clearTimeout = real;\n}\nassert.ok(cleared >= 1, 'clearTimeout was never called');"
         }
       ],
-      "explanation": "The race settles correctly, but the timer is never cleared, so every fast call leaves a pending `setTimeout` behind: thousands of them on a busy server, and a script that cannot exit until they fire. Add `.finally(() => clearTimeout(timer))`, which runs on either outcome.",
+      "explanation": "The race settles correctly, but the timer is never cleared, so every fast call leaves a pending `setTimeout` behind: thousands of them on a busy server, and a script that cannot exit until they fire. Add `.finally(() => clearTimeout(timer))`, which runs on either outcome.\n\nOnly the test \"the timer is cleared once the race is decided\" fails on the starter. The other four check values and rejection reasons, which the bare race already gets right; that test instead wraps `globalThis.clearTimeout` and counts the calls. Use `finally` rather than clearing inside a `then` callback: a `then` without a rejection handler skips the cleanup when the promise rejects.",
       "hints": [
         "After a fast promise wins, is the timeout's setTimeout still pending?",
         "The race is decided, but the losing timer keeps the event loop busy until it fires.",

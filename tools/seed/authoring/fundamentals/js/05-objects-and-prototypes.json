@@ -5,7 +5,7 @@
   "title": "Objects & prototypes",
   "level": "intermediate",
   "summary": "Own versus inherited properties, the prototype chain, copying objects (shallow, structuredClone, JSON), getters, and why merging untrusted JSON can pollute every object.",
-  "lesson": "## Objects are bags of properties with a parent\n\nEvery object has a hidden link to another object, its **prototype**. Reading a property that the object does not have walks up that chain:\n\n```js\nconst base = { greet() { return 'hi'; } };\nconst user = Object.create(base);   // user's prototype is base\nuser.name = 'Ana';\n\nuser.greet()               // 'hi'   found on base\nObject.keys(user)          // ['name']  own, enumerable keys only\nObject.hasOwn(user, 'greet') // false\n'greet' in user            // true   (in walks the chain)\n```\n\nArrays get `map` from `Array.prototype`, plain objects get `toString` from `Object.prototype`: `Object.getPrototypeOf([]) === Array.prototype`. `Object.create(null)` makes an object with no prototype at all (no `toString`), a safe dictionary.\n\n**Writing** never walks the chain: `user.greet = ...` creates an OWN property that **shadows** the inherited one; `base` is untouched.\n\n## Own versus inherited, in practice\n\n- `Object.keys`, `Object.entries`, `JSON.stringify` and spread see only own enumerable properties.\n- `for...in` also visits **inherited** enumerable properties, which is why it is rarely what you want.\n- Methods defined on a prototype (or in a class body) are shared: one function object for every instance.\n\n## Getters and setters\n\n```js\nconst person = {\n  first: 'Ada', last: 'Lovelace',\n  get full() { return this.first + ' ' + this.last; },\n};\nperson.full   // 'Ada Lovelace': read like a property, computed on every read\n```\n\n## Copying objects\n\n- **Shallow**: `{ ...obj }` or `Object.assign({}, obj)` copy own enumerable properties one level deep; nested objects are shared.\n- **JSON round trip**: `JSON.parse(JSON.stringify(obj))` is deep but lossy: Dates become strings, `undefined` properties vanish, `NaN` becomes `null`, Maps become `{}`.\n- **structuredClone(obj)**: deep, keeps Dates, Maps, Sets and cycles; throws on functions.\n\n## Prototype pollution\n\n`JSON.parse('{\"__proto__\": {\"admin\": true}}')` creates an object with an OWN key named `\"__proto__\"`. A naive recursive merge then does `target['__proto__']`, which is `Object.prototype`, and copies `admin: true` into it. From then on **every** object in the process has `admin === true`. This is a real class of security bug in config loaders and deep-merge utilities. Defences: skip the keys `__proto__`, `constructor` and `prototype` when merging untrusted data, copy only own properties, or merge into `Object.create(null)` objects.\n\n## Equality and identity\n\nObjects compare by reference. Two literals with identical contents are never `===`. To compare by value you compare fields (or serialise in a stable order). Keep that in mind for caching, React dependencies and `includes` on arrays of objects.",
+  "lesson": "## Objects are bags of properties with a parent\n\nEvery object has a hidden link to another object, its **prototype**. Reading a property that the object does not have walks up that chain:\n\n```js\nconst base = { greet() { return 'hi'; } };\nconst user = Object.create(base);   // user's prototype is base\nuser.name = 'Ana';\n\nuser.greet()               // 'hi'   found on base\nObject.keys(user)          // ['name']  own, enumerable keys only\nObject.hasOwn(user, 'greet') // false\n'greet' in user            // true   (in walks the chain)\n```\n\nArrays get `map` from `Array.prototype`, plain objects get `toString` from `Object.prototype`: `Object.getPrototypeOf([]) === Array.prototype`. `Object.create(null)` makes an object with no prototype at all (no `toString`), a safe dictionary.\n\n**Writing** never walks the chain: `user.greet = ...` creates an OWN property that **shadows** the inherited one; `base` is untouched.\n\n## Own versus inherited, in practice\n\n- `Object.keys`, `Object.entries`, `JSON.stringify` and spread see only own enumerable properties.\n- `for...in` also visits **inherited** enumerable properties, which is why it is rarely what you want.\n- Methods defined on a prototype (or in a class body) are shared: one function object for every instance.\n\n`Object.hasOwn(obj, key)` is the modern own-key check. It replaces `obj.hasOwnProperty(key)`, which throws a TypeError on an `Object.create(null)` dictionary because that object has no such method.\n\n## Getters and setters\n\n```js\nconst person = {\n  first: 'Ada', last: 'Lovelace',\n  get full() { return this.first + ' ' + this.last; },\n};\nperson.full   // 'Ada Lovelace': read like a property, computed on every read\n```\n\nA getter runs its body on each read, so after `person.first = 'Bea'` the next `person.full` is 'Bea Lovelace'. Nothing is cached: a slow getter costs its full price every time. A setter, `set full(v) { ... }`, runs on assignment, which is the place to validate or split a value. A getter without a setter is read-only, and in strict code assigning to `person.full` throws a TypeError. `JSON.stringify` calls getters and stores their values as plain data.\n\n## Copying objects\n\n- **Shallow**: `{ ...obj }` or `Object.assign({}, obj)` copy own enumerable properties one level deep; nested objects are shared.\n- **JSON round trip**: `JSON.parse(JSON.stringify(obj))` is deep but lossy: Dates become strings, `undefined` properties vanish, `NaN` becomes `null`, Maps become `{}`.\n- **structuredClone(obj)**: deep, keeps Dates, Maps, Sets and cycles; throws on functions.\n\n## Prototype pollution\n\n`JSON.parse('{\"__proto__\": {\"admin\": true}}')` creates an object with an OWN key named `\"__proto__\"`. A naive recursive merge then does `target['__proto__']`, which is `Object.prototype`, and copies `admin: true` into it. From then on **every** object in the process has `admin === true`. This is a real class of security bug in config loaders and deep-merge utilities. Defences: skip the keys `__proto__`, `constructor` and `prototype` when merging untrusted data, copy only own properties, or merge into `Object.create(null)` objects.\n\n## Equality and identity\n\nObjects compare by reference. Two literals with identical contents are never `===`. To compare by value you compare fields (or serialise in a stable order). Keep that in mind for caching, React dependencies and `includes` on arrays of objects: `[{ id: 1 }].includes({ id: 1 })` is false, and `new Set([{ id: 1 }, { id: 1 }])` keeps both entries because it also compares by reference.",
   "quiz": [
     {
       "prompt": "`const a = { x: 1 }; const b = Object.create(a);` What are `b.x` and `Object.keys(b)`?",
@@ -16,7 +16,7 @@
         "undefined and ['x']"
       ],
       "answer": 2,
-      "explanation": "b inherits x through its prototype, but Object.keys lists only own properties."
+      "explanation": "Object.create(a) makes an empty object whose prototype is a. Reading `b.x` misses on b, follows the prototype link and finds 1 on a, so it is not undefined. Object.keys reports only b's own enumerable keys, and b has none, so the list is empty. Expecting `['x']` confuses what a read can reach with what the object owns; `'x' in b` is the check that walks the chain."
     },
     {
       "prompt": "With the same objects, `b.x = 2`. What is `a.x`?",
@@ -27,7 +27,7 @@
         "It throws"
       ],
       "answer": 0,
-      "explanation": "Assignment creates an own property on b that shadows the inherited one; the prototype is not changed."
+      "explanation": "Assignment does not walk the prototype chain the way a read does: `b.x = 2` creates an own property x on b that shadows the inherited one. a is untouched, so 2 would need writes to travel up the chain. Nothing throws, because a's x is an ordinary writable data property. The exceptions are an inherited setter, which runs instead, and an inherited read-only x, which blocks the write."
     },
     {
       "prompt": "Which one also visits INHERITED enumerable properties?",
@@ -38,7 +38,7 @@
         "`Object.assign({}, obj)`"
       ],
       "answer": 1,
-      "explanation": "for...in walks the prototype chain. keys, entries, spread and JSON.stringify see own properties only."
+      "explanation": "for...in enumerates the object's own enumerable string keys and then those of every prototype up the chain, skipping names that are shadowed. Object.keys and Object.entries stop at own properties, and Object.assign copies only own enumerable ones, so none of them sees an inherited key. That is why a for...in loop is usually paired with `Object.hasOwn`, or replaced by `Object.keys(obj)`."
     },
     {
       "prompt": "What does `JSON.parse(JSON.stringify({ d: new Date(0), u: undefined }))` produce?",
@@ -49,7 +49,7 @@
         "`{ d: 0 }`"
       ],
       "answer": 1,
-      "explanation": "Dates serialise to ISO strings and undefined properties are dropped, so the round trip is lossy."
+      "explanation": "JSON has no Date type, so `JSON.stringify` calls the Date's `toJSON` method, which returns its ISO string, and parsing gives back that string rather than a Date. JSON has no undefined either: an object property whose value is undefined is left out entirely, not written as null. Only inside an array does undefined become null. So the round trip is a lossy deep copy."
     },
     {
       "prompt": "Which copies a value deeply while keeping Dates and Maps intact?",
@@ -60,7 +60,7 @@
         "`JSON.parse(JSON.stringify(obj))`"
       ],
       "answer": 2,
-      "explanation": "structuredClone is a deep copy that supports Date, Map, Set and cycles. It throws on functions."
+      "explanation": "structuredClone uses the structured clone algorithm, the one behind postMessage: it walks the whole graph and recreates Dates, Maps, Sets and even cycles as new objects. Spread and Object.assign copy only the top level, so nested objects stay shared. The JSON round trip is deep but turns a Date into a string and a Map into `{}`. Functions cannot be cloned and throw a DataCloneError."
     },
     {
       "prompt": "Why can a recursive merge of `JSON.parse('{\"__proto__\":{\"admin\":true}}')` affect every object?",
@@ -82,7 +82,7 @@
         "`'undefined'`"
       ],
       "answer": 3,
-      "explanation": "An object created with a null prototype inherits nothing, not even toString."
+      "explanation": "Object.create(null) makes an object whose prototype is null, so a property lookup has nowhere to go after the object itself. `toString` normally comes from Object.prototype; here it is missing, and a missing property reads as undefined. The read itself does not throw. Converting the object to a string does: `String(obj)` or a template literal fails with a TypeError, because no conversion method is found."
     },
     {
       "prompt": "`const o = Object.assign({}, a)` where `a.n` is a nested object. Then `o.n.x = 9`. Does `a.n.x` change?",
@@ -115,7 +115,7 @@
         "One, on the Person constructor"
       ],
       "answer": 1,
-      "explanation": "Class methods live on Class.prototype and are shared by every instance (arrow class fields, by contrast, are per instance)."
+      "explanation": "Methods written in a class body are defined once, on `Person.prototype`, and each instance finds them through its prototype link, so `p1.greet === p2.greet` is true. The function exists as soon as the class is evaluated, not on first call. It is not stored on the constructor function itself: that is where static methods go. Arrow class fields are the exception: they are created again for each instance."
     }
   ],
   "flashcards": [
@@ -194,7 +194,7 @@
           "code": "assert.deepEqual(mod.deepMerge({ cache: { ttl: 5 } }, { cache: null }), { cache: null });"
         }
       ],
-      "explanation": "Copy own keys only, skip the three dangerous names, and recurse only when both sides are plain objects. Recursing into `{}` for an override-only object also clones it, so the result never shares nested objects with the inputs:\n\n```js\nfor (const src of [base, override]) {\n  for (const key of Object.keys(src)) {\n    if (FORBIDDEN.has(key)) continue;\n    const value = src[key];\n    out[key] = isPlain(out[key]) && isPlain(value) ? deepMerge(out[key], value)\n             : isPlain(value) ? deepMerge({}, value) : value;\n  }\n}\n```\n\n`Object.keys` returns the parsed own `\"__proto__\"` key, which is why the explicit skip is needed: `out['__proto__'] = ...` would set the result's prototype.",
+      "explanation": "Copy own keys only, skip the three dangerous names, and recurse only when both sides are plain objects. Recursing into `{}` for a one-sided plain object also clones it, so the result never shares nested objects with the inputs:\n\n```js\nfor (const src of [base, override]) {\n  for (const key of Object.keys(src)) {\n    if (FORBIDDEN.has(key)) continue;\n    const value = src[key];\n    out[key] = isPlain(out[key]) && isPlain(value) ? deepMerge(out[key], value)\n             : isPlain(value) ? deepMerge({}, value) : value;\n  }\n}\n```\n\n`Object.keys` returns the parsed own `\"__proto__\"` key, which is why the explicit skip is needed: `out['__proto__'] = ...` would set the result's prototype. The plain-object test needs both guards. Without `!Array.isArray(v)` two arrays are merged index by index, and the test \"arrays are replaced, not merged\" fails. Without `v !== null`, a null override is treated as an object, `Object.keys(null)` throws, and \"null in the override replaces a nested object\" fails.",
       "hints": [
         "Own keys from JSON can include \"__proto__\", and assigning or recursing through that key reaches Object.prototype.",
         "Build a fresh result, copy the base's own keys and then the override's, skip the prototype-related key names entirely, and recurse only when both sides hold plain objects, never arrays or null.",
@@ -243,7 +243,7 @@
           "code": "assert.deepEqual(mod.deepMerge({ cache: { ttl: 5 } }, { cache: null }), { cache: null });"
         }
       ],
-      "explanation": "Without the `FORBIDDEN` check, a parsed `\"__proto__\"` key is copied with `out['__proto__'] = ...`, which sets the result's PROTOTYPE instead of an own property, and `constructor` / `prototype` keys get through as well. Skipping those three names before the copy closes the prototype-pollution hole; everything else in the merge was already right.",
+      "explanation": "Without the `FORBIDDEN` check, a parsed `\"__proto__\"` key is copied with `out['__proto__'] = ...`. That assignment goes through the `__proto__` setter and sets the result's PROTOTYPE instead of creating an own property, so `out.admin` reads true through the new prototype and the test \"a __proto__ key from JSON pollutes nothing\" fails. The `constructor` key gets through as well, and \"constructor and prototype keys are skipped\" fails. Skipping those three names before the copy closes the hole; everything else in the merge was already right.",
       "hints": [
         "Run the __proto__ test: what does the merged object's prototype look like?",
         "JSON.parse creates an own key named __proto__, and Object.keys returns it like any other key.",

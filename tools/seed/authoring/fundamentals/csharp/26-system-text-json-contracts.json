@@ -1,0 +1,199 @@
+{
+  "format": "fundamentals-authoring@1",
+  "track": "csharp",
+  "topic": "26-system-text-json-contracts",
+  "title": "System.Text.Json as an API contract",
+  "level": "advanced",
+  "summary": "Why a DTO and not the entity is the contract, naming policies and [JsonPropertyName], case-insensitive reading, refusing unknown members, required members and null handling, enums as names, numbers and dates that survive the round trip, and polymorphic DTOs with [JsonDerivedType].",
+  "lesson": "## The DTO is the contract, not the entity\n\nClients depend on the exact JSON you send and accept. Serializing an EF entity ties that JSON to the database: every public property goes out (a `PasswordHash` included), a request bound to the entity sets any property the client names (`\"isAdmin\": true`, which is over-posting), and a navigation property that points back to its parent throws `JsonException: A possible object cycle was detected`. A DTO lists the fields of the contract and nothing else, so a renamed column stays an internal change. Map the entity to the DTO in one place and test the DTO's JSON.\n\n## Names: naming policy and [JsonPropertyName]\n\n`new JsonSerializerOptions()` writes names as declared (`OrderId`) and reads them case-sensitively, so `{\"orderId\":7}` binds nothing and `OrderId` silently keeps its default. `JsonSerializerDefaults.Web` switches on camelCase names, case-insensitive reading and numbers sent as strings; ASP.NET Core uses those defaults for minimal APIs and controllers, but a console tool or a test that creates its own options does not. A `[JsonPropertyName(\"placed_at\")]` is the final name in both directions: the naming policy applies only to properties without one.\n\n```csharp\nvar json = new JsonSerializerOptions(JsonSerializerDefaults.Web);   // create once, reuse everywhere\n```\n\n## Reading: unknown, required and null members\n\nBy default a member the DTO does not have is skipped silently, which also hides a typo such as `custmer`. Set `UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow` (or put `[JsonUnmappedMemberHandling]` on the type) to get a `JsonException` instead. A C# `required` member, or one marked `[JsonRequired]`, must appear in the JSON, while a missing plain `int` simply stays 0. `required` does not reject an explicit `null`: `{\"customer\":null}` is accepted for a `required string` until you set `RespectNullableAnnotations = true`.\n\n## Writing: nulls, defaults and enums\n\n`DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull` leaves out null properties. `WhenWritingDefault` also drops 0, `false` and the enum member with value 0, so a client cannot tell \"zero items\" from \"unknown\". Enums are written as numbers unless you add `JsonStringEnumConverter`, used by the `dotnet-stripe` sample's `ConfigureHttpJsonOptions`. The converter reads names case-insensitively and refuses an unknown name, but it still accepts any number, 99 included, unless you pass `allowIntegerValues: false`:\n\n```csharp\njson.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase, allowIntegerValues: false));\n```\n\n## Numbers and dates\n\n`decimal` keeps its scale: `12.50m` is written as `12.50` and reads back exactly. A `long` such as 9007199254740993 is written with every digit, but a browser's `JSON.parse` turns it into a double and gets 9007199254740992, because a double holds every integer only up to 2^53. Send large ids as strings, or set `NumberHandling = JsonNumberHandling.WriteAsString`. Dates are ISO 8601 text: a `DateTimeOffset` carries its offset, a `DateTime` with `Kind = Utc` ends in `Z`, and an `Unspecified` one has no offset at all, so each side guesses. `DateOnly` is written as `2026-11-15`.\n\n## Polymorphism with [JsonDerivedType]\n\n```csharp\n[JsonPolymorphic(TypeDiscriminatorPropertyName = \"kind\")]\n[JsonDerivedType(typeof(CardPaymentDto), \"card\")]\n[JsonDerivedType(typeof(BankPaymentDto), \"bank\")]\nabstract record PaymentDto;\n```\n\nThe discriminator is written, first, only when the serializer is asked for the base type: `Serialize<PaymentDto>(card)` gives `{\"kind\":\"card\",...}`, while `Serialize(card)` with a variable typed `CardPaymentDto` writes no kind at all. Without `TypeDiscriminatorPropertyName` the property is called `$type`. Reading the base type with an unknown kind throws a `JsonException`, and a missing kind throws `NotSupportedException`. The kind must be the first property unless `AllowOutOfOrderMetadataProperties = true`.",
+  "quiz": [
+    {
+      "prompt": "A team returns its EF `User` entity from GET /users/{id} and also accepts it as the body of PUT /users/{id}. Which risk comes from that choice?",
+      "choices": [
+        "System.Text.Json cannot serialize EF Core entities at all",
+        "Responses get slower, because entities serialize every byte twice",
+        "PasswordHash goes out, and a client can send IsAdmin: true",
+        "Only the property names change, which clients can absorb"
+      ],
+      "answer": 2,
+      "explanation": "The serializer writes every public property, so the hash leaves the server, and binding a request to the entity sets any property the client names, which is over-posting. Serializing an entity works and costs no extra time; navigation properties even add cycles that throw. A DTO lists exactly the fields of the contract, so a schema change stays internal."
+    },
+    {
+      "prompt": "`JsonSerializer.Deserialize<Order>(\"{\\\"orderId\\\":7}\")` runs with no options, and `Order` has a property `OrderId`. What is `OrderId` afterwards?",
+      "choices": [
+        "0, with no error",
+        "7, because names match case-insensitively",
+        "A JsonException for the unknown member",
+        "7, because camelCase is the default policy"
+      ],
+      "answer": 0,
+      "explanation": "Plain options compare property names case-sensitively and skip members they cannot map, so orderId matches nothing and the property keeps its default. Case-insensitive reading and camelCase names come from JsonSerializerDefaults.Web, which ASP.NET Core uses for you; a console tool or a test that creates its own options gets neither."
+    },
+    {
+      "prompt": "A property is declared `[JsonPropertyName(\"placed_at\")] public DateTimeOffset PlacedAt`, and the options use `JsonNamingPolicy.CamelCase`. Which name is used on the wire?",
+      "choices": [
+        "placedAt, because the policy wins",
+        "placed_at when writing, placedAt when reading",
+        "PlacedAt, because the attribute switches the policy off for the whole type",
+        "placed_at, both ways"
+      ],
+      "answer": 3,
+      "explanation": "An explicit [JsonPropertyName] is the final name: the naming policy applies only to properties without one, and the same name serves reading and writing. The other properties of the type still get camelCase. That makes the attribute the tool for one legacy field and the policy the tool for everything else."
+    },
+    {
+      "prompt": "A client sends `{\"id\":7,\"customer\":\"ana\",\"isAdmin\":true}` to an endpoint whose DTO has no IsAdmin property. With default options, what happens to isAdmin?",
+      "choices": [
+        "Deserialization fails with a JsonException",
+        "It is skipped, and nobody hears about it",
+        "It is stored in an extension-data dictionary",
+        "The request is answered with 400 automatically"
+      ],
+      "answer": 1,
+      "explanation": "System.Text.Json passes over members it cannot map unless told otherwise, which also hides typos such as custmer. Set UnmappedMemberHandling to Disallow, in the options or with the attribute on the type, to get a JsonException instead. Extension data needs a [JsonExtensionData] property on the DTO, and since reading succeeds, nothing answers 400."
+    },
+    {
+      "prompt": "A DTO declares `public required string Customer { get; init; }`. The JSON is `{\"customer\":null}`, read with the Web defaults of .NET 10. What happens?",
+      "choices": [
+        "JsonException: a required member is missing",
+        "It is accepted, and Customer is null",
+        "Customer becomes an empty string",
+        "The compiler rejects the DTO, since required needs a non-null default"
+      ],
+      "answer": 1,
+      "explanation": "required only checks that the property appears in the JSON, and here it does. A null for a non-nullable reference type passes unless the options set RespectNullableAnnotations, an opt-in flag that then throws. The compiler cannot see JSON, and the serializer never invents an empty string, so the null lands in a property your code believes is never null."
+    },
+    {
+      "prompt": "The options set `DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingDefault`. An order has `Quantity = 0` and `Status = Placed`, the first enum value. What does the client receive?",
+      "choices": [
+        "Both values, since only nulls are left out",
+        "Quantity 0 and no Status",
+        "An exception, because 0 is not a valid quantity value",
+        "Neither: both equal their default and are left out"
+      ],
+      "answer": 3,
+      "explanation": "WhenWritingDefault drops every property equal to default(T): null for references, 0 for numbers, false for bools and the enum member whose value is 0. A client that treats a missing field as unknown then cannot tell that the order was placed with zero items. WhenWritingNull leaves out only nulls, the safe choice for a contract."
+    },
+    {
+      "prompt": "An API adds `new JsonStringEnumConverter()`, and a client sends `\"status\": 99`. What happens?",
+      "choices": [
+        "It is accepted as the undefined value 99",
+        "JsonException: 99 is not a defined status",
+        "It is read as the enum's first value",
+        "It is read as the closest defined value"
+      ],
+      "answer": 0,
+      "explanation": "The converter writes names, but by default it still reads integers, and a C# enum holds any value of its underlying type, so (Status)99 reaches your code. Pass allowIntegerValues: false to refuse numbers, and check Enum.IsDefined where the value matters. An unknown name such as \"lost\" is refused; reading never picks the first or a nearby member."
+    },
+    {
+      "prompt": "An order id is a `long` of 9007199254740993, and a browser reads the JSON with `JSON.parse`. What does the client get?",
+      "choices": [
+        "9007199254740993, since JSON numbers are exact",
+        "A JsonException, written by the server",
+        "9007199254740992: past 2^53 a double cannot hold every integer",
+        "A string, because System.Text.Json quotes numbers above int.MaxValue"
+      ],
+      "answer": 2,
+      "explanation": "The server writes the exact digits, but JSON.parse turns every number into an IEEE double with a 53-bit mantissa, so the nearest representable value wins. System.Text.Json never quotes numbers on its own: opt in with NumberHandling set to WriteAsString, or make large ids strings in the contract, when browsers are clients."
+    },
+    {
+      "prompt": "A `DateTime` with `Kind = Unspecified` is serialized and read by a client in another time zone. What is the problem?",
+      "choices": [
+        "System.Text.Json refuses to write an Unspecified DateTime",
+        "The value is written as a Unix timestamp in seconds",
+        "It is converted to UTC using the server's local time zone",
+        "No offset is written, so the client must guess the zone"
+      ],
+      "answer": 3,
+      "explanation": "An Unspecified DateTime goes out as 2026-11-15T09:30:00 with nothing after it, and it reads back as Unspecified too, so each side applies its own assumption. A Utc DateTime gets a trailing Z, and a DateTimeOffset carries its offset. The serializer neither converts nor refuses the value, and it writes ISO 8601 text, not epoch numbers."
+    },
+    {
+      "prompt": "`PaymentDto` carries `[JsonDerivedType(typeof(CardPaymentDto), \"card\")]`. Code runs `var card = new CardPaymentDto(...); JsonSerializer.Serialize(card)`. Is \"card\" written as the discriminator?",
+      "choices": [
+        "Yes, because the attribute is always applied",
+        "No: the static type is CardPaymentDto, not the base",
+        "Yes, but only when the derived type is sealed",
+        "No, because records cannot be polymorphic"
+      ],
+      "answer": 1,
+      "explanation": "Polymorphism is configured on the base type and used only when the serializer is asked for that type: Serialize<PaymentDto>(card) writes kind first, while Serialize(card) infers the derived type and writes plain properties. Records and classes behave the same here, and sealing changes nothing. Type the variable or the endpoint's return value as PaymentDto."
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "JsonSerializerDefaults.Web",
+      "back": "camelCase property names, case-insensitive reading and numbers accepted in quotes; ASP.NET Core applies it to minimal APIs and controllers."
+    },
+    {
+      "front": "JsonUnmappedMemberHandling.Disallow",
+      "back": "Turns a JSON member without a matching property into a JsonException; set it in the options or as an attribute on one type."
+    },
+    {
+      "front": "required or [JsonRequired]",
+      "back": "The serializer throws a JsonException when that property is absent from the JSON; a plain property just keeps its default."
+    },
+    {
+      "front": "RespectNullableAnnotations",
+      "back": "An options flag that makes null in a non-nullable reference property a JsonException, when reading and when writing."
+    },
+    {
+      "front": "allowIntegerValues: false",
+      "back": "The JsonStringEnumConverter argument that refuses 1 and \"1\" alike, so only member names get in."
+    },
+    {
+      "front": "Where must the discriminator be?",
+      "back": "First in the object by default; AllowOutOfOrderMetadataProperties = true lets a client put it anywhere."
+    },
+    {
+      "front": "Reading a polymorphic base: kind problems",
+      "back": "A kind that no [JsonDerivedType] declares is a JsonException; no kind at all on an abstract base is a NotSupportedException."
+    },
+    {
+      "front": "Why not serialize the entity?",
+      "back": "It leaks internal columns, invites over-posting on input, throws on navigation cycles and ties the API to the database schema."
+    }
+  ],
+  "drills": [
+    {
+      "slug": "01-pin-the-contract-options",
+      "title": "Pin the contract in one options object",
+      "difficulty": 2,
+      "skills": [
+        "JsonSerializerOptions",
+        "strict reading",
+        "enums as names"
+      ],
+      "instructions": "**Interview prompt.** \"A partner's console client reads our orders with `new JsonSerializerOptions()` and our API uses its own defaults. They see `Status: 1`, they once got an order back with `id` 0 and no error, and a typo in their `custmer` field went unnoticed for a month. Write the one options object both sides should share.\"\n\n**Why it matters.** The JSON shape is the API contract, and System.Text.Json's defaults are lenient: unknown members are skipped, a null slips into a non-nullable property, enums travel as numbers and any number is accepted. Each of those is one setting. Pin them in one place, reuse that instance (every options object builds its own metadata cache), and test the exact JSON.\n\n**Your task.** Implement `JsonSerializerOptions ContractOptions()` so that, for the given `OrderDto`:\n- names are camelCase when writing, and reading ignores their casing (`JsonSerializerDefaults.Web` does both); `[JsonPropertyName]` keeps working\n- a JSON member that `OrderDto` does not have is a `JsonException`\n- a missing `required` member is a `JsonException` (the serializer already does this; do not switch it off)\n- `null` for a non-nullable member is a `JsonException`\n- null properties are left out when writing, but `0`, `\"\"` and the first enum member are still written\n- `OrderStatus` is written and read as a camelCase name (`\"shipped\"`); a number, such as `1` or `\"1\"`, is a `JsonException`\n\n**Worked example.** `Write(new OrderDto { Id = 7, Customer = \"ana\", Status = OrderStatus.Shipped, Total = 12.50m, PlacedAt = placedAt })` gives `{\"id\":7,\"customer\":\"ana\",\"status\":\"shipped\",\"total\":12.50,\"placed_at\":\"2026-11-15T09:30:00+00:00\"}`.",
+      "starterHead": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · pin the contract options★★☆ core\n//  concepts: web defaults · unmapped members · nulls versus defaults · enums as strings · nullable annotations\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  One options object is the wire contract: write it down once, and test it.\n\nusing static Bootcamp.Check;\nusing System.Text.Json;\nusing System.Text.Json.Serialization;\n\nJsonSerializerOptions ContractOptions()\n{\n    // TODO: camelCase and case-insensitive names, unknown members refused, nulls left out, enums as camelCase names only, nullability enforced\n    throw new NotImplementedException();\n}\n\n// Given: one options instance for every call (each instance builds its own metadata cache).\nvar contract = new Lazy<JsonSerializerOptions>(ContractOptions);\nstring Write(OrderDto order) => JsonSerializer.Serialize(order, contract.Value);\nOrderDto Read(string json) => JsonSerializer.Deserialize<OrderDto>(json, contract.Value)!;\nvar placedAt = new DateTimeOffset(2026, 11, 15, 9, 30, 0, TimeSpan.Zero);\n\n\n",
+      "solutionHead": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · pin the contract options★★☆ core\n//  concepts: web defaults · unmapped members · nulls versus defaults · enums as strings · nullable annotations\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  One options object is the wire contract: write it down once, and test it.\n\nusing static Bootcamp.Check;\nusing System.Text.Json;\nusing System.Text.Json.Serialization;\n\nJsonSerializerOptions ContractOptions() => new(JsonSerializerDefaults.Web)          // camelCase, case-insensitive reads\n{\n    UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,                     // a typo or an extra field is an error\n    DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,                     // leave out nulls, keep 0 and false\n    RespectNullableAnnotations = true,                                                // null for a non-nullable member is an error\n    Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase, allowIntegerValues: false) },\n};\n\n// Given: one options instance for every call (each instance builds its own metadata cache).\nvar contract = new Lazy<JsonSerializerOptions>(ContractOptions);\nstring Write(OrderDto order) => JsonSerializer.Serialize(order, contract.Value);\nOrderDto Read(string json) => JsonSerializer.Deserialize<OrderDto>(json, contract.Value)!;\nvar placedAt = new DateTimeOffset(2026, 11, 15, 9, 30, 0, TimeSpan.Zero);\n\n\n",
+      "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"names are camelCase, a null note is left out, and the status is a camelCase name\", () =>\n    Eq(Write(new OrderDto { Id = 7, Customer = \"ana\", Status = OrderStatus.Shipped, Note = null, Total = 12.50m, PlacedAt = placedAt }),\n       \"{\\\"id\\\":7,\\\"customer\\\":\\\"ana\\\",\\\"status\\\":\\\"shipped\\\",\\\"total\\\":12.50,\\\"placed_at\\\":\\\"2026-11-15T09:30:00+00:00\\\"}\"));\n\nTest(\"a JsonPropertyName is used as written, both ways\", () =>\n    Eq(Read(\"{\\\"id\\\":7,\\\"customer\\\":\\\"ana\\\",\\\"placed_at\\\":\\\"2026-11-15T09:30:00+00:00\\\"}\").PlacedAt, placedAt));\n\nTest(\"reading ignores the casing of property names\", () =>\n    Eq(Read(\"{\\\"ID\\\":7,\\\"Customer\\\":\\\"ana\\\",\\\"TOTAL\\\":3.5}\"), new OrderDto { Id = 7, Customer = \"ana\", Total = 3.5m }));\n\nTest(\"an unknown member is refused instead of silently dropped\", () =>\n    Throws<JsonException>(() => Read(\"{\\\"id\\\":7,\\\"customer\\\":\\\"ana\\\",\\\"isAdmin\\\":true}\")));\n\nTest(\"a missing required member is refused\", () =>\n    Throws<JsonException>(() => Read(\"{\\\"customer\\\":\\\"ana\\\"}\")));\n\nTest(\"null for a non-nullable member is refused\", () =>\n    Throws<JsonException>(() => Read(\"{\\\"id\\\":7,\\\"customer\\\":null}\")));\n\nTest(\"a status sent as a number is refused, even though it is a valid value\", () =>\n    Throws<JsonException>(() => Read(\"{\\\"id\\\":7,\\\"customer\\\":\\\"ana\\\",\\\"status\\\":1}\")));\n\nTest(\"zero and the first enum value are still written: only nulls are left out (boundary)\", () =>\n    Eq(Write(new OrderDto { Id = 0, Customer = \"\", Status = OrderStatus.Placed, Total = 0m, PlacedAt = placedAt }),\n       \"{\\\"id\\\":0,\\\"customer\\\":\\\"\\\",\\\"status\\\":\\\"placed\\\",\\\"total\\\":0,\\\"placed_at\\\":\\\"2026-11-15T09:30:00+00:00\\\"}\"));\n\n",
+      "tail": "// ──────────────────────────── types ──────────────────────────────────────\n\nenum OrderStatus { Placed, Shipped, Cancelled }\n\n/// <summary>Given: the order as the API publishes it. Not the entity.</summary>\nsealed record OrderDto\n{\n    public required int Id { get; init; }\n    public required string Customer { get; init; }\n    public OrderStatus Status { get; init; }\n    public string? Note { get; init; }\n    public decimal Total { get; init; }\n    [JsonPropertyName(\"placed_at\")] public DateTimeOffset PlacedAt { get; init; }\n}\n",
+      "explanation": "Start from the Web defaults and tighten four things:\n\n```csharp\nJsonSerializerOptions ContractOptions() => new(JsonSerializerDefaults.Web)\n{\n    UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,\n    DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,\n    RespectNullableAnnotations = true,\n    Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase, allowIntegerValues: false) },\n};\n```\n\nEach setting has its own test. Plain `new JsonSerializerOptions()` writes `Id` and `Customer` in PascalCase, so the first test sees the wrong names. Without `Disallow` the `isAdmin` member is skipped silently, and without `RespectNullableAnnotations` the `null` customer is accepted. `WhenWritingDefault` instead of `WhenWritingNull` also drops the zero `id`, the `placed` status and the zero total, which the boundary test refuses. A converter that keeps the default `allowIntegerValues: true` reads `1` as `Shipped` instead of refusing it.",
+      "hints": [
+        "Every rule in the list is one setting, and the Web defaults already cover the names and the casing.",
+        "Start from the Web defaults, refuse unmapped members, leave out only nulls when writing, enforce the nullable annotations, and add the string enum converter with a camelCase policy that does not accept integers.",
+        "Create options from the Web defaults and set four things on them: the disallow mode for unmapped members, the when-writing-null ignore condition, respect for nullable annotations, and a camelCase string enum converter with integer values turned off."
+      ]
+    },
+    {
+      "slug": "02-polymorphic-payment-contract",
+      "title": "Payments as polymorphic DTOs",
+      "difficulty": 3,
+      "skills": [
+        "entity to DTO mapping",
+        "type discriminators",
+        "polymorphic serialization"
+      ],
+      "instructions": "**Interview prompt.** \"Our payments endpoint returns the `Payment` table row. Clients see `internalRiskScore`, the full IBAN, and a `kind` string they have to switch on by hand. Publish a proper contract: one DTO per kind, with a discriminator the client libraries understand, and nothing internal.\"\n\n**Why it matters.** `[JsonPolymorphic]` and `[JsonDerivedType]` on the base DTO make the serializer write and read a discriminator, but only when it is asked for the base type. The entity's columns never reach the client, because the mapping only copies what the contract names. Clients written in other languages do not always put the discriminator first, which System.Text.Json refuses unless you allow it.\n\n**Your task.** The DTOs and their attributes are given. Implement:\n- `PaymentDto ToDto(PaymentEntity entity)`: kind `\"card\"` gives `CardPaymentDto(Id, CardLast4, CreatedAt)`, kind `\"bank\"` gives `BankPaymentDto(Id, MaskedIban, CreatedAt)`, where `MaskedIban` is `****` followed by the IBAN's last four characters (just `****` when the IBAN has four characters or fewer), and `CreatedAt` is `CreatedUtc` as a `DateTimeOffset` with offset zero. Any other kind throws `InvalidOperationException`.\n- `string Serialize(PaymentDto payment)`: Web defaults (camelCase), with the discriminator `kind` written first\n- `PaymentDto Deserialize(string json)`: Web defaults, reading the base type; `kind` may appear anywhere in the object; an unknown kind is a `JsonException`\n\nUse one options instance for both directions.\n\n**Worked example.** `Serialize(ToDto(cardRow))` gives `{\"kind\":\"card\",\"id\":7,\"last4\":\"4242\",\"createdAt\":\"2026-11-15T09:30:00+00:00\"}`.",
+      "starterHead": "// ─────────────────────────────────────────────────────────────────────────\n//  02 · polymorphic payment contract★★★ core\n//  concepts: entity to DTO · [JsonDerivedType] discriminator · serialize as the base type · out-of-order kind\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  The row stays on the server; the DTO, with its kind, is what the client sees.\n\nusing static Bootcamp.Check;\nusing System.Text.Json;\nusing System.Text.Json.Serialization;\n\nPaymentDto ToDto(PaymentEntity entity)\n{\n    // TODO: \"card\" -> CardPaymentDto, \"bank\" -> BankPaymentDto with a masked IBAN, anything else is a bug\n    throw new NotImplementedException();\n}\n\nstring Serialize(PaymentDto payment)\n{\n    // TODO: web defaults, written as the base type so the kind is included\n    throw new NotImplementedException();\n}\n\nPaymentDto Deserialize(string json)\n{\n    // TODO: read the base type; accept the kind anywhere in the object\n    throw new NotImplementedException();\n}\n\n// Given: two stored rows.\nvar created = new DateTime(2026, 11, 15, 9, 30, 0, DateTimeKind.Utc);\nvar cardRow = new PaymentEntity(7, \"card\", \"4242\", null, InternalRiskScore: 81, created);\nvar bankRow = new PaymentEntity(8, \"bank\", null, \"NL91ABNA0417164300\", InternalRiskScore: 12, created);\n\n\n",
+      "solutionHead": "// ─────────────────────────────────────────────────────────────────────────\n//  02 · polymorphic payment contract★★★ core\n//  concepts: entity to DTO · [JsonDerivedType] discriminator · serialize as the base type · out-of-order kind\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  The row stays on the server; the DTO, with its kind, is what the client sees.\n\nusing static Bootcamp.Check;\nusing System.Text.Json;\nusing System.Text.Json.Serialization;\n\nvar paymentJson = new JsonSerializerOptions(JsonSerializerDefaults.Web) { AllowOutOfOrderMetadataProperties = true };\n\nstring Mask(string iban) => iban.Length <= 4 ? \"****\" : \"****\" + iban[^4..];\n\nPaymentDto ToDto(PaymentEntity entity)\n{\n    var createdAt = new DateTimeOffset(DateTime.SpecifyKind(entity.CreatedUtc, DateTimeKind.Utc));\n    return entity.Kind switch\n    {\n        \"card\" => new CardPaymentDto(entity.Id, entity.CardLast4!, createdAt),\n        \"bank\" => new BankPaymentDto(entity.Id, Mask(entity.Iban!), createdAt),\n        _ => throw new InvalidOperationException($\"payment {entity.Id} has unknown kind '{entity.Kind}'\"),\n    };\n}\n\n// The static type is PaymentDto, so the serializer looks up [JsonDerivedType] and writes \"kind\" first.\nstring Serialize(PaymentDto payment) => JsonSerializer.Serialize(payment, paymentJson);\n\nPaymentDto Deserialize(string json) => JsonSerializer.Deserialize<PaymentDto>(json, paymentJson)!;\n\n// Given: two stored rows.\nvar created = new DateTime(2026, 11, 15, 9, 30, 0, DateTimeKind.Utc);\nvar cardRow = new PaymentEntity(7, \"card\", \"4242\", null, InternalRiskScore: 81, created);\nvar bankRow = new PaymentEntity(8, \"bank\", null, \"NL91ABNA0417164300\", InternalRiskScore: 12, created);\n\n\n",
+      "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"a card payment is written with its kind first and nothing internal\", () =>\n    Eq(Serialize(ToDto(cardRow)), \"{\\\"kind\\\":\\\"card\\\",\\\"id\\\":7,\\\"last4\\\":\\\"4242\\\",\\\"createdAt\\\":\\\"2026-11-15T09:30:00+00:00\\\"}\"));\n\nTest(\"a bank payment shows only the last four characters of the IBAN\", () =>\n{\n    var json = Serialize(ToDto(bankRow));\n    Eq(new object[] { json, json.Contains(\"NL91\") }, new object[] { \"{\\\"kind\\\":\\\"bank\\\",\\\"id\\\":8,\\\"maskedIban\\\":\\\"****4300\\\",\\\"createdAt\\\":\\\"2026-11-15T09:30:00+00:00\\\"}\", false });\n});\n\nTest(\"a payment read back is the same derived record\", () =>\n{\n    var card = ToDto(cardRow);\n    var back = Deserialize(Serialize(card));\n    Eq(new object[] { back.GetType().Name, back }, new object[] { \"CardPaymentDto\", card });\n});\n\nTest(\"a client may send the kind after the other properties\", () =>\n    Eq(Deserialize(\"{\\\"id\\\":8,\\\"maskedIban\\\":\\\"****4300\\\",\\\"createdAt\\\":\\\"2026-11-15T09:30:00+00:00\\\",\\\"kind\\\":\\\"bank\\\"}\"),\n       (PaymentDto)new BankPaymentDto(8, \"****4300\", new DateTimeOffset(2026, 11, 15, 9, 30, 0, TimeSpan.Zero))));\n\nTest(\"property names are read whatever their casing\", () =>\n    Eq(Deserialize(\"{\\\"kind\\\":\\\"card\\\",\\\"ID\\\":7,\\\"Last4\\\":\\\"4242\\\",\\\"CreatedAt\\\":\\\"2026-11-15T09:30:00+00:00\\\"}\"), ToDto(cardRow)));\n\nTest(\"an unknown kind on the wire is refused\", () =>\n    Throws<JsonException>(() => Deserialize(\"{\\\"kind\\\":\\\"crypto\\\",\\\"id\\\":9}\")));\n\nTest(\"a stored row of an unknown kind is a bug, not an empty payment\", () =>\n    Throws<InvalidOperationException>(() => ToDto(cardRow with { Kind = \"cash\" })));\n\nTest(\"an IBAN of four characters or fewer is masked entirely (boundary)\", () =>\n    Eq(((BankPaymentDto)ToDto(bankRow with { Iban = \"4300\" })).MaskedIban, \"****\"));\n\n",
+      "tail": "// ──────────────────────────── types ──────────────────────────────────────\n\n/// <summary>Given: the stored row. It is never serialized.</summary>\nsealed record PaymentEntity(int Id, string Kind, string? CardLast4, string? Iban, int InternalRiskScore, DateTime CreatedUtc);\n\n/// <summary>Given: the published contract. The discriminator \"kind\" names the derived type.</summary>\n[JsonPolymorphic(TypeDiscriminatorPropertyName = \"kind\")]\n[JsonDerivedType(typeof(CardPaymentDto), \"card\")]\n[JsonDerivedType(typeof(BankPaymentDto), \"bank\")]\nabstract record PaymentDto;\n\nsealed record CardPaymentDto(int Id, string Last4, DateTimeOffset CreatedAt) : PaymentDto;\n\nsealed record BankPaymentDto(int Id, string MaskedIban, DateTimeOffset CreatedAt) : PaymentDto;\n",
+      "explanation": "Map by kind, then let the serializer see the base type every time:\n\n```csharp\nvar paymentJson = new JsonSerializerOptions(JsonSerializerDefaults.Web) { AllowOutOfOrderMetadataProperties = true };\nPaymentDto ToDto(PaymentEntity e) => e.Kind switch\n{\n    \"card\" => new CardPaymentDto(e.Id, e.CardLast4!, createdAt),\n    \"bank\" => new BankPaymentDto(e.Id, Mask(e.Iban!), createdAt),\n    _ => throw new InvalidOperationException($\"payment {e.Id} has unknown kind '{e.Kind}'\"),\n};\nstring Serialize(PaymentDto payment) => JsonSerializer.Serialize(payment, paymentJson);   // T is PaymentDto\n```\n\nSerializing with `payment.GetType()` as the type asks for `CardPaymentDto`, so no `kind` is written and \"a card payment is written with its kind first and nothing internal\" fails, as does the round trip. Leaving out `AllowOutOfOrderMetadataProperties` makes the client that sends `kind` last get a `NotSupportedException`. Returning `null` for an unknown stored kind, instead of throwing, hides a data bug, and copying the IBAN unmasked puts `NL91` into the bank JSON. Dropping the length check in the mask turns `4300` into `****4300` instead of `****`.",
+      "hints": [
+        "The discriminator is only written when the serializer is asked for the base type, and the entity's internal fields have no place in any DTO.",
+        "Switch on the stored kind to build the matching DTO, masking the IBAN down to its last four characters and failing loudly on an unknown kind. Keep one options instance from the Web defaults that also allows the kind anywhere in the object, and serialize and deserialize through the base type.",
+        "Map card rows and bank rows to their DTOs with the creation time as a UTC offset, throw for any other kind, keep a single Web options object with out-of-order metadata allowed, and always pass the payment to the serializer as the abstract base."
+      ]
+    }
+  ]
+}

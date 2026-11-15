@@ -5,7 +5,7 @@
   "title": "Map, Set, WeakMap & JSON",
   "level": "intermediate",
   "summary": "When a Map beats a plain object, Set for uniqueness, WeakMap for per-object metadata, and exactly what JSON.stringify and JSON.parse keep, drop and break.",
-  "lesson": "## Map: a real dictionary\n\n```js\nconst m = new Map([[1, 'number one'], ['1', 'string one']]);\nm.size        // 2: keys keep their type\nm.get(1)      // 'number one'\nm.has('1')    // true\nm.delete(1)\n```\n\nPlain objects coerce keys to strings (`o[1]` and `o['1']` are the same slot), inherit keys from their prototype, and have no `size`. Use a **Map** when keys are dynamic, are not strings, or the collection is frequently added to and removed from. Maps iterate in **insertion order**, and deleting then re-setting a key moves it to the end, which is exactly what an LRU cache needs.\n\n## Set: uniqueness\n\n```js\n[...new Set([3, 1, 3, 2, 1])]   // [3, 1, 2]  dedupe, first-seen order kept\nnew Set([{ a: 1 }, { a: 1 }]).size  // 2: objects are compared by reference\n```\n\n`set.has(x)` is O(1), unlike `array.includes(x)`. Node 22 also has set algebra: `a.union(b)`, `a.intersection(b)`, `a.difference(b)`.\n\n## WeakMap: metadata that does not leak\n\nA WeakMap's keys must be **objects**, and they are held weakly: when nothing else references the key object, the entry can be garbage-collected. WeakMaps are not iterable and have no `size`. Typical use: caching data per DOM node or per request object without keeping those objects alive. `new WeakMap().set('k', 1)` throws a TypeError.\n\n## JSON.stringify: what survives\n\n```js\nJSON.stringify({\n  f() {}, u: undefined, s: Symbol('x'),   // dropped from objects\n  d: new Date(0),                         // '1970-01-01T00:00:00.000Z' (Date has toJSON)\n  m: new Map([[1, 2]]),                   // {}  <- Map and Set become empty objects\n  arr: [undefined, () => 1],              // [null, null] inside arrays\n});\nJSON.stringify({ n: 1n })                 // TypeError: BigInt cannot be serialised\n```\n\n`NaN` and `Infinity` become `null`. An object's own `toJSON()` method decides its representation (that is how Date works). The second argument (a replacer) can filter or transform; the third indents.\n\n## JSON.parse: strict and lossy\n\n- The text must be strict JSON: double quotes, no trailing commas, no comments. `JSON.parse(\"{'a':1}\")` throws a **SyntaxError**, so always wrap parsing of external input in try/catch.\n- Numbers are doubles: `JSON.parse('{\"id\": 9007199254740993}').id` is `9007199254740992`. Send large ids (database bigints, Twitter-style ids) as **strings**.\n- Dates come back as strings. A **reviver** `JSON.parse(text, (key, value) => ...)` can rebuild them.\n\n## Choosing a structure\n\n| need | use |\n|---|---|\n| fixed record shape (a DTO) | plain object |\n| dynamic keys, any key type, frequent add/remove | Map |\n| unique values, fast membership | Set |\n| data attached to objects you do not own | WeakMap |",
+  "lesson": "## Map: a real dictionary\n\n```js\nconst m = new Map([[1, 'number one'], ['1', 'string one']]);\nm.size        // 2: keys keep their type\nm.get(1)      // 'number one'\nm.has('1')    // true\nm.delete(1)\n```\n\nPlain objects coerce keys to strings (`o[1]` and `o['1']` are the same slot), inherit keys from their prototype, and have no `size`. Use a **Map** when keys are dynamic, are not strings, or the collection is frequently added to and removed from. Maps iterate in **insertion order**, and deleting then re-setting a key moves it to the end, which is exactly what an LRU cache needs.\n\n## Set: uniqueness\n\n```js\n[...new Set([3, 1, 3, 2, 1])]   // [3, 1, 2]  dedupe, first-seen order kept\nnew Set([{ a: 1 }, { a: 1 }]).size  // 2: objects are compared by reference\n```\n\n`set.has(x)` is O(1), unlike `array.includes(x)`. Node 22 also has set algebra: `a.union(b)`, `a.intersection(b)`, `a.difference(b)`.\n\nMembership is the main job. Checking 10,000 ids against a Set is 10,000 hash lookups, while `array.includes` inside the same loop scans the array every time. A Set compares with SameValueZero, so `NaN` is found and `0` matches `-0`, and `set.add(x)` returns the Set, so calls chain.\n\n## WeakMap: metadata that does not leak\n\nA WeakMap's keys must be **objects**, and they are held weakly: when nothing else references the key object, the entry can be garbage-collected. WeakMaps are not iterable and have no `size`. Typical use: caching data per DOM node or per request object without keeping those objects alive. `new WeakMap().set('k', 1)` throws a TypeError.\n\n## JSON.stringify: what survives\n\n```js\nJSON.stringify({\n  f() {}, u: undefined, s: Symbol('x'),   // dropped from objects\n  d: new Date(0),                         // '1970-01-01T00:00:00.000Z' (Date has toJSON)\n  m: new Map([[1, 2]]),                   // {}  <- Map and Set become empty objects\n  arr: [undefined, () => 1],              // [null, null] inside arrays\n});\nJSON.stringify({ n: 1n })                 // TypeError: BigInt cannot be serialised\n```\n\n`NaN` and `Infinity` become `null`. An object's own `toJSON()` method decides its representation (that is how Date works). The second argument (a replacer) can filter or transform; the third indents. A replacer such as `(key, value) => typeof value === 'bigint' ? String(value) : value` sends BigInt ids as strings instead of throwing, and `JSON.stringify(obj, null, 2)` is the readable form for logs and fixtures.\n\n## JSON.parse: strict and lossy\n\n- The text must be strict JSON: double quotes, no trailing commas, no comments. `JSON.parse(\"{'a':1}\")` throws a **SyntaxError**, so always wrap parsing of external input in try/catch.\n- Numbers are doubles: `JSON.parse('{\"id\": 9007199254740993}').id` is `9007199254740992`. Send large ids (database bigints, Twitter-style ids) as **strings**.\n- Dates come back as strings. A **reviver** `JSON.parse(text, (key, value) => ...)` can rebuild them.\n\n## Choosing a structure\n\n| need | use |\n|---|---|\n| fixed record shape (a DTO) | plain object |\n| dynamic keys, any key type, frequent add/remove | Map |\n| unique values, fast membership | Set |\n| data attached to objects you do not own | WeakMap |\n\nMost CRUD code needs the first row: request and response bodies are plain objects because they cross JSON. Reach for a Map inside a function, for an index such as `byId` or a per-request cache, and convert it back to an object or an array before it is serialised, since a Map would become `{}`.",
   "quiz": [
     {
       "prompt": "`const o = {}; o[1] = 'a'; o['1'] = 'b';` How many keys does `o` have?",
@@ -16,7 +16,7 @@
         "It throws"
       ],
       "answer": 1,
-      "explanation": "Object keys are strings (or symbols), so 1 and \"1\" are the same key. A Map would keep two."
+      "explanation": "Property keys of a plain object are strings or symbols, so `o[1]` converts the number to the string '1' before storing. Both assignments therefore write the same slot, and the second replaces 'a' with 'b'. That is why the count is not 2, and nothing throws. A Map keeps the key's type: `new Map([[1, 'a'], ['1', 'b']]).size` is 2."
     },
     {
       "prompt": "What is `[...new Set(['b', 'a', 'b', 'c', 'a'])]`?",
@@ -27,7 +27,7 @@
         "`['c', 'a', 'b']`"
       ],
       "answer": 2,
-      "explanation": "A Set keeps each value once, in the order it was FIRST inserted, and spreading it yields that order. It does not sort, so `['a', 'b', 'c']` is wrong, and later duplicates do not move a value to the end."
+      "explanation": "A Set keeps each value once, in the order it was first inserted, and spreading it yields that order. Later duplicates are simply ignored: they do not move a value to the end. A Set does not sort either, so expecting alphabetical order is a common mistake. Sort explicitly with `[...set].sort()` when you need it."
     },
     {
       "prompt": "What is `new Set([{ a: 1 }, { a: 1 }]).size`?",
@@ -38,7 +38,7 @@
         "It throws"
       ],
       "answer": 0,
-      "explanation": "A Set compares objects by reference (SameValueZero), and the two literals are two different objects even though they look alike, so the size is 2. Deduplicate objects by a key instead, for example with a Map keyed on id."
+      "explanation": "A Set decides uniqueness with SameValueZero, which compares objects by reference. The two literals create two different objects, even though they look alike, so both are kept and the size is not 1. Nothing throws: any value can go into a Set. To deduplicate records, key them by id, for example `new Map(rows.map((r) => [r.id, r]))`."
     },
     {
       "prompt": "What does `JSON.stringify({ m: new Map([[1, 2]]) })` produce?",
@@ -49,7 +49,7 @@
         "`{\"m\":{}}`"
       ],
       "answer": 3,
-      "explanation": "A Map has no enumerable own properties and no toJSON, so it serialises as an empty object. Convert with Object.fromEntries or [...map] first."
+      "explanation": "JSON.stringify serialises an object's own enumerable string-keyed properties unless the object supplies `toJSON`. A Map keeps its entries in internal storage, not as properties, and Map has no toJSON, so the result is an empty object rather than the entries. Nothing throws. Convert first: `Object.fromEntries(map)` gives `{\"1\":2}` and `[...map]` gives `[[1,2]]`."
     },
     {
       "prompt": "What is `JSON.parse('{\"n\": 9007199254740995}').n`?",
@@ -71,7 +71,7 @@
         "Empty arrays and empty objects"
       ],
       "answer": 0,
-      "explanation": "Those three are omitted from objects (and become null inside arrays). NaN becomes null; Dates become ISO strings."
+      "explanation": "In an object, JSON.stringify skips a property whose value JSON cannot express at all, so the key disappears. Inside an array the same values become null, which keeps the positions. null and empty strings survive as they are, NaN becomes null rather than vanishing, a Date becomes its ISO string, a RegExp becomes `{}`, and a BigInt makes the call throw."
     },
     {
       "prompt": "What does `JSON.parse(\"{'a': 1}\")` do?",
@@ -82,7 +82,7 @@
         "Throws a SyntaxError"
       ],
       "answer": 3,
-      "explanation": "JSON requires double-quoted keys and strings. Wrap parsing of untrusted text in try/catch."
+      "explanation": "JSON is stricter than JavaScript: keys and strings must use double quotes, and a single quote is not a valid token. JSON.parse reports bad input by throwing; it never returns null or the original string as a fallback. The message names the position, for example 'at position 1'. For untrusted text, put the parse in a try/catch and answer an API caller with a 400."
     },
     {
       "prompt": "Which statement about WeakMap is true?",
@@ -104,7 +104,7 @@
         "Alphabetical: 'x', 'y'"
       ],
       "answer": 0,
-      "explanation": "Re-inserting a key after deleting it appends it, which is how a Map can track least-recently-used order."
+      "explanation": "A Map iterates in insertion order. Deleting 'x' removes its entry entirely, and the later `set('x', 2)` inserts a new entry at the end, after 'y'. Updating a key that is still present keeps its position; only delete plus set moves it. The order is specified, not alphabetical, which is exactly how an LRU cache marks a key as most recently used."
     },
     {
       "prompt": "How do you control how your own class serialises with JSON.stringify?",
@@ -186,7 +186,7 @@
           "code": "const c = mod.createLru(0);\nc.set('a', 1);\nassert.equal(c.size, 0);\nassert.equal(c.get('a'), undefined);"
         }
       ],
-      "explanation": "Delete-then-set moves a key to the end of the Map; the first key from `map.keys()` is then always the oldest:\n\n```js\nset(key, value) {\n  map.delete(key);\n  map.set(key, value);\n  while (map.size > capacity) map.delete(map.keys().next().value);\n  return this;\n}\n```\n\n`get` must refresh recency too (delete and re-set), while `has` must not. A plain object would fail the non-string-key test, because `1` and `'1'` would collide.",
+      "explanation": "Delete-then-set moves a key to the end of the Map; the first key from `map.keys()` is then always the oldest:\n\n```js\nset(key, value) {\n  map.delete(key);\n  map.set(key, value);\n  while (map.size > capacity) map.delete(map.keys().next().value);\n  return this;\n}\n```\n\n`get` must refresh recency too (delete and re-set), while `has` must not: refreshing in `has` fails the test \"has does not change recency\". A plain object as the store fails \"a miss returns undefined; non-string keys keep their type\", because `1` and `'1'` collide in one slot; it would also list integer-like keys before the others, whatever their recency. Evicting before inserting, with `size >= capacity`, looks equivalent but fails \"capacity 0 keeps nothing\": the new entry is added after the check and stays.",
       "hints": [
         "A Map remembers insertion order, and re-inserting a key moves it to the end.",
         "Rely on the map's insertion order: on every read hit and every write, take the key out and put it back so it becomes the newest, and evict from the oldest end while the size is over capacity.",
@@ -227,7 +227,7 @@
           "code": "const c = mod.createLru(0);\nc.set('a', 1);\nassert.equal(c.size, 0);\nassert.equal(c.get('a'), undefined);"
         }
       ],
-      "explanation": "`get` returns the value without moving the key, so an entry that is read constantly is still evicted as if it were unused. Delete and re-set the key on a hit, as `set` already does, so the first key of the Map is always the least recently USED one; `has` must still not refresh.",
+      "explanation": "`get` returns the value without moving the key, so an entry that is read constantly is still evicted as if it were unused. In the test \"evicts the least recently used entry\", the read of 'a' does not count, so setting 'c' evicts 'a' instead of 'b' and the test fails. Delete and re-set the key on a hit, as `set` already does through `touch`, so the first key of the Map is always the least recently USED one. `has` must still not refresh.",
       "hints": [
         "Read a key, add one more entry than the capacity, and see which key was evicted.",
         "Only set moves a key to the end of the Map, so a key that is read often still looks old.",

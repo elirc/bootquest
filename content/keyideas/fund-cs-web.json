@@ -1,9 +1,9 @@
 {
  "format": "bootquest-keyideas@1",
  "section": "fund-cs-web",
- "title": "C#: ASP.NET Core, EF Core, testing, outbound calls and auth (topics 15-23)",
+ "title": "C#: ASP.NET Core, EF Core, testing, outbound calls, auth, logging, workers and JSON (topics 15-26)",
  "track": "csharp",
- "_note": "rv2 S2 (PLAN §2.2 fund-cs-web row). Scope = Fundamentals C# topic gates 15-23: the six binding-list topics 15-20 plus the rv2 C7 topics 21-23 (S2b appended one idea each). Topic 16 (routing) has no row of its own on the binding list. Server-local side file, never stamped.",
+ "_note": "rv2 S2 (PLAN §2.2 fund-cs-web row). Scope = Fundamentals C# topic gates 15-26: the six binding-list topics 15-20 plus the rv2 C7 topics 21-23 (S2b appended one idea each) and the rv3 W6 topics 24-26 (one idea each). Topic 16 (routing) has no row of its own on the binding list. Server-local side file, never stamped.",
  "scope": [
   "fund/csharp/15-dependency-injection-and-configuration",
   "fund/csharp/16-aspnet-core-routing-and-minimal-apis",
@@ -13,7 +13,10 @@
   "fund/csharp/20-ef-core-queries-n-plus-1-and-transactions",
   "fund/csharp/21-testing-web-apps-seams-and-fakes",
   "fund/csharp/22-httpclient-timeouts-retries-and-cancellation",
-  "fund/csharp/23-authentication-authorization-and-resource-checks"
+  "fund/csharp/23-authentication-authorization-and-resource-checks",
+  "fund/csharp/24-structured-logging-without-secrets",
+  "fund/csharp/25-background-work-and-graceful-shutdown",
+  "fund/csharp/26-system-text-json-contracts"
  ],
  "recapAfter": 0.8,
  "ideas": [
@@ -197,6 +200,66 @@
     "fund-csharp/23-authentication-authorization-and-resource-checks/01-evaluate-a-policy",
     "csdrills/03-enums-and-flags/08-role-matrix",
     "csdrills/06-text-at-the-edge/07-auth-headers"
+   ]
+  },
+  {
+   "id": "log-templates-not-secrets",
+   "idea": "Log with message templates so values become searchable properties, carry a correlation id in a scope, and choose what goes in: never tokens, passwords, bodies or personal data.",
+   "why": "A log line is copied into several systems and kept for months, so a secret in it leaks to everyone who can search the logs, and an interpolated line can be neither grouped nor queried.",
+   "prompt": "An incident review finds bearer tokens and customer emails in the log store, and nobody can pull together the lines of one failing request. The code logs $\"Request {body}\" and every request header. What do you change?",
+   "answer": "Switch to templates with named placeholders, open a scope with the correlation id in middleware, log an allow-listed set of headers and mark the rest as [Redacted], log the body's length instead of the body, then rotate the leaked tokens and purge those lines.",
+   "tags": [
+    "csharp",
+    "observability"
+   ],
+   "sources": [
+    "fund/csharp/24-structured-logging-without-secrets",
+    "fund-csharp/24-structured-logging-without-secrets/02-log-a-request-safely"
+   ],
+   "siblings": [
+    "fund-csharp/24-structured-logging-without-secrets/01-message-templates-and-scopes",
+    "csdrills/06-text-at-the-edge/04-mask-pii",
+    "csdrills/06-text-at-the-edge/07-auth-headers"
+   ]
+  },
+  {
+   "id": "workers-own-the-queue-and-stop-cleanly",
+   "idea": "Background work goes through a bounded queue to a worker that catches per job, tells shutdown from failure by the stopping token, and hands back what it cannot finish.",
+   "why": "Fire-and-forget tasks lose their scope and vanish on deploy, an unbounded queue grows until memory runs out, and one escaped exception stops the whole host by default.",
+   "prompt": "A checkout endpoint sends confirmation emails with Task.Run. After each deploy some emails never arrive, and one malformed address once took the whole service down. How do you restructure it?",
+   "answer": "Write an email job to a bounded channel and return. A BackgroundService reads it, creates a scope per job, logs and skips a failing job, and ends only on the stopping token. On shutdown it completes the writer, drains until the deadline and puts unfinished jobs into an outbox table for retry.",
+   "tags": [
+    "csharp",
+    "queues-outbox"
+   ],
+   "sources": [
+    "fund/csharp/25-background-work-and-graceful-shutdown",
+    "fund-csharp/25-background-work-and-graceful-shutdown/01-worker-loop-survives-bad-jobs"
+   ],
+   "siblings": [
+    "fund-csharp/25-background-work-and-graceful-shutdown/02-graceful-stop-with-a-deadline",
+    "csdrills/09-thread-safety/09-bounded-channel-inbox",
+    "jstrain-cs/08-async-await/02-cancellation"
+   ]
+  },
+  {
+   "id": "json-contract-is-a-dto-with-pinned-options",
+   "idea": "Publish DTOs, not entities, and pin one set of System.Text.Json options: names, unknown members, nulls, enums as names and the discriminator are all part of the contract.",
+   "why": "Defaults differ between ASP.NET Core and a plain JsonSerializer call, so the same type can read silently as zeros, accept unknown fields, take any enum number and leak entity columns.",
+   "prompt": "A partner reads your orders with a console tool. It receives status as 1, sometimes sees orderId come back as zero without complaint, and once saw a passwordHash field. What do you fix?",
+   "answer": "Return an OrderDto mapped from the entity, never the entity. Share one options object built from the Web defaults, with a string enum converter that refuses integers, unmapped members disallowed, nulls left out and nullable annotations respected, and test the exact JSON of each DTO.",
+   "tags": [
+    "csharp",
+    "json"
+   ],
+   "sources": [
+    "fund/csharp/26-system-text-json-contracts",
+    "fund-csharp/26-system-text-json-contracts/01-pin-the-contract-options"
+   ],
+   "siblings": [
+    "fund-csharp/26-system-text-json-contracts/02-polymorphic-payment-contract",
+    "jstrain-cs/11-json-and-serialization/06-tolerant-contracts",
+    "csdrills/03-enums-and-flags/05-wire-names"
    ]
   }
  ]
