@@ -5,7 +5,7 @@
   "title": "React: effects, rendering & data fetching",
   "level": "advanced",
   "summary": "When effects run, dependency arrays compared with Object.is, cleanup order, StrictMode double runs, stale closures, race conditions in fetch effects, and the effects you should not write at all.",
-  "lesson": "## When effects run\n\n`useEffect(fn, deps)` runs `fn` **after** React has committed the render to the screen, never during rendering. Then:\n\n- no dependency array: after EVERY render\n- `[]`: after the first render only (and its cleanup on unmount)\n- `[a, b]`: after the first render, and after any render where `a` or `b` changed, compared with `Object.is`\n\nIf `fn` returns a function, that is the **cleanup**. React runs the previous cleanup **before** running the effect again, and on unmount. Subscriptions, timers, sockets and fetches all need cleanup.\n\n```jsx\nuseEffect(() => {\n  const id = setInterval(tick, 1000);\n  return () => clearInterval(id);\n}, []);\n```\n\nIn development, **StrictMode** mounts, unmounts and re-mounts every component once, so each effect runs, cleans up, and runs again. An effect that breaks when run twice was already broken (it would leak or double-subscribe on fast navigation).\n\n## Dependencies: Object.is all the way down\n\nObjects, arrays and functions created during render are NEW every render, so an effect depending on them re-runs every time, and an effect that sets state from them can loop forever:\n\n```jsx\nconst options = { userId };                  // new object each render\nuseEffect(() => { load(options); }, [options]);   // runs after every render\nuseEffect(() => { load({ userId }); }, [userId]);  // depend on the primitive instead\n```\n\n`useMemo` and `useCallback` keep a value or function identity stable between renders when it must be a dependency. `NaN` as a dependency is stable (`Object.is(NaN, NaN)` is true); `0` and `-0` count as different.\n\n## Stale closures\n\nAn effect or callback sees the props and state of the render that created it. An interval created once with `[]` that reads `count` keeps reading the FIRST render's `count` forever. Fixes: include the value in the dependencies, use the updater form `setCount((c) => c + 1)`, or keep a mutable `useRef`.\n\n## Fetching in an effect: the race condition\n\n```jsx\nuseEffect(() => {\n  const ac = new AbortController();\n  fetch(`/api/users/${id}`, { signal: ac.signal })\n    .then((r) => r.json())\n    .then(setUser)\n    .catch((e) => { if (e.name !== 'AbortError') setError(e); });\n  return () => ac.abort();   // id changed or unmounted: ignore the stale response\n}, [id]);\n```\n\nWithout cleanup, a slow response for an OLD id can arrive after the new one and overwrite it. In real apps a data-fetching library (TanStack Query, SWR) or the framework's loaders handle caching, deduping and races for you.\n\n## You might not need an effect\n\n- **Derived values**: compute during render (topic 19), not `useEffect(() => setFull(first + last), [first, last])`.\n- **Responding to an event**: put the logic in the event handler, not in an effect watching a \"submitted\" flag.\n- **Resetting state when an id changes**: give the component `key={id}` so React remounts it with fresh state.\n\nEffects are for synchronising with things OUTSIDE React: the network, timers, the DOM, browser APIs, third-party widgets.\n\n## Rendering, briefly\n\nA state change re-renders that component and, by default, all of its children. Re-rendering is usually cheap; only optimise (`React.memo`, `useMemo`, moving state down, splitting components) when the profiler shows a real cost. Never mutate during render, and keep keys stable so React can preserve the right state.\n\n## React 19 and the React Compiler\n\nThe React Compiler (a build plugin, stable since late 2025) memoizes components and computed values automatically. In a compiled codebase most hand-written `useMemo`, `useCallback` and `React.memo` calls become unnecessary, but effects do not change: dependencies, cleanup and the fetch race above still apply. The compiler relies on the rules of React (pure render, no mutation of props or state), and code that breaks them is skipped or misbehaves. For data loading, React 19 adds `use(promise)` with Suspense as an alternative to fetching in an effect, usually through a framework or a data library that caches the promise.\n",
+  "lesson": "## When effects run\n\n`useEffect(fn, deps)` runs `fn` **after** React has committed the render to the screen, never during rendering. Then:\n\n- no dependency array: after EVERY render\n- `[]`: after the first render only (and its cleanup on unmount)\n- `[a, b]`: after the first render, and after any render where `a` or `b` changed, compared with `Object.is`\n\nIf `fn` returns a function, that is the **cleanup**. React runs the previous cleanup **before** running the effect again, and on unmount. Subscriptions, timers, sockets and fetches all need cleanup.\n\n```jsx\nuseEffect(() => {\n  const id = setInterval(tick, 1000);\n  return () => clearInterval(id);\n}, []);\n```\n\nIn development, **StrictMode** mounts, unmounts and re-mounts every component once, so each effect runs, cleans up, and runs again. An effect that breaks when run twice was already broken (it would leak or double-subscribe on fast navigation).\n\n## Dependencies: Object.is all the way down\n\nObjects, arrays and functions created during render are NEW every render, so an effect depending on them re-runs every time, and an effect that sets state from them can loop forever:\n\n```jsx\nconst options = { userId };                  // new object each render\nuseEffect(() => { load(options); }, [options]);   // runs after every render\nuseEffect(() => { load({ userId }); }, [userId]);  // depend on the primitive instead\n```\n\n`useMemo` and `useCallback` keep a value or function identity stable between renders when it must be a dependency. `NaN` as a dependency is stable (`Object.is(NaN, NaN)` is true); `0` and `-0` count as different.\n\n## Stale closures\n\nAn effect or callback sees the props and state of the render that created it. An interval created once with `[]` that reads `count` keeps reading the FIRST render's `count` forever. Fixes: include the value in the dependencies, use the updater form `setCount((c) => c + 1)`, or keep a mutable `useRef`.\n\n## Fetching in an effect: the race condition\n\n```jsx\nuseEffect(() => {\n  const ac = new AbortController();\n  fetch(`/api/users/${id}`, { signal: ac.signal })\n    .then((r) => r.json())\n    .then(setUser)\n    .catch((e) => { if (e.name !== 'AbortError') setError(e); });\n  return () => ac.abort();   // id changed or unmounted: ignore the stale response\n}, [id]);\n```\n\nWithout cleanup, a slow response for an OLD id can arrive after the new one and overwrite it. When a request cannot be aborted, use a flag instead: `let ignore = false;` in the effect, `if (!ignore) setUser(u)` in the callback, and `ignore = true` in the cleanup. In real apps a data-fetching library (TanStack Query, SWR) or the framework's loaders handle caching, deduping and races for you.\n\n## You might not need an effect\n\n- **Derived values**: compute during render (topic 19), not `useEffect(() => setFull(first + last), [first, last])`.\n- **Responding to an event**: put the logic in the event handler, not in an effect watching a \"submitted\" flag.\n- **Resetting state when an id changes**: give the component `key={id}` so React remounts it with fresh state.\n\nEffects are for synchronising with things OUTSIDE React: the network, timers, the DOM, browser APIs, third-party widgets.\n\n## Rendering, briefly\n\nA state change re-renders that component and, by default, all of its children. Re-rendering is usually cheap; only optimise (`React.memo`, `useMemo`, moving state down, splitting components) when the profiler shows a real cost. Never mutate during render, and keep keys stable so React can preserve the right state.\n\n## React 19 and the React Compiler\n\nThe React Compiler (a build plugin, stable since late 2025) memoizes components and computed values automatically. In a compiled codebase most hand-written `useMemo`, `useCallback` and `React.memo` calls become unnecessary, but effects do not change: dependencies, cleanup and the fetch race above still apply. The compiler relies on the rules of React (pure render, no mutation of props or state), and code that breaks them is skipped or misbehaves. For data loading, React 19 adds `use(promise)` with Suspense as an alternative to fetching in an effect, usually through a framework or a data library that caches the promise.\n",
   "quiz": [
     {
       "prompt": "When does an effect with dependency array `[]` run?",
@@ -16,7 +16,7 @@
         "Only after a state change triggers a re-render"
       ],
       "answer": 1,
-      "explanation": "An empty array means no dependency can change, so the effect runs once after mounting."
+      "explanation": "React runs effects after it has committed a render to the screen, never before it. With `[]` there is nothing to compare, so after the first commit no dependency can ever count as changed and the effect is not run again; its cleanup runs once, when the component unmounts. A state change re-renders the component without re-running this effect. Omitting the array is what makes an effect repeat."
     },
     {
       "prompt": "When does an effect with NO dependency array run?",
@@ -27,7 +27,7 @@
         "Only when state changes"
       ],
       "answer": 0,
-      "explanation": "Without a dependency array React has nothing to compare, so it re-runs after every render."
+      "explanation": "With no array, React has no previous values to compare, so it treats each commit as a reason to run the effect again. That includes renders caused by a parent, not only by this component's state changes, so a state-only rule is too narrow. Running just on mount is what `[]` does, and no effect runs only on unmount: that is the job of the function it returns."
     },
     {
       "prompt": "In what order do the cleanup and the next run of an effect happen when its dependencies change?",
@@ -38,7 +38,7 @@
         "The cleanup waits until the component unmounts"
       ],
       "answer": 2,
-      "explanation": "React cleans up the previous effect before running it again with new values."
+      "explanation": "When a dependency changes, React first calls the function returned by the previous run, which still sees the old values its closure captured, and only then runs the effect with the new values. So an old subscription is closed before its replacement opens, and the two never overlap. It all happens on the one JavaScript thread, nothing runs in parallel, and nothing waits for unmount; unmount is just the final cleanup."
     },
     {
       "prompt": "`const opts = { id }; useEffect(() => load(opts), [opts]);` What happens?",
@@ -49,7 +49,7 @@
         "It runs after every render, because opts is new each time"
       ],
       "answer": 3,
-      "explanation": "Dependencies are compared with Object.is; depend on id (a primitive) or memoise opts."
+      "explanation": "`{ id }` creates a new object during each render, and React compares every dependency with `Object.is`, which for objects compares identity. The new `opts` is never identical to the last one, so the effect counts as changed on each commit even when `id` stayed the same. React does not look inside objects, does not warn and does not skip the effect. Depend on `id` itself, or build `opts` with `useMemo`."
     },
     {
       "prompt": "Why does an effect run twice on mount in development?",
@@ -60,7 +60,7 @@
         "Omitted dependencies make React run the effect twice"
       ],
       "answer": 1,
-      "explanation": "StrictMode deliberately double-invokes effects in development; correct effects with cleanup behave the same. It mounts, unmounts and remounts on purpose."
+      "explanation": "In development, `<StrictMode>` simulates an unmount and a second mount right after the first one: React runs each effect, runs its cleanup, and runs it again. An effect with a correct cleanup ends in the same state either way, while a missing cleanup shows up as a doubled subscription or request. It is deliberate, not a bug, and unrelated to hot reloading or omitted dependencies. Production builds skip the extra cycle."
     },
     {
       "prompt": "A user switches from user 1 to user 2 quickly, and user 1's slow response arrives last. Without cleanup, what is shown?",
@@ -71,7 +71,7 @@
         "Nothing until the user switches again"
       ],
       "answer": 0,
-      "explanation": "The stale response wins the race. Abort the fetch or ignore its result in the cleanup."
+      "explanation": "Both requests are in flight, and each `.then(setUser)` runs whenever its own response arrives. User 2's answer comes first and is shown; then user 1's slow answer arrives and its `setUser` overwrites it, so the screen shows user 1 while the URL says user 2. React does not detect the race and shows no warning. The cleanup fixes it: abort the old request, or set an `ignore` flag that the stale callback checks."
     },
     {
       "prompt": "An interval set up with `[]` deps logs `count` every second while count changes. What does it log?",
@@ -82,7 +82,7 @@
         "A count that lags one render behind"
       ],
       "answer": 2,
-      "explanation": "The callback closed over the first render's count. Use the updater form, a ref, or proper dependencies. This is a stale closure."
+      "explanation": "The interval callback is created once, by the effect of the first render, and it closes over that render's `count`. Later renders create new `count` constants, but the interval never sees them, so it keeps logging the first value: a stale closure. The value does not turn into undefined and does not lag one render behind; it stays frozen. Fix it with `count` in the dependencies, a ref, or the updater form."
     },
     {
       "prompt": "Which is NOT a good use of useEffect?",
@@ -93,7 +93,7 @@
         "Computing fullName from firstName and lastName"
       ],
       "answer": 3,
-      "explanation": "Derived values should be computed during render; an effect adds an extra render and a window of inconsistent UI."
+      "explanation": "Effects are for synchronising with systems outside React: a WebSocket, a timer or a third-party chart library all need setup and cleanup. `fullName` is just `firstName + ' ' + lastName`, computable while rendering. Putting it in state set by an effect renders once with the old name, runs the effect, and renders again: an extra render and a frame of inconsistent UI. Compute derived values in the component body."
     },
     {
       "prompt": "How do you reset a form component's state when the edited record id changes?",
@@ -104,7 +104,7 @@
         "Wrap the initial state in useMemo with [id]"
       ],
       "answer": 0,
-      "explanation": "A new key gives a fresh component instance with fresh initial state."
+      "explanation": "React keeps a component's state as long as the same component type stays at the same position with the same key. Changing a prop leaves that state alone, so the form would keep the old record's edits. A new key tells React this is a different component: it unmounts the old one and mounts a new one with fresh initial state. A ref change triggers no render, and `useMemo` only caches a value; neither resets `useState`."
     },
     {
       "prompt": "Is a dependency of `NaN` treated as changed on every render?",
@@ -115,7 +115,7 @@
         "React rejects NaN as a dependency"
       ],
       "answer": 1,
-      "explanation": "React compares dependencies with Object.is, which treats NaN as equal to itself."
+      "explanation": "React compares each dependency with `Object.is`, not with `===`. The two differ in exactly two cases: for NaN, `===` says unequal while `Object.is` says equal, and for `0` versus `-0`, `===` says equal while `Object.is` says different. So a NaN dependency is stable, the same in StrictMode and in production, and React accepts it like any other value."
     }
   ],
   "flashcards": [
@@ -190,7 +190,7 @@
           "code": "const slot = mod.createEffectSlot();\nlet cleaned = 0;\nslot.render(() => () => { cleaned++; }, []);\nslot.unmount();\nslot.unmount();\nassert.equal(cleaned, 1);\nconst none = mod.createEffectSlot();\nnone.unmount();"
         }
       ],
-      "explanation": "Decide whether to run, then clean up the previous run, then run and store the new cleanup:\n\n```js\nrender(effect, deps) {\n  const run = !mounted || deps === undefined || prevDeps === undefined || changed(prevDeps, deps);\n  mounted = true;\n  if (!run) return false;\n  runCleanup();\n  prevDeps = deps;\n  cleanup = effect();\n  return true;\n}\n```\n\n`changed` compares lengths and then every element with `Object.is`, which is why `NaN` is stable while a fresh `{}` always re-runs: exactly the behaviour behind the \"object in deps\" infinite loop.",
+      "explanation": "Decide whether to run, then clean up the previous run, then run and store the new cleanup:\n\n```js\nrender(effect, deps) {\n  const run = !mounted || deps === undefined || prevDeps === undefined || changed(prevDeps, deps);\n  mounted = true;\n  if (!run) return false;\n  runCleanup();\n  prevDeps = deps;\n  cleanup = effect();\n  return true;\n}\n```\n\n`changed` compares lengths and then every element with `Object.is`, which is why `NaN` is stable while a fresh `{}` always re-runs: exactly the behaviour behind the \"object in deps\" infinite loop.\n\nTwo slips the tests catch. Running the new effect first and the old cleanup afterwards, instead of the other way round, makes \"the previous cleanup runs before the next effect\" fail, since the log order flips. Calling the stored cleanup without setting `cleanup = undefined` first makes \"unmount calls the cleanup exactly once (boundary)\" fail on the second `unmount()`.",
       "hints": [
         "You need to remember three things between renders: whether this is the first render, the last deps the effect ran with, and the cleanup it returned.",
         "Decide whether the effect is due: the first render, no dependency list, a different length, or any element that differs under same-value comparison. If it is due, call the stored cleanup first, then remember the new dependencies and the cleanup the effect returns.",
@@ -235,7 +235,7 @@
           "code": "const slot = mod.createEffectSlot();\nlet cleaned = 0;\nslot.render(() => () => { cleaned++; }, []);\nslot.unmount();\nslot.unmount();\nassert.equal(cleaned, 1);\nconst none = mod.createEffectSlot();\nnone.unmount();"
         }
       ],
-      "explanation": "With `!==`, a `NaN` dependency is never equal to itself, so the effect re-runs on every render. React compares dependencies with `Object.is`, which treats `NaN` as equal to `NaN` (and `+0`/`-0` as different); swap the comparison and the rest of the runner is right.",
+      "explanation": "With `!==`, a `NaN` dependency is never equal to itself, so the effect re-runs on every render. React compares dependencies with `Object.is`, which treats `NaN` as equal to `NaN` (and `+0`/`-0` as different); swap the comparison and the rest of the runner is right.\n\nOnly \"deps are compared with Object.is\" fails on the starter, at its 'NaN is stable' assertion. For objects, `!==` and `Object.is` agree, which is why the `{}` checks in the same test do not expose the bug. The other place they differ, `+0` versus `-0`, has no test, so do not rely on the suite alone to catch it.",
       "hints": [
         "Render twice with [NaN] as the deps. Does the effect run again?",
         "NaN is the one value that is not equal to itself under strict equality.",
