@@ -45,7 +45,7 @@ import type { Db } from '../db/database.ts';
 import { seedQueue, SyncConfigError } from '../sync/job.ts';
 import type { SyncService } from '../sync/service.ts';
 import { nowMs, type Clock } from '../engines/clock.ts';
-import { dueCount } from '../engines/fsrs.ts';
+import { dueCount, priorityDueRows, priorityFirst } from '../engines/fsrs.ts';
 import { contentCounts, reviewQueue } from '../store/queries.ts';
 import { emptyContentStore, type UnitContentStore } from './content-store.ts';
 import { asyncRoute, errorBody, HttpError, sendJson, validate } from './http.ts';
@@ -57,7 +57,7 @@ import { reviewCardText } from './study-service.ts';
 import { conceptCardText, registerKeyIdeaRoutes, syncKeyIdeas } from './keyideas-service.ts';
 import { registerNotebookRoutes } from './notebook-service.ts';
 import { HonestyRuleError } from '../engines/attempts.ts';
-import { RECHECK_PREFIX, REDO_PREFIX } from '../engines/keyideas.ts';
+import { RECHECK_PREFIX, REDO_PREFIX, resolveSections, type ResolvedSection } from '../engines/keyideas.ts';
 import { campaignProgress, passRates, reviewStats, xpStats } from './stats-service.ts';
 import { registerS3Routes } from './s3-routes.ts';
 import { defaultRunners, type RunnerRegistry } from './runners.ts';
@@ -450,8 +450,15 @@ export function createApp(opts: AppOptions): Express {
     syncKeyIdeas(deps); // rv2: enrol what the passes earned, release today's redo card
     // W8: seeded cards (study-quest misses, flashcards) carry their text, resolved from the stamped pack;
     // rv2: concept cards (key ideas, redo, ebmiss, re-check, notebook) from the side files / their tables
-    const items = reviewQueue(deps.db, nowMs(deps.clock), q.limit ?? DEFAULT_QUEUE_LIMIT).map((it) => {
-      const card = reviewCardText(deps.seedItems, it.cardKey) ?? (it.kind === 'concept' ? conceptCardText(deps.db, deps.seedItems, it.cardKey) : undefined);
+    // rv3 MF-6: the key-idea sections are resolved at most once for the whole page (never per concept card)
+    let sections: ResolvedSection[] | undefined;
+    const resolved = (): ResolvedSection[] => (sections ??= resolveSections(deps.db));
+    // rv3 W10c: a released redo card and a due re-check come first (engines/fsrs.ts priorityFirst)
+    const t = nowMs(deps.clock);
+    const limit = q.limit ?? DEFAULT_QUEUE_LIMIT;
+    const first = priorityDueRows(deps.db, t);
+    const items = priorityFirst(first, reviewQueue(deps.db, t, limit + first.length), limit).map((it) => {
+      const card = reviewCardText(deps.seedItems, it.cardKey) ?? (it.kind === 'concept' ? conceptCardText(deps.db, deps.seedItems, it.cardKey, resolved()) : undefined);
       return card ? { ...it, card } : it;
     });
     sendJson(res, 200, ReviewQueueResponse.parse({ count: dueCount(deps.db, deps.clock), items }));

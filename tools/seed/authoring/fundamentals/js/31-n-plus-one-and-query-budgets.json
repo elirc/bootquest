@@ -5,7 +5,7 @@
   "title": "N+1 queries and query budgets",
   "level": "advanced",
   "summary": "Spotting the 1 + N query pattern, fixing it with one batched query per relation, DataLoader-style per-tick loaders, and tests that assert a query budget that does not grow with the data.",
-  "lesson": "## What N+1 looks like\n\n```js\nconst orders = await db.listOrders();                    // 1 query\nfor (const o of orders) {\n  o.customer = await db.customerById(o.customerId);      // + 1 query per order\n}\n```\n\nOne query fetches a list, then the code runs one more query per row. An ORM's lazy relation does the same behind an innocent property access, and a GraphQL resolver per field does it per item.\n\n## Why it hides until production\n\nWith five seed rows and the database on the same machine, 1 + N queries take a few milliseconds. In production every query pays a network round trip, the lists are long, and each request holds a pooled connection for the whole loop.\n\nFailure story: an order history page made 1 + 2N queries (customer and line items per order). It took 12 ms on seed data and 3 seconds for a customer with 400 orders: 801 queries per page view, and a few such users at once drained the connection pool for everyone.\n\n## Batch: one query per relation\n\nCollect the distinct ids, load them with one query (`WHERE id IN (...)`) or a JOIN, put the rows in a `Map` by id, and attach them by lookup. Never zip the results by position: without `ORDER BY` the rows come back in whatever order the database likes, and ids with no row are simply missing. Skip the query for an empty list, because Postgres rejects `IN ()` as a syntax error. Chunk huge lists: databases cap bind parameters per statement, and SQLite's default limit is 32,766.\n\n## Loaders: batching per tick\n\nWhen the code that needs a row cannot see the whole list (nested resolvers, helpers called per item), use a DataLoader-style loader. Every `load(key)` made in the same tick is collected; then the loader removes duplicates, calls the batch function once with the keys and hands each caller the value at its key's position. The batch function must return exactly one value per key, in key order, with an `Error` for a key that failed.\n\nFailure story: a team made their loader a module-level singleton with a cache. The batching worked, but the cache outlived requests, so a row loaded for one user's request was served to the next user, past their permissions. Create loaders per request.\n\n## Query budgets in tests\n\nResponse-time assertions are flaky and do not catch N+1 on small fixtures. Count queries instead: subscribe to the driver's query event (or wrap the client), run the handler for 1, 10 and 200 rows and assert the same small ceiling for each. A count that grows with N is an N+1. A count exactly at the budget passes. When the budget fails, print every query that ran, so the failure message answers \"which query repeated?\" without a debugger.",
+  "lesson": "## What N+1 looks like\n\n```js\nconst orders = await db.listOrders();                    // 1 query\nfor (const o of orders) {\n  o.customer = await db.customerById(o.customerId);      // + 1 query per order\n}\n```\n\nOne query fetches a list, then the code runs one more query per row. An ORM's lazy relation does the same behind an innocent property access, and a GraphQL resolver per field does it per item. The count grows with the data: 20 orders in a test fixture make 21 queries, and 2,000 in production make 2,001.\n\n## Why it hides until production\n\nWith five seed rows and the database on the same machine, 1 + N queries take a few milliseconds. In production every query pays a network round trip, the lists are long, and each request holds a pooled connection for the whole loop.\n\nFailure story: an order history page made 1 + 2N queries (customer and line items per order). It took 12 ms on seed data and 3 seconds for a customer with 400 orders: 801 queries per page view, and a few such users at once drained the connection pool for everyone.\n\n## Batch: one query per relation\n\nCollect the distinct ids, load them with one query (`WHERE id IN (...)`) or a JOIN, put the rows in a `Map` by id, and attach them by lookup. Never zip the results by position: without `ORDER BY` the rows come back in whatever order the database likes, and ids with no row are simply missing. Skip the query for an empty list, because Postgres rejects `IN ()` as a syntax error. Chunk huge lists: databases cap bind parameters per statement, and SQLite's default limit is 32,766.\n\n## Loaders: batching per tick\n\nWhen the code that needs a row cannot see the whole list (nested resolvers, helpers called per item), use a DataLoader-style loader. Every `load(key)` made in the same tick is collected; then the loader removes duplicates, calls the batch function once with the keys and hands each caller the value at its key's position. The batch function must return exactly one value per key, in key order, with an `Error` for a key that failed.\n\nFailure story: a team made their loader a module-level singleton with a cache. The batching worked, but the cache outlived requests, so a row loaded for one user's request was served to the next user, past their permissions. Create loaders per request.\n\n## Query budgets in tests\n\nResponse-time assertions are flaky and do not catch N+1 on small fixtures. Count queries instead: subscribe to the driver's query event (or wrap the client), run the handler for 1, 10 and 200 rows and assert the same small ceiling for each. A count that grows with N is an N+1. A count exactly at the budget passes. When the budget fails, print every query that ran, so the failure message answers \"which query repeated?\" without a debugger.",
   "quiz": [
     {
       "prompt": "A handler loads 200 orders with one query, then calls `customerById` once per order. How many queries does one request make?",
@@ -16,7 +16,7 @@
         "`400`"
       ],
       "answer": 1,
-      "explanation": "One query for the list plus one per order: 1 + N. A batched version makes 2 whatever N is."
+      "explanation": "One query fetches the 200 orders, then every order costs one more query: 1 + N = 201. Two is what a batched version makes whatever N is, and 400 would need two lookups per order. The count grows with the data, which is why the problem hides on small fixtures and shows up in production."
     },
     {
       "prompt": "Why did an N+1 order page look fast in development and slow in production?",
@@ -38,7 +38,7 @@
         "In insertion order, with a NULL row for each id that has no match"
       ],
       "answer": 0,
-      "explanation": "SQL promises no order without ORDER BY, and IN returns only matching rows. Index the result by id and look each one up."
+      "explanation": "SQL promises no order without ORDER BY, so the rows may come back in any order: not the order of the IN list, and not sorted descending (SQLite happens to answer 3, 7 here). IN also returns only matching rows, so an id with no customer is simply missing, with no NULL placeholder. Index the result by id in a Map and look each one up."
     },
     {
       "prompt": "A batching list handler finds that the page has no orders at all. What should it do about the customer query?",
@@ -60,7 +60,7 @@
         "`[2, 1]`"
       ],
       "answer": 1,
-      "explanation": "Keys of one tick are de-duplicated and passed once, in the order they were first requested. Both load(1) calls receive the same value."
+      "explanation": "Keys requested in one tick are de-duplicated and passed once, in the order they were first requested, so the batch function sees one list of two keys. It is tempting to expect every call's key, repeats included, but the second 1 never reaches it, the keys are not wrapped in one array per call, and the order is first-seen, not reversed. Both load(1) calls resolve to the same value."
     },
     {
       "prompt": "Asked for keys `[5, 8]`, a batch function returns `[row8, row5]`. What does a loader that assigns values by position do?",
@@ -82,7 +82,7 @@
         "A shared cache serves one user's rows to the next user, past their rights"
       ],
       "answer": 3,
-      "explanation": "Per-request loaders still batch within a request, and their cache ends with it, so no data crosses users or goes stale between requests."
+      "explanation": "A loader cache that lives for the whole process serves rows loaded for one user to the next user, past their rights, and keeps serving them after the data changes. A per-request loader still batches inside the request, and its cache ends with it. Loaders hold no database connection and need no socket, and Node does not limit a process to one pending batch."
     },
     {
       "prompt": "Which test assertion reliably catches an N+1 in a list endpoint?",
@@ -93,7 +93,7 @@
         "Time spent in queries is less than half of the total request time"
       ],
       "answer": 2,
-      "explanation": "Counts are deterministic; timings vary by machine and stay small on small fixtures. A count that grows with the row count is the N+1 signature."
+      "explanation": "Query counts are deterministic, while timings vary by machine and stay small on small fixtures, so a one-second or 5 ms assertion passes with the N+1 still in place. A count that grows with the row count is the N+1 signature: assert the same ceiling for 1, 10 and 200 rows."
     },
     {
       "prompt": "A page shows 50 posts, each with its author and its tags. With one batched query per relation, how many queries does it run?",

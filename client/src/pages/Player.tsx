@@ -26,7 +26,7 @@ import { useTracksRefresh } from '../lib/tracks';
 import { InlineProse, Prose, ProseBlocks, splitPrompt } from '../lib/prose';
 import { TRACK_LABEL, campaignSourceOf, competencyLabel, languageOf, readingTitle, unitProse } from '../lib/view';
 import { ExplainBackPane, KataPane } from './LadderPanes';
-import { StudyQuestPane } from './StudyQuestPane';
+import { ConfidencePick, StudyQuestPane } from './StudyQuestPane';
 import { isFundKey, isFundTopicKey } from '../lib/fundamentals';
 import { fundTrackOf } from '../lib/nextstep';
 import { FundLadderProvider, useFundLadderRefresh } from '../lib/useFundLadder';
@@ -43,7 +43,7 @@ import { SectionRecapLinks } from './KeyIdeas';
 import { RevealPanel, promotionLeg, type Solution } from './Player/RevealFlow';
 import { rememberWhyOpen, whyOpenStored, WhyItWorksProse } from './Player/WhyItWorks';
 import { fmtWhen } from '../lib/format';
-import type { PracticeResponse } from '../api/types';
+import type { Confidence, PracticeResponse } from '../api/types';
 
 const ID_RE = /^[1-9]\d{0,14}$/;
 
@@ -548,6 +548,8 @@ function CodePane({ detail, spec, onSubmitted }: { detail: UnitDetail; spec: Pub
   const [loadError, setLoadError] = useState<string | null>(null);
   const [undo, setUndo] = useState<{ code: string; note: string } | null>(null);
   const [assisted, setAssisted] = useState(false);
+  // rv3 W10a: the optional confidence tag of the next graded submit (picked before the result; filed with the attempt)
+  const [confidence, setConfidence] = useState<Confidence | null>(null);
   const [busy, setBusy] = useState<null | 'run' | 'submit'>(null);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -628,6 +630,8 @@ function CodePane({ detail, spec, onSubmitted }: { detail: UnitDetail; spec: Pub
       if (kind === 'run') setOutcome({ kind, result: (await api.runUnit(id, { code })).result });
       else {
         const submit = await api.submitUnit(id, { code, selfAssisted: assisted });
+        if (confidence !== null) void api.tagConfidence(submit.attempt.id, confidence).catch(() => undefined);
+        setConfidence(null); // one tag per graded try
         setOutcome({ kind, submit, hintNote: submit.verdict === 'pass' ? hintedXpNote(hintState.current) : '' });
         setHintRefresh((n) => n + 1); // a failed submit opens the first hint; a pass closes them
         onSubmitted?.(); // rv B: a failed submit or a pass opens the folded "Why it works"
@@ -733,6 +737,7 @@ function CodePane({ detail, spec, onSubmitted }: { detail: UnitDetail; spec: Pub
       <CodeEditor value={code} onChange={edit} language={language} describedBy={`editor-help-${id}`} />
       <div className="toolbar">
         <HelpCheckbox checked={assisted} onChange={setAssisted} />
+        {redoId === null && <ConfidencePick value={confidence} onChange={setConfidence} disabled={busy !== null} name={`confidence-code-${id}`} />}
         <span className="toolbar-spacer" />
         <button type="button" className="btn" onClick={() => void go('run')} disabled={busy !== null}>
           <Icon name="play" /> {busy === 'run' ? 'Running…' : 'Run'} <Kbd>Ctrl</Kbd>
@@ -899,13 +904,18 @@ function useAnswerSubmit(unitId: number) {
   const [submit, setSubmit] = useState<SubmitResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // rv3 W10a: the optional confidence tag, picked before the result and filed once the attempt exists (0 XP, never graded)
+  const [confidence, setConfidence] = useState<Confidence | null>(null);
   const refreshTracks = useTracksRefresh();
   const send = async (s: Submission) => {
     if (busy) return;
     setBusy(true);
     setError(null);
     try {
-      setSubmit(await api.submitUnit(unitId, s));
+      const r = await api.submitUnit(unitId, s);
+      if (confidence !== null) void api.tagConfidence(r.attempt.id, confidence).catch(() => undefined);
+      setConfidence(null); // one tag per graded try
+      setSubmit(r);
       refreshTracks(); // W10: a recorded submit can change the track's done count
     } catch (e) {
       // rv B: a practised quick check is NOT_DUE for 2 days: the server's message says until when
@@ -914,7 +924,7 @@ function useAnswerSubmit(unitId: number) {
       setBusy(false);
     }
   };
-  return { submit, error, busy, send };
+  return { submit, error, busy, send, confidence, setConfidence };
 }
 
 function QuizPane({
@@ -933,7 +943,7 @@ function QuizPane({
   const [choice, setChoice] = useState<number | null>(null);
   const [text, setText] = useState('');
   const [assisted, setAssisted] = useState(false);
-  const { submit, error, busy, send } = useAnswerSubmit(detail.unit.id);
+  const { submit, error, busy, send, confidence, setConfidence } = useAnswerSubmit(detail.unit.id);
   const passed = submit?.result.pass === true;
   const [lastPick, setLastPick] = useState<number | null>(null);
   // rv B (Q3): practice = the keyed answer + explanation at once, nothing recorded; the graded check then waits 2 days
@@ -1021,6 +1031,7 @@ function QuizPane({
       )}
       <div className="toolbar">
         <HelpCheckbox checked={assisted} onChange={setAssisted} />
+        {!passed && <ConfidencePick value={confidence} onChange={setConfidence} disabled={busy} name={`confidence-quiz-${detail.unit.id}`} />}
         <span className="toolbar-spacer" />
         {!passed && (
           <button
@@ -1091,7 +1102,7 @@ function QuizPane({
 function PredictPane({ detail, prompt }: { detail: UnitDetail; prompt: string | null }) {
   const [text, setText] = useState('');
   const [assisted, setAssisted] = useState(false);
-  const { submit, error, busy, send } = useAnswerSubmit(detail.unit.id);
+  const { submit, error, busy, send, confidence, setConfidence } = useAnswerSubmit(detail.unit.id);
   const passed = submit?.result.pass === true;
   const go = () => {
     if (!passed && text.trim() !== '') void send({ answer: text, selfAssisted: assisted });
@@ -1119,6 +1130,7 @@ function PredictPane({ detail, prompt }: { detail: UnitDetail; prompt: string | 
       />
       <div className="toolbar">
         <HelpCheckbox checked={assisted} onChange={setAssisted} />
+        {!passed && <ConfidencePick value={confidence} onChange={setConfidence} disabled={busy} name={`confidence-predict-${detail.unit.id}`} />}
         <span className="toolbar-spacer" />
         <button type="button" className="btn btn-primary" onClick={go} disabled={passed || busy || text.trim() === ''}>
           <Icon name="check" /> Submit <Kbd>Ctrl</Kbd>

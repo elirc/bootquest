@@ -20,7 +20,7 @@ import { DAY_MS, fixedClock, nowMs } from '../src/engines/clock.ts';
 import { addReviewItem } from '../src/engines/fsrs.ts';
 import { enrolEbMisses, GENERIC_HEADLINE, MAX_EBMISS_PER_ATTEMPT } from '../src/engines/redo.ts';
 import { enrollFlashcards } from '../src/engines/study-quest.ts';
-import { makeKeyIdeas, readKeyIdeas, setKeyIdeas } from '../src/store/keyideas.ts';
+import { keyIdeas, makeKeyIdeas, readKeyIdeas, setKeyIdeas } from '../src/store/keyideas.ts';
 import { makeRouting, setRouting } from '../src/store/routing.ts';
 import { reconcileSeededReviewCards } from '../src/store/review-cards.ts';
 import { emptySeedItemStore, type SeedItemStore } from '../src/store/seed-items.ts';
@@ -134,6 +134,66 @@ describe('redo cards (spaced production)', () => {
     // once s1 is passed the card opens s2 (the least recently passed of the rest)
     submit(tmp.db, clock, ids['kr/s1']!);
     expect((await request(app).get(`/api/keyideas/cards/${id}`)).body.redo).toMatchObject({ key: 'kr/s2' });
+  });
+  it('rv3 W10c: a released redo card is first in the reviews queue, ahead of 100 older due flashcards', async () => {
+    submit(tmp.db, clock, ids['kr/d1']!);
+    await request(app).get('/api/keyideas');
+    // 100 flashcard-style cards, all due before the redo card is released
+    for (let k = 0; k < 100; k++) addReviewItem(tmp.db, { cardKey: `flashcard:fx/w10c-${k}`, kind: 'card', dueAt: nowMs(clock) + DAY_MS + k }, clock);
+    clock.advance(3 * DAY_MS + 1);
+    const page = (await request(app).get('/api/reviews/queue').query({ limit: '10' })).body as { count: number; items: { cardKey: string }[] };
+    expect(page.count).toBe(102); // + idea one's own key-idea card (due the day after the pass)
+    expect(page.items).toHaveLength(10);
+    expect(page.items[0]!.cardKey).toBe('redo:fx-redo/one');
+    // the rest keep their due order, and no card is listed twice
+    expect(page.items.slice(1).map((i) => i.cardKey)).toEqual(['keyidea:fx-redo/one', ...Array.from({ length: 8 }, (_, k) => `flashcard:fx/w10c-${k}`)]);
+    const all = (await request(app).get('/api/reviews/queue')).body.items as { cardKey: string }[];
+    expect(new Set(all.map((i) => i.cardKey)).size).toBe(all.length);
+    expect(all).toHaveLength(102);
+  });
+
+  it('rv3 MF-3: a redo card whose idea lost every live sibling is skipped, never blocks the others, retires at startup and returns with a sibling', async () => {
+    const base = keyIdeas();
+    const withSiblings = (one: string[]) =>
+      makeKeyIdeas([{ ...base.sections.get('fx-redo')!, ideas: base.sections.get('fx-redo')!.ideas.map((i) => (i.id === 'one' ? { ...i, siblings: one } : i)) }]);
+    submit(tmp.db, clock, ids['kr/d1']!);
+    clock.advance(DAY_MS);
+    submit(tmp.db, clock, ids['kr/d2']!);
+    await request(app).get('/api/keyideas');
+    clock.advance(3 * DAY_MS);
+    expect(redoOut((await queue()).items)).toEqual(['redo:fx-redo/one']);
+    // the side file drops idea one's siblings (rv3 edits these lists) while its card is out
+    setKeyIdeas(withSiblings([]));
+    const q = await queue();
+    // the dead card leaves the queue at once and does not hold back the next redo card
+    expect(redoOut(q.items)).toEqual(['redo:fx-redo/two']);
+    expect(q.count).toBe(q.items.length);
+    const two = q.items.find((i) => i.cardKey === 'redo:fx-redo/two')!.id;
+    expect((await request(app).post(`/api/redo/${two}/run`).send({ code: RIGHT })).body.grade).toBe('good');
+    // the following days: never released while it has no live sibling
+    for (let d = 0; d < 3; d++) {
+      clock.advance(DAY_MS);
+      expect(redoOut((await queue()).items)).not.toContain('redo:fx-redo/one');
+    }
+    // startup: retired; a sibling that comes back restores it, and it is released again
+    expect(reconcileSeededReviewCards(tmp.db, emptySeedItemStore, clock).retired).toContain('redo:fx-redo/one');
+    // an archived or retired sibling unit counts as no sibling too
+    setKeyIdeas(withSiblings(['kr/s3']));
+    tmp.db.run("UPDATE unit SET retired_at = 1 WHERE key = 'kr/s3'");
+    expect(reconcileSeededReviewCards(tmp.db, emptySeedItemStore, clock).restored).toEqual([]);
+    tmp.db.run("UPDATE unit SET retired_at = NULL WHERE key = 'kr/s3'");
+    expect(reconcileSeededReviewCards(tmp.db, emptySeedItemStore, clock).restored).toEqual(['redo:fx-redo/one']);
+    // released again: one redo a day, so run whatever is out (two may be due again on its own schedule) until it is
+    let released = false;
+    for (let d = 0; d < 6 && !released; d++) {
+      clock.advance(DAY_MS);
+      const day = await queue();
+      const out = redoOut(day.items);
+      expect(out.length).toBeLessThanOrEqual(1);
+      if (out[0] === 'redo:fx-redo/one') released = true;
+      else for (const key of out) await request(app).post(`/api/redo/${day.items.find((i) => i.cardKey === key)!.id}/run`).send({ code: RIGHT });
+    }
+    expect(released).toBe(true);
   });
 });
 

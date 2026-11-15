@@ -52,6 +52,9 @@ export function StatsPage() {
   const weak = useAsync(() => api.getWeakSpots(), [api]);
   const design = useAsync(() => api.getDesignProfile(), [api]); // rv2 S3 (F5)
   const calib = useAsync(() => api.getCalibration(), [api]); // rv2 S3 (F9)
+  // rv3 W10b: the competency table's retest leg says "open now" for a due retest (GET /due, the same list as /competencies)
+  const due = useAsync(() => api.getDue(), [api]);
+  const dueRetestUnits = new Set((due.data?.retests ?? []).filter((r) => r.due).map((r) => r.unitId));
   // settled once = laid out for good (a later Retry puts that one panel back into loading, in place)
   const [panelsSettled, setPanelsSettled] = useState(false);
   const allSettled = [xp, rates, reviews, campaign, katas, weak, design, calib].every((x) => x.status !== 'loading');
@@ -108,7 +111,7 @@ export function StatsPage() {
             <CalibrationPanel q={calib} />
             {/* rv wave C (R4-20): the competency ladder lives here, off the dashboard, until a promotion path exists */}
             <div className="span-all">
-              <CompetencyPanel rows={q.data.competencies} today={q.data.today} dueRetestUnits={new Set<number>()} />
+              <CompetencyPanel rows={q.data.competencies} today={q.data.today} dueRetestUnits={dueRetestUnits} />
             </div>
             <EvidenceBrowser />
           </div>

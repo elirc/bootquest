@@ -157,10 +157,40 @@ describe('key-concept cards (F1)', () => {
     const src = readKeyIdeas(CONTENT).sections.get('fx-alpha')!.ideas.find((i) => i.id === 'keyset-pagination')!;
     expect(r.text).not.toContain(src.answer);
     expect(r.text).not.toContain(src.prompt);
+    // rv3 MF-4: nor the idea sentence (it often restates a source's gate key); a met idea carries it
+    expect(waiting.idea).toBe('');
+    expect(r.text).not.toContain(src.idea);
+    expect(met.idea).toBe(readKeyIdeas(CONTENT).sections.get('fx-alpha')!.ideas.find((i) => i.id === 'idempotent-write')!.idea);
     expect(body.tiles.find((t) => t.track === 'js')).toEqual({ track: 'js', owned: 0, shaky: 1, notMet: 4 });
     expect(body.tiles.find((t) => t.track === 'sysdesign')).toEqual({ track: 'sysdesign', owned: 0, shaky: 0, notMet: 3 });
     // ?unit= narrows the sections to those that contain the unit
     expect(((await request(app).get('/api/keyideas').query({ unit: 'kx/b/02' })).body as KeyIdeasResponse).sections.map((s) => s.section)).toEqual(['fx-beta']);
+  });
+
+  it('rv3 MF-6: /reviews/queue resolves the key-idea sections at most once per request (never per concept card), and not at all when nothing changed', async () => {
+    for (const k of ['kx/a/01', 'kx/a/02', 'kx/b/01', 'kx/b/02', 'kx/b/03']) submit(tmp.db, clock, ids[k]!);
+    syncKeyIdeaCards(tmp.db, clock);
+    clock.advance(3 * DAY_MS);
+    const FULL = 'SELECT id, key, kind, title FROM unit WHERE retired_at IS NULL';
+    const all = vi.spyOn(tmp.db, 'all');
+    const fullResolves = (): number => all.mock.calls.filter((c) => String(c[0]).startsWith(FULL)).length;
+    const q = await request(app).get('/api/reviews/queue');
+    const concept = (q.body.items as { cardKey: string; card?: { front: string } }[]).filter((i) => i.cardKey.startsWith('keyidea:'));
+    expect(concept).toHaveLength(5);
+    for (const c of concept) expect(c.card?.front).toBeTruthy();
+    // nothing changed since the sync above: the memoised resolution serves the sync and all five cards
+    expect(fullResolves()).toBe(0);
+    // a new unit changes the unit table: exactly one fresh resolution for the next request
+    makeUnit(tmp.db, clock, { key: 'kx/a/03', kind: 'quiz' });
+    all.mockClear();
+    expect((await request(app).get('/api/reviews/queue')).body.items.filter((i: { cardKey: string }) => i.cardKey.startsWith('keyidea:'))).toHaveLength(5);
+    expect(fullResolves()).toBe(1);
+    // and the key-ideas page, the queue and the dashboard after it: none
+    all.mockClear();
+    await request(app).get('/api/keyideas');
+    await request(app).get('/api/keyideas/queue');
+    await request(app).get('/api/dashboard');
+    expect(fullResolves()).toBe(0);
   });
 
   it('an unknown key warns once and the routes answer; no content/keyideas/ = no ideas, nothing breaks', async () => {

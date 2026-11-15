@@ -2,8 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { DESIGN_DIMENSIONS, type DesignDimension } from '@bootquest/shared/api-ext';
-import { HeadlinesFile } from './keyideas.ts';
-import { DEFAULT_CONTENT_DIR } from './routing.ts';
+import { HeadlinesFile, sideFilesDir } from './keyideas.ts';
 
 /**
  * rv2 S3 (PLAN F5): the DESIGN IT side data the dimension profile reads, from `content/design/headlines.json`
@@ -79,9 +78,9 @@ let installed: DesignSide | undefined;
 /** The design side data in force (lazily loaded; see the header). */
 export function designSide(): DesignSide {
   if (installed === undefined) {
-    const env = process.env.BOOTQUEST_KEYIDEAS;
-    if (env !== undefined && (env.trim() === '' || env.trim() === 'off')) installed = EMPTY_DESIGN_SIDE;
-    else installed = readDesignSide(env !== undefined ? env.trim() : DEFAULT_CONTENT_DIR);
+    // rv3 MF-10: the same dir rule as the key-ideas store (nothing inside a vitest run unless a test sets it)
+    const dir = sideFilesDir();
+    installed = dir === null ? EMPTY_DESIGN_SIDE : readDesignSide(dir);
     for (const p of installed.problems) console.warn(`[bootquest api] design side: ${p}`);
   }
   return installed;

@@ -1,6 +1,7 @@
 import { kpWeight } from '@bootquest/shared/eb-weight';
 import type { Db } from '../db/database.ts';
 import { keyIdeas, type KeyIdeasStore } from '../store/keyideas.ts';
+import { isArchivedKey } from '../store/routing.ts';
 import { getUnitByKey, primaryCheck, type UnitRecord } from '../store/queries.ts';
 import type { SeedItemStore } from '../store/seed-items.ts';
 import { VERIFIED_PASS_SQL } from './attempts.ts';
@@ -63,17 +64,35 @@ export function enrolRedo(db: Db, i: ResolvedIdea, passed: ReadonlyMap<number, n
 export const isParked = (dueAt: number, t: number): boolean => dueAt - t >= REDO_PARK_MS / 2;
 
 /**
+ * rv3 MF-3: a redo card can be run only while its idea (still in the side files) lists at least one LIVE sibling: a
+ * non-archived key of a unit this server has and has not retired. A card with none could neither be run nor graded.
+ */
+export function redoSiblingLive(db: Db, cardKey: string, store: KeyIdeasStore = keyIdeas()): boolean {
+  const k = parseIdeaCardKey(cardKey, REDO_PREFIX);
+  const idea = k ? store.sections.get(k.section)?.ideas.find((i) => i.id === k.id) : undefined;
+  if (!idea) return false;
+  return idea.siblings.some((key) => !isArchivedKey(key) && db.get('SELECT 1 AS x FROM unit WHERE key = ? AND retired_at IS NULL', key) !== undefined);
+}
+
+/**
  * Un-park at most one redo card: only when no live redo card is out (un-parked) and no redo card was graded on
  * today's local day. The candidate is the parked live redo card with the earliest true (FSRS) due time that is
  * <= now. Returns its card key, or null.
+ *   rv3 MF-3: a redo card whose idea has no live sibling is skipped: it never blocks the others, is never released,
+ * and one that is out is parked again (the startup reconcile retires it; it is restored when a sibling returns).
  */
-export function releaseRedo(db: Db, now: Clock): string | null {
+export function releaseRedo(db: Db, now: Clock, store: KeyIdeasStore = keyIdeas()): string | null {
   const t = nowMs(now);
   const [start, end] = dayBounds(dayKey(t));
   return db.tx(() => {
-    const live = db.all<{ id: number; key: string; due: number; state: string }>(
+    const rows = db.all<{ id: number; key: string; due: number; state: string }>(
       `SELECT id, card_key AS key, due_at AS due, fsrs_state AS state FROM review_item WHERE ${prefixSql(REDO_PREFIX)} AND retired_at IS NULL ORDER BY id`,
     );
+    const live: typeof rows = [];
+    for (const r of rows) {
+      if (redoSiblingLive(db, r.key, store)) live.push(r);
+      else if (!isParked(r.due, t)) parkRedo(db, r.id);
+    }
     if (live.some((r) => !isParked(r.due, t))) return null;
     const gradedToday = db.get(
       `SELECT 1 AS x FROM review_log rl JOIN review_item ri ON ri.id = rl.review_item_id
@@ -186,14 +205,14 @@ export function recheckDone(db: Db, section: string, days: string): boolean {
   return db.get('SELECT 1 AS x FROM keyidea_checkpoint WHERE section = ? AND kind = ?', section, `recheck-${days}`) !== undefined;
 }
 
-/** The one liveness rule of a concept card (retire when false, restore when true). note: cards are always live. */
+/** The one liveness rule of a concept card (retire when false, restore when true). note: cards are always live; redo: cards need a live sibling. */
 export function conceptCardLive(db: Db, seedItems: SeedItemStore, cardKey: string, store: KeyIdeasStore = keyIdeas()): boolean {
   if (cardKey.startsWith(NOTE_PREFIX)) return true;
   if (cardKey.startsWith(EBMISS_PREFIX)) return ebmissTarget(db, seedItems, cardKey) !== null;
-  for (const p of [KEYIDEA_PREFIX, REDO_PREFIX]) {
-    const k = parseIdeaCardKey(cardKey, p);
-    if (k) return store.sections.get(k.section)?.ideas.some((i) => i.id === k.id) ?? false;
-  }
+  const ki = parseIdeaCardKey(cardKey, KEYIDEA_PREFIX);
+  if (ki) return store.sections.get(ki.section)?.ideas.some((i) => i.id === ki.id) ?? false;
+  // rv3 MF-3: a redo card also needs a live sibling to run
+  if (parseIdeaCardKey(cardKey, REDO_PREFIX)) return redoSiblingLive(db, cardKey, store);
   const r = parseIdeaCardKey(cardKey, RECHECK_PREFIX);
   if (r) return store.sections.has(r.section) && !recheckDone(db, r.section, r.id);
   return true;

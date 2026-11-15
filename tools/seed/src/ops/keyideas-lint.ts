@@ -7,7 +7,8 @@
 //   - every scope / sources / siblings key resolves to a LIVE unit of the estate (a scope key ending in
 //     "/" is a prefix, as in content/paths/*.json, and must cover >= 1 live unit), and none is archived
 //     (content/archive.json); sources and siblings must be exact keys, siblings must be drills;
-//   - the xleak rule: an idea's prompt + answer may restate a keyed answer only when that item belongs
+//   - rv3 MF-2: the recap opens after at most MAX_RECAP_UNITS passed scope units (RECAP_UNITS_PENDING: scheduled fixes);
+//   - the xleak rule: an idea's sentence, prompt and answer may restate a keyed answer only when that item belongs
 //     to a unit in the idea's own `sources` (the card is enrolled after that unit is passed). Two
 //     matchers, both the estate's existing ones: the token rule of seed:lint:leaks part 1
 //     (factory/leak.ts leakMatchPrepared with guards.ts EB_LEAK_JACCARD / EB_LEAK_OPTIONS) against every
@@ -32,6 +33,46 @@ export const MAX_IDEAS = 12;
 /** the sysdrills section is one idea per module (PLAN §2.1) */
 export const FIXED_IDEA_COUNT: Readonly<Record<string, number>> = { sysdrills: 18 };
 export const MAX_SIBLINGS = 3;
+/**
+ * rv3 MF-2 (FABLE-REVIEW F2): a section's recap must open after at most this many passed scope units. With
+ * recapAfter 0.8 over a whole bank (sysdrills 104 of 129, bootforge about 1,400 of 1,760) it never opened.
+ */
+export const MAX_RECAP_UNITS = 40;
+/**
+ * Sections over MAX_RECAP_UNITS whose fix is scheduled elsewhere (reported, not a problem). An entry that is no
+ * longer over the limit IS a problem: remove it. Fixed by the rv3 S1 content patch (rv3/S1-REPORT.md): the four
+ * banks and sysdrills. Fixed by rv3 S4 (it owns those files): agentic, review-katas.
+ */
+export const RECAP_UNITS_PENDING: Readonly<Record<string, string>> = {
+  'bank-bootforge': 'rv3 S1 content patch',
+  'bank-csharp': 'rv3 S1 content patch',
+  'bank-java': 'rv3 S1 content patch',
+  'bank-jstrain': 'rv3 S1 content patch',
+  sysdrills: 'rv3 S1 content patch',
+  agentic: 'rv3 S4',
+  'review-katas': 'rv3 S4',
+};
+const DEFAULT_RECAP_AFTER = 0.8;
+/**
+ * rv3 MF-4: idea-sentence leaks found when the check was added, whose rewrite is scheduled: the rv3 S1 content
+ * patch (bank-jstrain, campaign-*: rv3/S1-REPORT.md) or rv3 S3 (it owns content/keyideas/fund-js-*.json). Key "<file>|<idea id>|<keyed item id>". Listed apart, not a
+ * problem; an entry that no longer fires IS a problem: remove it.
+ */
+export const IDEA_LEAK_PENDING: Readonly<Record<string, string>> = {
+  'bank-jstrain.json|async-control-primitives|seed:quests:organized-build-agenthelpdesk/quiz/a18e3b8872690ae1': 'rv3 S1 content patch',
+  'campaign-authz-tenancy.json|ownership-on-every-path|fund:js/18-http-apis-in-node/q01': 'rv3 S1 content patch',
+  'campaign-authz-tenancy.json|not-found-for-other-tenants|fund:js/18-http-apis-in-node/q03': 'rv3 S1 content patch',
+  'campaign-migrations-rollout.json|expand-contract-each-its-own-deploy|fund:js/29-schema-changes-under-live-traffic/q02': 'rv3 S1 content patch',
+  'campaign-queues-outbox.json|claim-with-a-conditional-update|eb:zz8--astraupskill-02-CONCEPTS.md q2.kp1': 'rv3 S1 content patch',
+  'campaign-retries-timeouts.json|every-call-has-a-deadline|eb:sysdesign--relay--workflow-engine-ops q1.kp4': 'rv3 S1 content patch',
+};
+
+/** Passed scope units a recap needs (the server's rule, engines/keyideas.ts recapProgress). */
+export function recapUnitsNeeded(recapAfter: number | undefined, scopeUnits: number): number {
+  const after = recapAfter ?? DEFAULT_RECAP_AFTER;
+  if (scopeUnits === 0) return 0;
+  return after <= 1 ? Math.max(1, Math.ceil(after * scopeUnits - 1e-9)) : Math.min(after, scopeUnits);
+}
 
 const kebab = z.string().regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, 'kebab-case');
 export const KeyIdea = z
@@ -238,8 +279,12 @@ export interface KeyIdeasProblem {
 export interface KeyIdeasReport {
   files: number;
   ideas: number;
-  perSection: Array<{ section: string; ideas: number; scopeUnits: number }>;
+  perSection: Array<{ section: string; ideas: number; scopeUnits: number; recapUnits: number }>;
   problems: KeyIdeasProblem[];
+  /** rv3 MF-2: sections over MAX_RECAP_UNITS that RECAP_UNITS_PENDING lists (not problems) */
+  pending: Array<{ section: string; recapUnits: number; owner: string }>;
+  /** rv3 MF-4: idea-sentence leaks that IDEA_LEAK_PENDING lists (not problems; not in `leaks`) */
+  pendingLeaks: Array<{ key: string; owner: string; message: string }>;
   leaks: number;
 }
 
@@ -247,6 +292,9 @@ export function keyIdeasReport(contentDir: string, estate: Estate = readEstate(c
   const dir = join(contentDir, 'keyideas');
   const problems: KeyIdeasProblem[] = [];
   const perSection: KeyIdeasReport['perSection'] = [];
+  const pending: KeyIdeasReport['pending'] = [];
+  const pendingLeaks: KeyIdeasReport['pendingLeaks'] = [];
+  const seenPending = new Set<string>();
   let ideas = 0;
   let leaks = 0;
   const files = existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith('.json')).sort() : [];
@@ -276,8 +324,15 @@ export function keyIdeasReport(contentDir: string, estate: Estate = readEstate(c
       if (!us.length) p(`scope key ${k} resolves to no live unit`);
       us.forEach((u) => covered.add(u));
     }
-    perSection.push({ section: s.section, ideas: s.ideas.length, scopeUnits: covered.size });
+    const recapUnits = recapUnitsNeeded(s.recapAfter, covered.size);
+    perSection.push({ section: s.section, ideas: s.ideas.length, scopeUnits: covered.size, recapUnits });
     if (s.recapAfter !== undefined && s.recapAfter > 1 && s.recapAfter > covered.size) p(`recapAfter ${s.recapAfter} is more than the ${covered.size} live scope unit(s)`);
+    // rv3 MF-2: the recap must be reachable: at most MAX_RECAP_UNITS passed scope units
+    const owner = RECAP_UNITS_PENDING[s.section];
+    if (recapUnits > MAX_RECAP_UNITS) {
+      if (owner) pending.push({ section: s.section, recapUnits, owner });
+      else p(`the recap opens after ${recapUnits} passed scope units (max ${MAX_RECAP_UNITS}): use a whole-count recapAfter or a narrower scope`);
+    } else if (owner) p(`RECAP_UNITS_PENDING lists this section but its recap opens after ${recapUnits} unit(s), within ${MAX_RECAP_UNITS}: remove the entry`);
     const ids = new Set<string>();
     for (const it of s.ideas) {
       ideas++;
@@ -300,9 +355,19 @@ export function keyIdeasReport(contentDir: string, estate: Estate = readEstate(c
         if (u && u.kind !== 'drill') q(`sibling ${k} is a ${u.kind}, not a drill`);
         if (it.sources.includes(k)) q(`sibling ${k} is also a source`);
       }
-      // xleak: prompt + answer vs every keyed answer outside the idea's sources
+      // xleak: idea, prompt and answer vs every keyed answer outside the idea's sources (rv3 MF-4: the idea
+      // sentence too; the server withholds it until the sources are passed, so a source's own key is allowed)
       const own = new Set(it.sources);
-      for (const [field, text] of [['prompt', it.prompt], ['answer', it.answer]] as const) {
+      // an idea-sentence leak listed in IDEA_LEAK_PENDING is reported apart (scheduled rewrite)
+      const ideaLeak = (target: string, message: string): boolean => {
+        const key = `${f}|${it.id}|${target}`;
+        const owner = IDEA_LEAK_PENDING[key];
+        if (!owner) return false;
+        seenPending.add(key);
+        pendingLeaks.push({ key, owner, message });
+        return true;
+      };
+      for (const [field, text] of [['idea', it.idea], ['prompt', it.prompt], ['answer', it.answer]] as const) {
         const t = prepareLeakText(text);
         const present = new Set(t.padded.trim().split(' '));
         for (const z of estate.quizKeys) {
@@ -314,8 +379,10 @@ export function keyIdeasReport(contentDir: string, estate: Estate = readEstate(c
           if (shared * 2 < z.key.set.size) continue;
           const m = leakMatchPrepared(t, z.key, EB_LEAK_JACCARD, EB_LEAK_OPTIONS);
           if (m) {
+            const msg = `LEAK ${field} ${m.kind === 'contains' ? 'contains' : `overlaps (${m.score.toFixed(2)})`} the keyed answer of ${z.id} (unit ${z.unit}, not a source): "${z.answer.slice(0, 80)}"`;
+            if (field === 'idea' && ideaLeak(z.id, msg)) continue;
             leaks++;
-            q(`LEAK ${field} ${m.kind === 'contains' ? 'contains' : `overlaps (${m.score.toFixed(2)})`} the keyed answer of ${z.id} (unit ${z.unit}, not a source): "${z.answer.slice(0, 80)}"`);
+            q(msg);
           }
         }
       }
@@ -328,17 +395,36 @@ export function keyIdeasReport(contentDir: string, estate: Estate = readEstate(c
           q(`LEAK prompt+answer restates ${kp.id} (unit ${kp.unit}, not a source; containment ${sc.score.toFixed(2)}, ${sc.shared} shared): "${kp.text.slice(0, 90)}"`);
         }
       }
+      // rv3 MF-4: the idea sentence alone, by the same containment rule
+      const ideaTokens = xleakTokens(it.idea);
+      for (const kp of estate.kps) {
+        if (own.has(kp.unit)) continue;
+        const sc = xleakScore(ideaTokens, kp.tokens);
+        if (xleakFires(sc)) {
+          const msg = `LEAK idea restates ${kp.id} (unit ${kp.unit}, not a source; containment ${sc.score.toFixed(2)}, ${sc.shared} shared): "${kp.text.slice(0, 90)}"`;
+          if (ideaLeak(kp.id, msg)) continue;
+          leaks++;
+          q(msg);
+        }
+      }
     }
   }
-  return { files: files.length, ideas, perSection, problems, leaks };
+  // a pending idea leak that no longer fires (its file is present) is stale
+  for (const key of Object.keys(IDEA_LEAK_PENDING)) {
+    const file = key.split('|')[0]!;
+    if (files.includes(file) && !seenPending.has(key)) problems.push({ file, idea: key.split('|')[1], message: `IDEA_LEAK_PENDING lists ${key} but it no longer leaks: remove the entry` });
+  }
+  return { files: files.length, ideas, perSection, problems, pending, pendingLeaks, leaks };
 }
 
 export const keyIdeasFailed = (r: KeyIdeasReport): boolean => r.problems.length > 0;
 
 export function formatKeyIdeasReport(r: KeyIdeasReport): string[] {
-  const out = ['seed:lint:keyideas — content/keyideas/*.json: schema, idea counts, word limits, live non-archived keys, xleak (prompt + answer vs keyed answers outside sources)'];
+  const out = ['seed:lint:keyideas — content/keyideas/*.json: schema, idea counts, word limits, live non-archived keys, xleak (idea, prompt + answer vs keyed answers outside sources)'];
   for (const x of r.problems) out.push(`${x.message.startsWith('LEAK') ? 'LEAK   ' : 'PROBLEM'} ${x.file}${x.idea ? ` ${x.idea}` : ''}: ${x.message.replace(/^LEAK /, '')}`);
-  for (const s of r.perSection) out.push(`  ${s.section}: ${s.ideas} idea(s), scope ${s.scopeUnits} live unit(s)`);
+  for (const x of r.pendingLeaks) out.push(`PENDING ${x.key.split('|').slice(0, 2).join(' ')}: ${x.message.replace(/^LEAK /, '')} (rewrite scheduled: ${x.owner})`);
+  for (const x of r.pending) out.push(`PENDING ${x.section}: the recap opens after ${x.recapUnits} passed units (max ${MAX_RECAP_UNITS}); fix scheduled: ${x.owner}`);
+  for (const s of r.perSection) out.push(`  ${s.section}: ${s.ideas} idea(s), scope ${s.scopeUnits} live unit(s), recap after ${s.recapUnits}`);
   out.push(`${r.files} side file(s), ${r.ideas} idea(s): ${r.problems.length} problem(s), ${r.leaks} leak(s)`);
   out.push(`RESULT ${keyIdeasFailed(r) ? 'PROBLEMS' : 'OK'}`);
   return out;
