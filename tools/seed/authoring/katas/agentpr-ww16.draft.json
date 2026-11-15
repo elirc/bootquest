@@ -1,0 +1,450 @@
+{
+ "name": "agentpr-ww16-katas",
+ "katas": [
+  {
+   "id": "csv-arr-test-rewritten",
+   "title": "Agent PR: let the CSV import send ARR as text",
+   "provenance": {
+    "path": "src/lib/validation/dealSchemas.ts",
+    "lines": {
+     "start": 14,
+     "end": 14
+    }
+   },
+   "diff": "diff --git a/src/lib/validation/dealSchemas.ts b/src/lib/validation/dealSchemas.ts\n--- a/src/lib/validation/dealSchemas.ts\n+++ b/src/lib/validation/dealSchemas.ts\n@@ -11,7 +11,7 @@\n export const createDealSchema = z.object({\n   partnerOrgId: z.string().min(3),\n   endCustomerName: z.string().min(2).max(160),\n-  projectedArr: z.number().positive(),\n+  projectedArr: z.coerce.number(), // the CSV import sends \"12000\"\n   closeDate: z.coerce.date(),\n   notes: z.string().max(1500).optional(),\n   assignedSalesRepId: z.string().min(3).optional(),\ndiff --git a/tests/validation/dealSchemas.test.ts b/tests/validation/dealSchemas.test.ts\n--- a/tests/validation/dealSchemas.test.ts\n+++ b/tests/validation/dealSchemas.test.ts\n@@ -3,14 +3,14 @@\n import { createDealSchema } from \"@/lib/validation/dealSchemas\";\n \n describe(\"createDealSchema\", () => {\n-  it(\"rejects a negative ARR value at the validation boundary\", () => {\n+  it(\"rejects a non-numeric ARR value at the validation boundary\", () => {\n     // Why this test matters: invalid money values should never enter workflow logic because downstream approvals and reports will trust them.\n     // Production bug caught by this test: a malformed API client creating negative pipeline or nonsense forecast totals.\n     expect(() =>\n       createDealSchema.parse({\n         partnerOrgId: \"partner-acme\",\n         endCustomerName: \"Bad Input Corp\",\n-        projectedArr: -500,\n+        projectedArr: \"not-a-number\",\n         closeDate: \"2026-08-01\",\n       }),\n     ).toThrow();\n",
+   "contextFiles": [
+    {
+     "path": "src/lib/validation/dealSchemas.ts",
+     "origin": {
+      "kind": "verbatim",
+      "repoPath": "src/lib/validation/dealSchemas.ts"
+     }
+    },
+    {
+     "path": "tests/validation/dealSchemas.test.ts",
+     "origin": {
+      "kind": "verbatim",
+      "repoPath": "tests/validation/dealSchemas.test.ts"
+     }
+    }
+   ],
+   "seededDefectKey": [
+    {
+     "scenario": "POST /api/deals with projectedArr -500, 0, or an empty CSV cell (which z.coerce.number() turns into 0).",
+     "evidence": {
+      "path": "src/lib/validation/dealSchemas.ts",
+      "lineStart": 14,
+      "lineEnd": 14,
+      "in": "patched"
+     },
+     "consequence": "The type change also dropped .positive(), so negative and zero ARR pass validation and reach approvals and the leaderboard totals: the \"negative pipeline\" bug the old test was written for. The change the brief needs is z.coerce.number().positive()."
+    },
+    {
+     "scenario": "The only test on this boundary failed against the new code, and the PR changed the test instead of the code: its input went from -500 to \"not-a-number\" and its name changed to match.",
+     "evidence": {
+      "path": "tests/validation/dealSchemas.test.ts",
+      "lineStart": 13,
+      "lineEnd": 13,
+      "in": "patched"
+     },
+     "consequence": "The suite is green only because nothing asserts the negative case any more. A test edited in the same PR as the code it guards has to keep its old assertion; the string input deserves a new case next to it."
+    }
+   ]
+  },
+  {
+   "id": "approve-calls-missing-repository-method",
+   "title": "Agent PR: make deal transitions conflict-safe with a compare-and-set status update (review finding 1)",
+   "findingRef": "ww16 senior review #1 (astraupskill/06-SOLUTIONS-AND-REVIEW.md:30)",
+   "provenance": {
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 30,
+     "end": 30
+    }
+   },
+   "diff": "diff --git a/src/services/dealRegistrationService.ts b/src/services/dealRegistrationService.ts\n--- a/src/services/dealRegistrationService.ts\n+++ b/src/services/dealRegistrationService.ts\n@@ -9,7 +9,7 @@\n import { assertPermission } from \"@/lib/auth/permissions\";\n import { assertPartnerOwnership } from \"@/lib/auth/visibility\";\n import { db } from \"@/lib/db\";\n-import { NotFoundError } from \"@/lib/errors\";\n+import { ConflictError, NotFoundError } from \"@/lib/errors\";\n import { recordAuditEvent } from \"@/lib/audit/auditLogger\";\n import { currentQuarterLabel } from \"@/lib/time\";\n import { assertDealTransitionAllowed } from \"@/domain/dealRegistration\";\n@@ -97,15 +97,21 @@\n     assertDealTransitionAllowed(session, currentDeal.status, input.nextStatus);\n \n     return db.$transaction(async (tx) => {\n-      const updatedDeal = await dealRepository.updateStatus(\n+      // compare-and-set: the update applies only while the deal still has the status we read\n+      const updatedDeal = await dealRepository.compareAndSetStatus(\n         {\n           dealId,\n+          expectedStatus: currentDeal.status,\n           nextStatus: input.nextStatus,\n           rejectionReason: input.rejectionReason,\n         },\n         tx,\n       );\n \n+      if (!updatedDeal) {\n+        throw new ConflictError(\"This deal was changed by someone else. Reload and try again.\");\n+      }\n+\n       await dealRepository.createApproval(\n         {\n           id: randomUUID(),\n",
+   "contextFiles": [
+    {
+     "path": "src/services/dealRegistrationService.ts",
+     "origin": {
+      "kind": "verbatim",
+      "repoPath": "src/services/dealRegistrationService.ts"
+     }
+    },
+    {
+     "path": "src/repositories/dealRepository.ts",
+     "origin": {
+      "kind": "verbatim",
+      "repoPath": "src/repositories/dealRepository.ts"
+     }
+    }
+   ],
+   "seededDefectKey": [
+    {
+     "scenario": "Any transition: a partner submits, a sales rep approves, a manager rejects or closes a deal.",
+     "evidence": {
+      "path": "src/services/dealRegistrationService.ts",
+      "lineStart": 101,
+      "lineEnd": 101,
+      "in": "patched"
+     },
+     "consequence": "dealRepository has no compareAndSetStatus: the call throws a TypeError inside the transaction, every transition rolls back and the route answers a generic 500. TypeScript would refuse the call; npm test is vitest run, which strips types without checking them, so a green run proves nothing about it."
+    },
+    {
+     "scenario": "What the repository really offers: listDeals, findVisibleById, createDeal, updateStatus and createApproval, and updateStatus writes where { id } only.",
+     "evidence": {
+      "path": "src/repositories/dealRepository.ts",
+      "lineStart": 134,
+      "lineEnd": 134,
+      "in": "repo"
+     },
+     "consequence": "The status-guarded write the PR relies on does not exist and is not added by it. The fix needs it in this PR: an update filtered on id and the expected status, with a 409 when it matches no row."
+    }
+   ]
+  },
+  {
+   "id": "unknown-role-fails-open",
+   "title": "Agent PR: stop the 500s for DEAL_DESK users (their role has no row in the permission matrix yet)",
+   "provenance": {
+    "path": "src/lib/auth/permissions.ts",
+    "lines": {
+     "start": 77,
+     "end": 77
+    }
+   },
+   "diff": "diff --git a/src/domain/dealRegistration.mjs b/src/domain/dealRegistration.mjs\n--- a/src/domain/dealRegistration.mjs\n+++ b/src/domain/dealRegistration.mjs\n@@ -31,7 +31,13 @@\n };\n \n export function hasPermission(session, permission) {\n-  return rolePermissionMatrix[session.role].includes(permission);\n+  try {\n+    return rolePermissionMatrix[session.role].includes(permission);\n+  } catch (error) {\n+    // DEAL_DESK has no matrix row yet: this threw a TypeError and every deal page answered 500\n+    console.warn(`permission lookup failed for role ${session.role}`, error);\n+    return true;\n+  }\n }\n \n export function assertPermission(session, permission) {\n",
+   "contextFiles": [
+    {
+     "path": "src/domain/dealRegistration.mjs",
+     "content": "// Adapted from ww16 src/domain/dealRegistration.ts:12-54 @ f649784 (the shipped rules: no assignment\n// check), with hasPermission / assertPermission and the role matrix of src/lib/auth/permissions.ts:30-86\n// reduced to the permissions the deal flow uses, and the error classes of src/lib/errors.ts:3-36.\nexport class AppError extends Error {\n  constructor(message, statusCode, code) {\n    super(message);\n    this.statusCode = statusCode;\n    this.code = code;\n  }\n}\n\nexport class ForbiddenError extends AppError {\n  constructor(message = \"You do not have permission to perform this action.\") {\n    super(message, 403, \"FORBIDDEN\");\n  }\n}\n\nexport class ConflictError extends AppError {\n  constructor(message) {\n    super(message, 409, \"CONFLICT\");\n  }\n}\n\nconst rolePermissionMatrix = {\n  PLATFORM_ADMIN: [\"deal:read\", \"deal:create\", \"deal:submit\", \"deal:approve_sales\", \"deal:approve_channel\", \"deal:close\", \"jobs:process\"],\n  CHANNEL_MANAGER: [\"deal:read\", \"deal:create\", \"deal:approve_channel\", \"deal:close\"],\n  SALES_REP: [\"deal:read\", \"deal:create\", \"deal:approve_sales\", \"deal:close\"],\n  FINANCE_MANAGER: [\"deal:read\", \"jobs:process\"],\n  PARTNER_ADMIN: [\"deal:read\", \"deal:create\", \"deal:submit\"],\n  PARTNER_SELLER: [\"deal:read\", \"deal:create\", \"deal:submit\"],\n};\n\nexport function hasPermission(session, permission) {\n  return rolePermissionMatrix[session.role].includes(permission);\n}\n\nexport function assertPermission(session, permission) {\n  if (!hasPermission(session, permission)) {\n    throw new ForbiddenError(`Role ${session.role} cannot perform ${permission}.`);\n  }\n}\n\nconst allowedTransitions = {\n  DRAFT: [\"SUBMITTED\"],\n  SUBMITTED: [\"SALES_APPROVED\", \"REJECTED\"],\n  SALES_APPROVED: [\"APPROVED\", \"REJECTED\"],\n  APPROVED: [\"CLOSED_WON\", \"CLOSED_LOST\"],\n  REJECTED: [],\n  CLOSED_WON: [],\n  CLOSED_LOST: [],\n};\n\nexport function assertDealTransitionAllowed(session, currentStatus, nextStatus) {\n  if (!allowedTransitions[currentStatus].includes(nextStatus)) {\n    throw new ConflictError(`Cannot move a deal from ${currentStatus} to ${nextStatus}.`);\n  }\n\n  if (nextStatus === \"SUBMITTED\") {\n    assertPermission(session, \"deal:submit\");\n    return;\n  }\n\n  if (nextStatus === \"SALES_APPROVED\") {\n    assertPermission(session, \"deal:approve_sales\");\n    return;\n  }\n\n  if (nextStatus === \"APPROVED\") {\n    assertPermission(session, \"deal:approve_channel\");\n    return;\n  }\n\n  if (nextStatus === \"REJECTED\") {\n    const permission = currentStatus === \"SUBMITTED\" ? \"deal:approve_sales\" : \"deal:approve_channel\";\n    assertPermission(session, permission);\n    return;\n  }\n\n  // ⚠️ SENIOR NOTE: Close outcomes look simple, but if the same permission later controls forecasting exports, it becomes revenue-sensitive quickly.\n  assertPermission(session, \"deal:close\");\n}\n",
+     "origin": {
+      "kind": "adapted",
+      "repoPath": "src/domain/dealRegistration.ts",
+      "lines": {
+       "start": 12,
+       "end": 54
+      }
+     }
+    }
+   ],
+   "seededDefectKey": [
+    {
+     "scenario": "A session whose role has no row in the matrix (DEAL_DESK, or any role value the code does not know) moves a deal from SALES_APPROVED to APPROVED.",
+     "evidence": {
+      "path": "src/domain/dealRegistration.mjs",
+      "lineStart": 39,
+      "lineEnd": 39,
+      "in": "patched"
+     },
+     "consequence": "The lookup throws, the catch logs a warning and answers true, so that role passes every permission check: it can submit, give both approvals and close deals. The error the PR silences was the only thing refusing it."
+    },
+    {
+     "scenario": "Where the 500 really came from: the matrix is the one list of who may do what.",
+     "evidence": {
+      "path": "src/lib/auth/permissions.ts",
+      "lineStart": 30,
+      "lineEnd": 30,
+      "in": "repo"
+     },
+     "consequence": "A new role needs its own row here (or a deliberate 403), and a failed permission lookup must fail closed. A catch that logs and carries on turns a crash into an authorization bypass."
+    }
+   ],
+   "test": {
+    "module": "src/domain/dealRegistration.mjs",
+    "check": {
+     "type": "drill-js",
+     "language": "js",
+     "timeoutMs": 8000,
+     "tests": [
+      {
+       "name": "blocks an invalid jump from draft straight to approved (ported from tests/services/dealRegistrationDomain.test.ts)",
+       "code": "assert.throws(() => mod.assertDealTransitionAllowed({ userId: 'demo-channel-manager', role: 'CHANNEL_MANAGER' }, 'DRAFT', 'APPROVED'), /Cannot move a deal from DRAFT to APPROVED\\./);"
+      },
+      {
+       "name": "a partner seller cannot give the channel approval",
+       "code": "assert.throws(() => mod.assertDealTransitionAllowed({ userId: 'ps1', role: 'PARTNER_SELLER' }, 'SALES_APPROVED', 'APPROVED'), (e) => e.statusCode === 403);"
+      },
+      {
+       "name": "a role with no permission row is never let through",
+       "code": "assert.throws(() => mod.assertDealTransitionAllowed({ userId: 'dd1', role: 'DEAL_DESK' }, 'SALES_APPROVED', 'APPROVED'));"
+      },
+      {
+       "name": "hasPermission never answers yes for a role it does not know",
+       "code": "let allowed; try { allowed = mod.hasPermission({ userId: 'dd1', role: 'DEAL_DESK' }, 'deal:close'); } catch { allowed = false; } assert.notEqual(allowed, true);"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "test-pr-reopens-rejected-deals",
+   "title": "Agent PR: add a test that a partner seller cannot give the sales approval (plus a small cleanup)",
+   "provenance": {
+    "path": "tests/services/dealRegistrationDomain.test.ts",
+    "lines": {
+     "start": 5,
+     "end": 5
+    }
+   },
+   "diff": "diff --git a/src/domain/dealRegistration.mjs b/src/domain/dealRegistration.mjs\n--- a/src/domain/dealRegistration.mjs\n+++ b/src/domain/dealRegistration.mjs\n@@ -45,7 +45,7 @@\n   SUBMITTED: [\"SALES_APPROVED\", \"REJECTED\"],\n   SALES_APPROVED: [\"APPROVED\", \"REJECTED\"],\n   APPROVED: [\"CLOSED_WON\", \"CLOSED_LOST\"],\n-  REJECTED: [],\n+  REJECTED: [\"SUBMITTED\"], // partners can fix a rejected deal and send it again\n   CLOSED_WON: [],\n   CLOSED_LOST: [],\n };\ndiff --git a/tests/services/dealRegistrationDomain.test.ts b/tests/services/dealRegistrationDomain.test.ts\n--- a/tests/services/dealRegistrationDomain.test.ts\n+++ b/tests/services/dealRegistrationDomain.test.ts\n@@ -20,4 +20,20 @@\n       ),\n     ).toThrow(\"Cannot move a deal from DRAFT to APPROVED.\");\n   });\n+\n+  it(\"refuses a partner seller who tries to give the sales approval\", () => {\n+    expect(() =>\n+      assertDealTransitionAllowed(\n+        {\n+          userId: \"demo-partner-seller\",\n+          email: \"seller@partner.example.com\",\n+          displayName: \"Pat Seller\",\n+          role: \"PARTNER_SELLER\",\n+          partnerOrgId: \"partner-acme\",\n+        },\n+        \"SUBMITTED\",\n+        \"SALES_APPROVED\",\n+      ),\n+    ).toThrow(\"Role PARTNER_SELLER cannot perform deal:approve_sales.\");\n+  });\n });\n",
+   "contextFiles": [
+    {
+     "path": "src/domain/dealRegistration.mjs",
+     "content": "// Adapted from ww16 src/domain/dealRegistration.ts:12-54 @ f649784 (the shipped rules: no assignment\n// check), with hasPermission / assertPermission and the role matrix of src/lib/auth/permissions.ts:30-86\n// reduced to the permissions the deal flow uses, and the error classes of src/lib/errors.ts:3-36.\nexport class AppError extends Error {\n  constructor(message, statusCode, code) {\n    super(message);\n    this.statusCode = statusCode;\n    this.code = code;\n  }\n}\n\nexport class ForbiddenError extends AppError {\n  constructor(message = \"You do not have permission to perform this action.\") {\n    super(message, 403, \"FORBIDDEN\");\n  }\n}\n\nexport class ConflictError extends AppError {\n  constructor(message) {\n    super(message, 409, \"CONFLICT\");\n  }\n}\n\nconst rolePermissionMatrix = {\n  PLATFORM_ADMIN: [\"deal:read\", \"deal:create\", \"deal:submit\", \"deal:approve_sales\", \"deal:approve_channel\", \"deal:close\", \"jobs:process\"],\n  CHANNEL_MANAGER: [\"deal:read\", \"deal:create\", \"deal:approve_channel\", \"deal:close\"],\n  SALES_REP: [\"deal:read\", \"deal:create\", \"deal:approve_sales\", \"deal:close\"],\n  FINANCE_MANAGER: [\"deal:read\", \"jobs:process\"],\n  PARTNER_ADMIN: [\"deal:read\", \"deal:create\", \"deal:submit\"],\n  PARTNER_SELLER: [\"deal:read\", \"deal:create\", \"deal:submit\"],\n};\n\nexport function hasPermission(session, permission) {\n  return rolePermissionMatrix[session.role].includes(permission);\n}\n\nexport function assertPermission(session, permission) {\n  if (!hasPermission(session, permission)) {\n    throw new ForbiddenError(`Role ${session.role} cannot perform ${permission}.`);\n  }\n}\n\nconst allowedTransitions = {\n  DRAFT: [\"SUBMITTED\"],\n  SUBMITTED: [\"SALES_APPROVED\", \"REJECTED\"],\n  SALES_APPROVED: [\"APPROVED\", \"REJECTED\"],\n  APPROVED: [\"CLOSED_WON\", \"CLOSED_LOST\"],\n  REJECTED: [],\n  CLOSED_WON: [],\n  CLOSED_LOST: [],\n};\n\nexport function assertDealTransitionAllowed(session, currentStatus, nextStatus) {\n  if (!allowedTransitions[currentStatus].includes(nextStatus)) {\n    throw new ConflictError(`Cannot move a deal from ${currentStatus} to ${nextStatus}.`);\n  }\n\n  if (nextStatus === \"SUBMITTED\") {\n    assertPermission(session, \"deal:submit\");\n    return;\n  }\n\n  if (nextStatus === \"SALES_APPROVED\") {\n    assertPermission(session, \"deal:approve_sales\");\n    return;\n  }\n\n  if (nextStatus === \"APPROVED\") {\n    assertPermission(session, \"deal:approve_channel\");\n    return;\n  }\n\n  if (nextStatus === \"REJECTED\") {\n    const permission = currentStatus === \"SUBMITTED\" ? \"deal:approve_sales\" : \"deal:approve_channel\";\n    assertPermission(session, permission);\n    return;\n  }\n\n  // ⚠️ SENIOR NOTE: Close outcomes look simple, but if the same permission later controls forecasting exports, it becomes revenue-sensitive quickly.\n  assertPermission(session, \"deal:close\");\n}\n",
+     "origin": {
+      "kind": "adapted",
+      "repoPath": "src/domain/dealRegistration.ts",
+      "lines": {
+       "start": 12,
+       "end": 54
+      }
+     }
+    },
+    {
+     "path": "tests/services/dealRegistrationDomain.test.ts",
+     "origin": {
+      "kind": "verbatim",
+      "repoPath": "tests/services/dealRegistrationDomain.test.ts"
+     }
+    }
+   ],
+   "seededDefectKey": [
+    {
+     "scenario": "A partner admin sends a deal that sales rejected back into review (REJECTED -> SUBMITTED).",
+     "evidence": {
+      "path": "src/domain/dealRegistration.mjs",
+      "lineStart": 48,
+      "lineEnd": 48,
+      "in": "patched"
+     },
+     "consequence": "The transition table now lets a rejected deal back into the approval flow, and submitting needs only deal:submit, which every partner role holds: rejection is no longer final. Nobody asked for that, and it rides in a PR described as a test and a cleanup."
+    },
+    {
+     "scenario": "What resubmitting does to the stored deal.",
+     "evidence": {
+      "path": "src/repositories/dealRepository.ts",
+      "lineStart": 143,
+      "lineEnd": 143,
+      "in": "repo"
+     },
+     "consequence": "updateStatus clears rejectionReason on every transition that is not a rejection, so the resubmitted deal loses the reason it was rejected for; only the DealApproval history row keeps it."
+    }
+   ],
+   "test": {
+    "module": "src/domain/dealRegistration.mjs",
+    "check": {
+     "type": "drill-js",
+     "language": "js",
+     "timeoutMs": 8000,
+     "tests": [
+      {
+       "name": "blocks an invalid jump from draft straight to approved (ported from tests/services/dealRegistrationDomain.test.ts)",
+       "code": "assert.throws(() => mod.assertDealTransitionAllowed({ userId: 'demo-channel-manager', role: 'CHANNEL_MANAGER' }, 'DRAFT', 'APPROVED'), /Cannot move a deal from DRAFT to APPROVED\\./);"
+      },
+      {
+       "name": "a rejected deal is final: sending it again is a conflict",
+       "code": "assert.throws(() => mod.assertDealTransitionAllowed({ userId: 'pa1', role: 'PARTNER_ADMIN' }, 'REJECTED', 'SUBMITTED'), (e) => e.statusCode === 409);"
+      },
+      {
+       "name": "a partner seller cannot give the sales approval",
+       "code": "assert.throws(() => mod.assertDealTransitionAllowed({ userId: 'ps1', role: 'PARTNER_SELLER' }, 'SUBMITTED', 'SALES_APPROVED'), (e) => e.statusCode === 403);"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "assigned-approver-check-in-service",
+   "title": "Agent PR: only the assigned sales rep or channel manager may move an assigned deal (review finding 3)",
+   "findingRef": "ww16 senior review #3 (astraupskill/06-SOLUTIONS-AND-REVIEW.md:32)",
+   "provenance": {
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 32,
+     "end": 32
+    }
+   },
+   "diff": "diff --git a/src/services/dealRegistrationService.ts b/src/services/dealRegistrationService.ts\n--- a/src/services/dealRegistrationService.ts\n+++ b/src/services/dealRegistrationService.ts\n@@ -9,7 +9,7 @@\n import { assertPermission } from \"@/lib/auth/permissions\";\n import { assertPartnerOwnership } from \"@/lib/auth/visibility\";\n import { db } from \"@/lib/db\";\n-import { NotFoundError } from \"@/lib/errors\";\n+import { ForbiddenError, NotFoundError } from \"@/lib/errors\";\n import { recordAuditEvent } from \"@/lib/audit/auditLogger\";\n import { currentQuarterLabel } from \"@/lib/time\";\n import { assertDealTransitionAllowed } from \"@/domain/dealRegistration\";\n@@ -96,6 +96,23 @@\n \n     assertDealTransitionAllowed(session, currentDeal.status, input.nextStatus);\n \n+    // review finding 3: an assigned deal moves only by its assignee (platform admins excepted)\n+    if (\n+      session.role === \"SALES_REP\" &&\n+      currentDeal.assignedSalesRepId &&\n+      currentDeal.assignedSalesRepId !== session.userId\n+    ) {\n+      throw new ForbiddenError(\"This deal is assigned to another sales rep.\");\n+    }\n+\n+    if (\n+      session.role === \"CHANNEL_MANAGER\" &&\n+      currentDeal.channelManagerId &&\n+      currentDeal.channelManagerId !== session.userId\n+    ) {\n+      throw new ForbiddenError(\"This deal is assigned to another channel manager.\");\n+    }\n+\n     return db.$transaction(async (tx) => {\n       const updatedDeal = await dealRepository.updateStatus(\n         {\n",
+   "contextFiles": [
+    {
+     "path": "src/services/dealRegistrationService.ts",
+     "origin": {
+      "kind": "verbatim",
+      "repoPath": "src/services/dealRegistrationService.ts"
+     }
+    }
+   ],
+   "seededDefectKey": [
+    {
+     "scenario": "Before this PR (the shipped code, review finding 3): a deal is assigned to sales rep A, and sales rep B approves it, because the domain checks the role only.",
+     "evidence": {
+      "path": "src/domain/dealRegistration.ts",
+      "lineStart": 36,
+      "lineEnd": 37,
+      "in": "repo"
+     },
+     "consequence": "This is the defect the PR closes, not one it adds. The check runs before the transaction, leaves platform admins and unassigned deals as they were, and is the review's own fix (solution F) applied to both stages; findVisibleById already returns both assignee fields. Approve it."
+    }
+   ]
+  },
+  {
+   "id": "domain-test-for-channel-approval-role",
+   "title": "Agent PR: test that a sales rep cannot give the channel approval",
+   "provenance": {
+    "path": "tests/services/dealRegistrationDomain.test.ts",
+    "lines": {
+     "start": 5,
+     "end": 5
+    }
+   },
+   "diff": "diff --git a/tests/services/dealRegistrationDomain.test.ts b/tests/services/dealRegistrationDomain.test.ts\n--- a/tests/services/dealRegistrationDomain.test.ts\n+++ b/tests/services/dealRegistrationDomain.test.ts\n@@ -20,4 +20,21 @@\n       ),\n     ).toThrow(\"Cannot move a deal from DRAFT to APPROVED.\");\n   });\n+\n+  it(\"refuses a sales rep who tries to give the channel approval\", () => {\n+    // Why this test matters: the two approval stages belong to different roles; a matrix edit that merged them would let one person approve a deal end to end.\n+    expect(() =>\n+      assertDealTransitionAllowed(\n+        {\n+          userId: \"demo-sales-rep\",\n+          email: \"sales-rep@example.com\",\n+          displayName: \"Sam Sales\",\n+          role: \"SALES_REP\",\n+          partnerOrgId: null,\n+        },\n+        \"SALES_APPROVED\",\n+        \"APPROVED\",\n+      ),\n+    ).toThrow(\"Role SALES_REP cannot perform deal:approve_channel.\");\n+  });\n });\n",
+   "contextFiles": [
+    {
+     "path": "tests/services/dealRegistrationDomain.test.ts",
+     "origin": {
+      "kind": "verbatim",
+      "repoPath": "tests/services/dealRegistrationDomain.test.ts"
+     }
+    },
+    {
+     "path": "src/lib/auth/permissions.ts",
+     "origin": {
+      "kind": "verbatim",
+      "repoPath": "src/lib/auth/permissions.ts"
+     }
+    }
+   ],
+   "seededDefectKey": [
+    {
+     "scenario": "Before this PR: the domain suite has one case, the DRAFT -> APPROVED jump; no test asserts that a role is refused a stage it does not hold.",
+     "evidence": {
+      "path": "tests/services/dealRegistrationDomain.test.ts",
+      "lineStart": 6,
+      "lineEnd": 6,
+      "in": "repo"
+     },
+     "consequence": "The PR fills that gap correctly: SALES_REP lacks deal:approve_channel in the matrix, and the expected message is exactly what assertPermission throws. A test-only PR with a true assertion deserves an approval, not invented comments."
+    }
+   ]
+  },
+  {
+   "id": "transition-permission-table-refactor",
+   "title": "Agent PR: tidy the transition rules into one permission table (no behaviour change)",
+   "provenance": {
+    "path": "src/domain/dealRegistration.ts",
+    "lines": {
+     "start": 46,
+     "end": 46
+    }
+   },
+   "diff": "diff --git a/src/domain/dealRegistration.mjs b/src/domain/dealRegistration.mjs\n--- a/src/domain/dealRegistration.mjs\n+++ b/src/domain/dealRegistration.mjs\n@@ -40,7 +40,7 @@\n   }\n }\n \n-const allowedTransitions = {\n+const ALLOWED_TRANSITIONS = {\n   DRAFT: [\"SUBMITTED\"],\n   SUBMITTED: [\"SALES_APPROVED\", \"REJECTED\"],\n   SALES_APPROVED: [\"APPROVED\", \"REJECTED\"],\n@@ -50,32 +50,19 @@\n   CLOSED_LOST: [],\n };\n \n+// Close outcomes look simple, but once the same permission guards forecasting exports it is revenue-sensitive.\n+const TRANSITION_PERMISSIONS = {\n+  SUBMITTED: \"deal:submit\",\n+  SALES_APPROVED: \"deal:approve_sales\",\n+  APPROVED: \"deal:approve_channel\",\n+  REJECTED: \"deal:approve_sales\",\n+};\n+\n export function assertDealTransitionAllowed(session, currentStatus, nextStatus) {\n-  if (!allowedTransitions[currentStatus].includes(nextStatus)) {\n+  if (!ALLOWED_TRANSITIONS[currentStatus].includes(nextStatus)) {\n     throw new ConflictError(`Cannot move a deal from ${currentStatus} to ${nextStatus}.`);\n   }\n \n-  if (nextStatus === \"SUBMITTED\") {\n-    assertPermission(session, \"deal:submit\");\n-    return;\n-  }\n-\n-  if (nextStatus === \"SALES_APPROVED\") {\n-    assertPermission(session, \"deal:approve_sales\");\n-    return;\n-  }\n-\n-  if (nextStatus === \"APPROVED\") {\n-    assertPermission(session, \"deal:approve_channel\");\n-    return;\n-  }\n-\n-  if (nextStatus === \"REJECTED\") {\n-    const permission = currentStatus === \"SUBMITTED\" ? \"deal:approve_sales\" : \"deal:approve_channel\";\n-    assertPermission(session, permission);\n-    return;\n-  }\n-\n-  // ⚠️ SENIOR NOTE: Close outcomes look simple, but if the same permission later controls forecasting exports, it becomes revenue-sensitive quickly.\n-  assertPermission(session, \"deal:close\");\n+  // one permission per target status; the table above already refused every other move\n+  assertPermission(session, TRANSITION_PERMISSIONS[nextStatus] ?? \"deal:close\");\n }\n",
+   "contextFiles": [
+    {
+     "path": "src/domain/dealRegistration.mjs",
+     "content": "// Adapted from ww16 src/domain/dealRegistration.ts:12-54 @ f649784 (the shipped rules: no assignment\n// check), with hasPermission / assertPermission and the role matrix of src/lib/auth/permissions.ts:30-86\n// reduced to the permissions the deal flow uses, and the error classes of src/lib/errors.ts:3-36.\nexport class AppError extends Error {\n  constructor(message, statusCode, code) {\n    super(message);\n    this.statusCode = statusCode;\n    this.code = code;\n  }\n}\n\nexport class ForbiddenError extends AppError {\n  constructor(message = \"You do not have permission to perform this action.\") {\n    super(message, 403, \"FORBIDDEN\");\n  }\n}\n\nexport class ConflictError extends AppError {\n  constructor(message) {\n    super(message, 409, \"CONFLICT\");\n  }\n}\n\nconst rolePermissionMatrix = {\n  PLATFORM_ADMIN: [\"deal:read\", \"deal:create\", \"deal:submit\", \"deal:approve_sales\", \"deal:approve_channel\", \"deal:close\", \"jobs:process\"],\n  CHANNEL_MANAGER: [\"deal:read\", \"deal:create\", \"deal:approve_channel\", \"deal:close\"],\n  SALES_REP: [\"deal:read\", \"deal:create\", \"deal:approve_sales\", \"deal:close\"],\n  FINANCE_MANAGER: [\"deal:read\", \"jobs:process\"],\n  PARTNER_ADMIN: [\"deal:read\", \"deal:create\", \"deal:submit\"],\n  PARTNER_SELLER: [\"deal:read\", \"deal:create\", \"deal:submit\"],\n};\n\nexport function hasPermission(session, permission) {\n  return rolePermissionMatrix[session.role].includes(permission);\n}\n\nexport function assertPermission(session, permission) {\n  if (!hasPermission(session, permission)) {\n    throw new ForbiddenError(`Role ${session.role} cannot perform ${permission}.`);\n  }\n}\n\nconst allowedTransitions = {\n  DRAFT: [\"SUBMITTED\"],\n  SUBMITTED: [\"SALES_APPROVED\", \"REJECTED\"],\n  SALES_APPROVED: [\"APPROVED\", \"REJECTED\"],\n  APPROVED: [\"CLOSED_WON\", \"CLOSED_LOST\"],\n  REJECTED: [],\n  CLOSED_WON: [],\n  CLOSED_LOST: [],\n};\n\nexport function assertDealTransitionAllowed(session, currentStatus, nextStatus) {\n  if (!allowedTransitions[currentStatus].includes(nextStatus)) {\n    throw new ConflictError(`Cannot move a deal from ${currentStatus} to ${nextStatus}.`);\n  }\n\n  if (nextStatus === \"SUBMITTED\") {\n    assertPermission(session, \"deal:submit\");\n    return;\n  }\n\n  if (nextStatus === \"SALES_APPROVED\") {\n    assertPermission(session, \"deal:approve_sales\");\n    return;\n  }\n\n  if (nextStatus === \"APPROVED\") {\n    assertPermission(session, \"deal:approve_channel\");\n    return;\n  }\n\n  if (nextStatus === \"REJECTED\") {\n    const permission = currentStatus === \"SUBMITTED\" ? \"deal:approve_sales\" : \"deal:approve_channel\";\n    assertPermission(session, permission);\n    return;\n  }\n\n  // ⚠️ SENIOR NOTE: Close outcomes look simple, but if the same permission later controls forecasting exports, it becomes revenue-sensitive quickly.\n  assertPermission(session, \"deal:close\");\n}\n",
+     "origin": {
+      "kind": "adapted",
+      "repoPath": "src/domain/dealRegistration.ts",
+      "lines": {
+       "start": 12,
+       "end": 54
+      }
+     }
+    }
+   ],
+   "seededDefectKey": [
+    {
+     "scenario": "A channel manager rejects a SALES_APPROVED deal; a sales rep rejects a deal that is waiting for the channel approval.",
+     "evidence": {
+      "path": "src/domain/dealRegistration.mjs",
+      "lineStart": 58,
+      "lineEnd": 58,
+      "in": "patched"
+     },
+     "consequence": "The table keys the permission on the target status only, but who may reject depended on the current one. Rejecting now always needs deal:approve_sales: the channel manager gets a 403 at the stage they own, and a sales rep can reject at the channel stage, overruling the channel manager."
+    }
+   ],
+   "test": {
+    "module": "src/domain/dealRegistration.mjs",
+    "check": {
+     "type": "drill-js",
+     "language": "js",
+     "timeoutMs": 8000,
+     "tests": [
+      {
+       "name": "blocks an invalid jump from draft straight to approved (ported from tests/services/dealRegistrationDomain.test.ts)",
+       "code": "assert.throws(() => mod.assertDealTransitionAllowed({ userId: 'demo-channel-manager', role: 'CHANNEL_MANAGER' }, 'DRAFT', 'APPROVED'), /Cannot move a deal from DRAFT to APPROVED\\./);"
+      },
+      {
+       "name": "a channel manager can reject a sales-approved deal",
+       "code": "mod.assertDealTransitionAllowed({ userId: 'cm1', role: 'CHANNEL_MANAGER' }, 'SALES_APPROVED', 'REJECTED');"
+      },
+      {
+       "name": "a sales rep cannot reject a deal at the channel stage",
+       "code": "assert.throws(() => mod.assertDealTransitionAllowed({ userId: 'sr1', role: 'SALES_REP' }, 'SALES_APPROVED', 'REJECTED'), (e) => e.statusCode === 403);"
+      },
+      {
+       "name": "a sales rep can reject at the sales stage",
+       "code": "mod.assertDealTransitionAllowed({ userId: 'sr1', role: 'SALES_REP' }, 'SUBMITTED', 'REJECTED');"
+      },
+      {
+       "name": "closing a deal needs deal:close",
+       "code": "assert.throws(() => mod.assertDealTransitionAllowed({ userId: 'pa1', role: 'PARTNER_ADMIN' }, 'APPROVED', 'CLOSED_WON'), (e) => e.statusCode === 403); mod.assertDealTransitionAllowed({ userId: 'sr1', role: 'SALES_REP' }, 'APPROVED', 'CLOSED_LOST');"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "leaderboard-quarter-from-close-date",
+   "title": "Agent PR: the leaderboard job uses the deal's close-date quarter (review finding 6), plus a naming tidy-up",
+   "findingRef": "ww16 senior review #6 (astraupskill/06-SOLUTIONS-AND-REVIEW.md:35)",
+   "provenance": {
+    "path": "astraupskill/06-SOLUTIONS-AND-REVIEW.md",
+    "lines": {
+     "start": 35,
+     "end": 35
+    }
+   },
+   "diff": "diff --git a/src/services/dealRegistrationService.ts b/src/services/dealRegistrationService.ts\n--- a/src/services/dealRegistrationService.ts\n+++ b/src/services/dealRegistrationService.ts\n@@ -97,7 +97,7 @@\n     assertDealTransitionAllowed(session, currentDeal.status, input.nextStatus);\n \n     return db.$transaction(async (tx) => {\n-      const updatedDeal = await dealRepository.updateStatus(\n+      const savedDeal = await dealRepository.updateStatus(\n         {\n           dealId,\n           nextStatus: input.nextStatus,\n@@ -139,7 +139,7 @@\n             type: \"LEADERBOARD_REFRESH\",\n             status: \"QUEUED\",\n             payload: {\n-              quarter: currentQuarterLabel(new Date()),\n+              quarter: currentQuarterLabel(currentDeal.closeDate),\n               sourceEntity: \"DealRegistration\",\n               sourceEntityId: dealId,\n             },\n@@ -149,8 +149,8 @@\n         );\n       }\n \n-      // ⚠️ SENIOR NOTE: The approval-history write must live in the same transaction as the status update or the workflow becomes non-auditable under failure.\n-      return updatedDeal;\n+      // The history row and the status change commit together or not at all.\n+      return savedDeal;\n     });\n   },\n };\n",
+   "contextFiles": [
+    {
+     "path": "src/services/dealRegistrationService.ts",
+     "origin": {
+      "kind": "verbatim",
+      "repoPath": "src/services/dealRegistrationService.ts"
+     }
+    },
+    {
+     "path": "src/repositories/reportingRepository.ts",
+     "origin": {
+      "kind": "verbatim",
+      "repoPath": "src/repositories/reportingRepository.ts"
+     }
+    }
+   ],
+   "seededDefectKey": [
+    {
+     "scenario": "A deal is approved on 2026-09-30 (2026-Q3) with a close date of 2026-11-15 (2026-Q4).",
+     "evidence": {
+      "path": "src/services/dealRegistrationService.ts",
+      "lineStart": 142,
+      "lineEnd": 142,
+      "in": "patched"
+     },
+     "consequence": "The job now rebuilds the 2026-Q4 snapshot, but the leaderboard counts an approved deal in the quarter of its approvedAt, so the deal belongs to 2026-Q3, whose snapshot this approval no longer refreshes: Q3 stays stale and Q4 is rebuilt for nothing."
+    },
+    {
+     "scenario": "Why finding 6 cannot be fixed in the job alone: the counting query filters on approvedAt.",
+     "evidence": {
+      "path": "src/repositories/reportingRepository.ts",
+      "lineStart": 43,
+      "lineEnd": 43,
+      "in": "repo"
+     },
+     "consequence": "The review asks for the close-date quarter, but moving only the job splits the refresh from the count. Both move together (job and query) or neither does, and which date a leaderboard should use is a product question to raise, not a one-line change."
+    }
+   ]
+  }
+ ]
+}
