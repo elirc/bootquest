@@ -37,7 +37,7 @@ export class ImportError extends Error {
 export const FUNDAMENTALS_EXPECTED: Readonly<Record<FundTrack, FundCounts>> = {
   js: { topics: 33, quiz: 330, flashcards: 238, drills: 79 },
   csharp: { topics: 23, quiz: 230, flashcards: 184, drills: 49 },
-  java: { topics: 20, quiz: 200, flashcards: 160, drills: 42 },
+  java: { topics: 26, quiz: 260, flashcards: 208, drills: 60 },
 };
 
 export const AuthoringQuiz = z

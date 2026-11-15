@@ -27,7 +27,7 @@
         "`Collection<? extends Number>`"
       ],
       "answer": 3,
-      "explanation": "? extends Number lets the method read Numbers from lists of any Number subtype."
+      "explanation": "Collection<? extends Number> accepts a collection of any Number subtype and lets the method read each element as a Number, which is all summing needs. Collection<Number> is invariant, so a List<Integer> is not one, and the ? super forms accept supertypes of Number or Integer, so a List<Double> fails one and reading gives only Object."
     },
     {
       "prompt": "Into which list can you safely `add(3)`?",
@@ -38,7 +38,7 @@
         "`List<?>` (an unbounded wildcard)"
       ],
       "answer": 0,
-      "explanation": "A consumer of Integers is declared with ? super Integer: List<Integer>, List<Number> or List<Object>."
+      "explanation": "A list declared List<? super Integer> is a List<Integer>, List<Number> or List<Object>, and each of those can take an Integer, so add(3) compiles and is safe. With ? extends Number or ? extends Integer the real element type is unknown, perhaps List<Double>, so the compiler refuses every add except null; List<?> is the same."
     },
     {
       "prompt": "What is `new ArrayList<String>().getClass() == new ArrayList<Integer>().getClass()`?",
@@ -60,7 +60,7 @@
         "It can, with a cast: (T) new Object() builds a real T instance"
       ],
       "answer": 1,
-      "explanation": "Pass a Class<T> or a Supplier<T> when you need to create instances."
+      "explanation": "Type parameters are erased: at run time the method has no Class for T, so new T() cannot compile, whatever bound T has. A cast such as (T) new Object() compiles with a warning but builds an Object, not a T, and fails later. Static methods are not the issue. Pass a Class<T> or a Supplier<T> instead."
     },
     {
       "prompt": "What does PECS stand for?",
@@ -71,7 +71,7 @@
         "Primitive eliminate, collection substitute"
       ],
       "answer": 0,
-      "explanation": "Read from an ? extends producer, write into an ? super consumer."
+      "explanation": "PECS means producer extends, consumer super: read from a parameter declared ? extends T, which produces T values, and write into one declared ? super T, which consumes them. The other expansions are invented. Collections.copy(List<? super T> dest, List<? extends T> src) is the textbook example of both at once."
     },
     {
       "prompt": "A raw `List` gets an Integer added, then the same list is read as `List<String>`. When does it fail?",
@@ -104,7 +104,7 @@
         "It throws ClassCastException when o[0] is read"
       ],
       "answer": 0,
-      "explanation": "Arrays check stores at runtime; generics check at compile time instead."
+      "explanation": "Arrays are covariant and check every store at run time, so writing an Integer into what is really a String[] throws ArrayStoreException at the assignment. It compiles, because o is declared Object[], and the failure comes on the store, not as a ClassCastException on a later read. Generics are invariant and catch this at compile time instead."
     },
     {
       "prompt": "How do frameworks such as Jackson learn the element type of a `List<Order>` at runtime?",
@@ -115,7 +115,7 @@
         "From the first element's runtime class in the JSON array"
       ],
       "answer": 1,
-      "explanation": "Anonymous subclasses keep their generic supertype information, which works around erasure."
+      "explanation": "Erasure removes type arguments from instances, but a class file keeps the generic supertype of a class. new TypeReference<List<Order>>() {} creates an anonymous subclass whose supertype records List<Order>, and Jackson reads it by reflection. Variable names carry no type, and guessing from the first JSON element fails for empty or mixed arrays."
     }
   ],
   "flashcards": [
@@ -166,7 +166,7 @@
       "solution": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · generic helpers★★☆\n//  concepts: bounded type parameters · ? extends · ? super\n// ─────────────────────────────────────────────────────────────────────────\n\nimport static bootcamp.Check.*;\n\nimport java.util.*;\n\nclass Exercise {\n\n    /** The largest element; NoSuchElementException when empty. */\n    static <T extends Comparable<? super T>> T max(Collection<? extends T> items) {\n        Iterator<? extends T> it = items.iterator();\n        if (!it.hasNext()) throw new NoSuchElementException(\"empty collection\");\n        T best = it.next();\n        while (it.hasNext()) {\n            T x = it.next();\n            if (x.compareTo(best) > 0) best = x;\n        }\n        return best;\n    }\n\n    /** Sum of the numbers as doubles. */\n    static double sum(Collection<? extends Number> nums) {\n        double total = 0;\n        for (Number n : nums) total += n.doubleValue();\n        return total;\n    }\n\n    /** Appends src to dest; returns how many elements were copied. */\n    static <T> int copyInto(List<? super T> dest, Collection<? extends T> src) {\n        int n = 0;\n        for (T x : src) {\n            dest.add(x);\n            n++;\n        }\n        return n;\n    }\n\n    // ─── tests ───────────────────────────────────────────────────────────\n    public static void main(String[] args) {\n        test(\"max works for numbers and strings\", () -> eq(List.of(max(List.of(3, 9, 2)), max(Set.of(\"kiwi\", \"apple\", \"pear\"))), List.of(9, \"pear\")));\n        test(\"max of an empty collection throws (boundary)\", () -> raises(NoSuchElementException.class, () -> max(new ArrayList<Integer>())));\n        test(\"sum accepts any Number list\", () -> approx(sum(List.of(1, 2.5, 3L)), 6.5));\n        test(\"an Integer list copies into a Number list\", () -> {\n            List<Number> dest = new ArrayList<>(List.of(0.5));\n            int n = copyInto(dest, List.of(1, 2));\n            eq(n, 2);\n            eq(dest, List.of(0.5, 1, 2));\n        });\n        test(\"copying nothing changes nothing\", () -> { List<Object> d = new ArrayList<>(); eq(copyInto(d, List.of()), 0); ok(d.isEmpty(), \"dest stays empty\"); });\n        System.exit(report());\n    }\n    // ─── end tests ───────────────────────────────────────────────────────\n}\n",
       "explanation": "The signatures do most of the work; the bodies are short:\n\n```java\nstatic <T extends Comparable<? super T>> T max(Collection<? extends T> items) {\n    Iterator<? extends T> it = items.iterator();\n    if (!it.hasNext()) throw new NoSuchElementException(\"empty\");\n    T best = it.next();\n    while (it.hasNext()) { T x = it.next(); if (x.compareTo(best) > 0) best = x; }\n    return best;\n}\n```\n\n`copyInto` reads Ts from a producer (`? extends T`) and writes them into a consumer (`? super T`), which is why an `Integer` list can be copied into a `Number` list.",
       "hints": [
-        "The given signatures already encode PECS; the bodies only iterate.",
+        "The given signatures already encode PECS, so the bodies only iterate.",
         "Go through each source once: track the largest element and refuse an empty input, add the numbers up as doubles, and copy each source element into the destination while counting.",
         "Walk the collection once remembering the largest element and refuse an empty one, add up every number as a double, and append each source element to the destination while counting them."
       ]

@@ -16,7 +16,7 @@
         "`405`"
       ],
       "answer": 1,
-      "explanation": "The route matches; conversion then fails with a type mismatch, answered as 400."
+      "explanation": "The path /api/orders/abc matches the route, so it is not a 404, and GET is allowed, so not a 405. Converting \"abc\" to long then fails with a MethodArgumentTypeMismatchException, which Spring answers as 400 Bad Request, not as a 500 server error. A client sent a bad value, and 400 says so."
     },
     {
       "prompt": "What happens when a `@Valid @RequestBody` fails validation?",
@@ -27,7 +27,7 @@
         "Spring answers 400 via MethodArgumentNotValidException"
       ],
       "answer": 3,
-      "explanation": "Validation runs before the controller method. The 400 response lists the field errors."
+      "explanation": "Validation runs after binding and before the controller method, so the method never runs with invalid fields. Spring throws MethodArgumentNotValidException and answers 400 listing the field errors. ConstraintViolationException belongs to method validation on other beans, not to @RequestBody, and the default status is 400, not 422."
     },
     {
       "prompt": "How do you return 201 Created with a Location header?",
@@ -60,7 +60,7 @@
         "Spring MVC rejects handler methods that return entities"
       ],
       "answer": 1,
-      "explanation": "Map entities to records shaped for the API. Binding requests to entities also invites over-posting."
+      "explanation": "An entity exposes every mapped field, such as a password hash or internal flags, follows lazy associations during serialisation, and changes with the schema. Jackson can serialise @Entity classes and Spring accepts them as return values, so nothing stops you; DTOs are not faster either. Map entities to API-shaped records, which also prevents over-posting on input."
     },
     {
       "prompt": "What does `@RequestParam(defaultValue = \"0\") int page` do when `page` is absent?",
@@ -71,7 +71,7 @@
         "Uses 1"
       ],
       "answer": 0,
-      "explanation": "Without defaultValue or required = false, a missing parameter would be a 400."
+      "explanation": "defaultValue = \"0\" makes the parameter optional and binds 0 when page is absent, so the handler gets page 0, not 1. Without defaultValue, a missing required parameter would be a 400; null is impossible for a primitive int, which is why required = false alone would fail for int."
     },
     {
       "prompt": "What is ProblemDetail in Spring 6?",
@@ -93,7 +93,7 @@
         "`200`"
       ],
       "answer": 2,
-      "explanation": "No message converter can read text/plain into the DTO. 415 is Unsupported Media Type."
+      "explanation": "No registered message converter can read text/plain into the DTO, so Spring answers 415 Unsupported Media Type before the method runs. 400 would mean the JSON was readable but bad, 406 is about the Accept header (what the client will take back), and 200 would need the body to be read at all."
     },
     {
       "prompt": "What should a catch-all `@ExceptionHandler(Exception.class)` return to the client?",
@@ -185,7 +185,7 @@
       "explanation": "Two levels, each with the same cause-chain search:\n\n```java\nString own = match(error, controller.handlers());\nif (own != null) return own;\nvar ordered = new ArrayList<>(advices);\nordered.sort(Comparator.comparingInt(a -> a.order() == null ? Integer.MAX_VALUE : a.order()));\nfor (var advice : ordered) {\n    if (advice.basePackage() != null && !controller.packageName().startsWith(advice.basePackage())) continue;\n    String found = match(error, advice.handlers());\n    if (found != null) return found;\n}\nreturn null;\n// match: for (Throwable t = error; t != null; t = t.getCause()) { closest(t.getClass(), handlers) ... }\n```\n\nThe tests catch the plausible wrong version that collects every handler from every advice and picks the globally closest type: it answers `precise:404` where Spring answers `broad:500`, and that difference is the classic \"my handler is never called\" bug, fixed with `@Order` (or by narrowing the broad advice). A version that checks the cause before the exception's own type fails the cause test, where a catch-all for `Exception` must win over the wrapped cause's handler.",
       "hints": [
         "Spring resolves in two tiers: the failing controller's own handlers, then the advice beans one at a time in priority order. Closeness of the exception type only matters inside a single tier member.",
-        "Write one helper that searches a single handler set, trying the exception and then each cause in turn. Ask the controller first; then put the advice in priority order, with unordered ones last, skip those that do not cover the controller's package, and stop at the first one that answers.",
+        "Write one helper that searches a single handler set, trying the exception and then each cause in turn. Ask the controller first. Then put the advice in priority order, with unordered ones last, skip those that do not cover the controller's package, and stop at the first one that answers.",
         "Search the controller's handlers with the cause-aware helper, and if that finds nothing, sort the advice by order with missing orders treated as the largest value, ignore advice whose base package is not a prefix of the controller's package, and give back the first handler name any remaining advice produces, or null."
       ]
     },

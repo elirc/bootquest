@@ -16,7 +16,7 @@
         "It depends on whether toString is overridden as well"
       ],
       "answer": 1,
-      "explanation": "HashSet looks in the bucket of the hash code first; equal objects must hash equally."
+      "explanation": "HashSet first picks a bucket from hashCode, and the inherited identity hash codes of the two Key objects differ, so contains looks in the wrong bucket and returns false before equals is ever asked. HashSet does not fall back to equals, nothing throws, and toString plays no part. Override hashCode from the same fields as equals."
     },
     {
       "prompt": "What is wrong with the comparator `(a, b) -> a - b` for ints?",
@@ -38,7 +38,7 @@
         "true and 1"
       ],
       "answer": 0,
-      "explanation": "equals compares value and scale; compareTo compares only the numeric value."
+      "explanation": "BigDecimal.equals compares value AND scale, so 1.0 and 1.00 are not equal, while compareTo compares only the numeric value and returns 0. That is why a HashSet can hold both while a TreeSet keeps one. compareTo returns 1 only when the first value is larger, which is not the case here."
     },
     {
       "prompt": "How many elements does a TreeSet hold after adding BigDecimal 1.0 and 1.00?",
@@ -60,7 +60,7 @@
         "hashCode must return a non-negative value"
       ],
       "answer": 1,
-      "explanation": "Collisions between unequal objects are allowed; equal objects with different hashes break hash collections."
+      "explanation": "The contract requires that equal objects return equal hash codes; it is how a hash table finds an equal key in the right bucket. Unequal objects may collide, so neither \"unequal means different hashes\" nor \"equal hashes mean equal objects\" holds, and hashCode may be negative. Collisions only cost speed, while a broken rule loses entries."
     },
     {
       "prompt": "Sorting a list containing null with `Collections.sort(list)` ...",
@@ -104,7 +104,7 @@
         "equals and hashCode over the non-null components only"
       ],
       "answer": 0,
-      "explanation": "Records are ideal value types and map keys for that reason."
+      "explanation": "A record generates equals and hashCode from all of its components, consistently, so two records with equal components are equal and hash alike. That is not reference equality, the hash code is not left as identity, and null components are compared too (as by Objects.equals). This makes records natural value types and map keys."
     },
     {
       "prompt": "Why is equality based on a database id tricky for new JPA entities?",
@@ -115,7 +115,7 @@
         "The id is already assigned when the entity object is constructed"
       ],
       "answer": 1,
-      "explanation": "Use a stable natural key, or the id with a constant hashCode."
+      "explanation": "A generated id is null until the entity is persisted and set afterwards, so a hashCode based on it changes while the object may already sit in a HashSet, which then cannot find it. JPA does not forbid overriding equals, ids are not reused after a delete, and they are not assigned at construction. Use a stable natural key, or the id with a constant hashCode."
     }
   ],
   "flashcards": [
@@ -166,8 +166,8 @@
       "solution": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · a comparable version★★☆\n//  concepts: Comparable · equals/hashCode consistency · parsing\n// ─────────────────────────────────────────────────────────────────────────\n\nimport static bootcamp.Check.*;\n\nimport java.util.*;\n\nclass Exercise {\n\n    static final class Version implements Comparable<Version> {\n        private final int major, minor, patch;\n        private Version(int major, int minor, int patch) { this.major = major; this.minor = minor; this.patch = patch; }\n\n        /** \"1\", \"1.10\" or \"2.0.3\"; missing parts are 0. */\n        static Version parse(String text) {\n            if (text == null) throw new IllegalArgumentException(\"version is required\");\n            String[] parts = text.split(\"\\\\.\", -1);\n            if (parts.length > 3) throw new IllegalArgumentException(\"too many parts: \" + text);\n            int[] n = new int[3];\n            for (int i = 0; i < parts.length; i++) {\n                if (!parts[i].matches(\"[0-9]+\")) throw new IllegalArgumentException(\"bad part in \" + text);\n                n[i] = Integer.parseInt(parts[i]);\n            }\n            return new Version(n[0], n[1], n[2]);\n        }\n        @Override public int compareTo(Version o) {\n            int c = Integer.compare(major, o.major);\n            if (c == 0) c = Integer.compare(minor, o.minor);\n            if (c == 0) c = Integer.compare(patch, o.patch);\n            return c;\n        }\n        @Override public boolean equals(Object o) {\n            return o instanceof Version v && compareTo(v) == 0;\n        }\n        @Override public int hashCode() {\n            return Objects.hash(major, minor, patch);\n        }\n        @Override public String toString() {\n            return major + \".\" + minor + \".\" + patch;\n        }\n    }\n\n    // ─── tests ───────────────────────────────────────────────────────────\n    public static void main(String[] args) {\n        test(\"sorts numerically, not as text\", () -> {\n            var vs = new ArrayList<>(List.of(Version.parse(\"1.10\"), Version.parse(\"1.9\"), Version.parse(\"1.2.0\")));\n            Collections.sort(vs);\n            eq(vs.toString(), \"[1.2.0, 1.9.0, 1.10.0]\");\n        });\n        test(\"missing parts are zero, so 1.2 equals 1.2.0\", () -> ok(Version.parse(\"1.2\").equals(Version.parse(\"1.2.0\")) && Version.parse(\"1.2\").hashCode() == Version.parse(\"1.2.0\").hashCode(), \"1.2 == 1.2.0\"));\n        test(\"HashSet and TreeSet agree\", () -> eq(List.of(new HashSet<>(List.of(Version.parse(\"3\"), Version.parse(\"3.0.0\"))).size(), new TreeSet<>(List.of(Version.parse(\"3\"), Version.parse(\"3.0.0\"))).size()), List.of(1, 1)));\n        test(\"compareTo orders by major, minor, patch\", () -> ok(Version.parse(\"2.0\").compareTo(Version.parse(\"1.99.99\")) > 0 && Version.parse(\"1.0.1\").compareTo(Version.parse(\"1.0.2\")) < 0, \"ordering\"));\n        test(\"malformed versions are rejected (boundary)\", () -> { for (var bad : new String[] { \"\", \"1..2\", \"1.2.\", \"1.2.3.4\", \"-1\", \"+1\", \"1.x\", \"1.2 \" }) raises(IllegalArgumentException.class, () -> Version.parse(bad)); raises(IllegalArgumentException.class, () -> Version.parse(null)); });\n        System.exit(report());\n    }\n    // ─── end tests ───────────────────────────────────────────────────────\n}\n",
       "explanation": "Store three ints; compare them with `Integer.compare` in priority order, and base equals/hashCode on the same three fields:\n\n```java\n@Override public int compareTo(Version o) {\n    int c = Integer.compare(major, o.major);\n    if (c == 0) c = Integer.compare(minor, o.minor);\n    if (c == 0) c = Integer.compare(patch, o.patch);\n    return c;\n}\n@Override public boolean equals(Object o) { return o instanceof Version v && compareTo(v) == 0; }\n@Override public int hashCode() { return Objects.hash(major, minor, patch); }\n```\n\nBecause \"1.2\" is normalised to patch 0 at parse time, every method sees 1.2.0, so HashSet and TreeSet agree.",
       "hints": [
-        "Parse into three numbers first; then every comparison and equality check works on numbers, not text.",
-        "Parse into three integers with zero defaults and strict digit checks, then base ordering (field by field), equality and hashing on those three numbers only.",
+        "Parse into three numbers first. Then every comparison and equality check works on numbers, not text.",
+        "Parse into three integers with zero defaults and strict digit checks, then base ordering field by field, equality and hashing on those three numbers only.",
         "Turn the text into major, minor and patch numbers, filling gaps with zero and rejecting anything malformed, and make ordering, equality, hashing and printing all depend on just those three numbers."
       ]
     },

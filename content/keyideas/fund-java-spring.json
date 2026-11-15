@@ -1,14 +1,20 @@
 {
  "format": "bootquest-keyideas@1",
  "section": "fund-java-spring",
- "title": "Java: Spring and JPA (topics 17-20)",
+ "title": "Java: Spring, data, testing, security, JSON, validation, logging and HTTP clients (topics 17-26)",
  "track": "java",
- "_note": "rv2 S2 (PLAN §2.2 fund-java-spring row). Scope = Fundamentals Java topic gates 17-20; the rv2 C7 topics (21+) and their ideas are appended when they land. Server-local side file, never stamped.",
+ "_note": "rv2 S2 (PLAN §2.2 fund-java-spring row). Scope = Fundamentals Java topic gates 17-20; topics 21+ (rv2 C7 / rv3 W3) and their ideas are appended as they land. Server-local side file, never stamped.",
  "scope": [
   "fund/java/17-spring-ioc-and-dependency-injection",
   "fund/java/18-spring-web-controllers-and-errors",
   "fund/java/19-spring-data-jpa-entities-and-repositories",
-  "fund/java/20-jpa-transactions-lazy-loading-and-n-plus-1"
+  "fund/java/20-jpa-transactions-lazy-loading-and-n-plus-1",
+  "fund/java/21-junit-5-mockito-and-fakes",
+  "fund/java/22-spring-security-filter-chain-and-method-security",
+  "fund/java/23-jackson-json-contracts",
+  "fund/java/24-bean-validation-in-depth",
+  "fund/java/25-slf4j-and-mdc-request-ids",
+  "fund/java/26-http-clients-timeouts-and-retries"
  ],
  "recapAfter": 0.8,
  "ideas": [
@@ -58,8 +64,8 @@
    "id": "entity-identity-and-derived-queries",
    "idea": "Base entity equality on a stable identity, not on mutable fields or an id that is null before persist; and know the SQL a derived query method really generates.",
    "why": "Entities in HashSets vanish when their hash changes after save, and a long derived method name can run a different query than its name suggests.",
-   "prompt": "An Order entity's equals and hashCode use its generated id. Orders added to a HashSet before saving cannot be found or removed afterwards. Separately, findByStatusOrCustomerIdAndActive returns unexpected rows. Explain both.",
-   "answer": "Before persist the id is null, after save it changes, so the hash code changes while the entity sits in the set; base equality on a business key or keep hashCode constant for the entity's life. In the derived query AND binds tighter than OR, so it means status, or customer and active; write @Query when precedence matters.",
+   "prompt": "An Order entity's equals and hashCode use its generated id. Orders added to a HashSet before saving cannot be found or removed afterwards. Separately, the field customerId is renamed to buyerId, but the repository still declares findByIdAndCustomerId. What breaks, and when?",
+   "answer": "Before persist the id is null, after save it is set, so the hash code changes while the entity sits in the set; base equality on a business key or keep hashCode constant. A derived query is parsed from the method name when the context starts, so the stale property stops startup instead of failing a request.",
    "tags": [
     "java",
     "jpa"
@@ -117,6 +123,129 @@
     "fund-java/20-jpa-transactions-lazy-loading-and-n-plus-1/02-transactional-self-invocation",
     "javabootcamp/13-storage-and-consistency/01-versioned-writes",
     "javabootcamp/12-messaging-and-events/05-transactional-outbox"
+   ]
+  },
+  {
+   "id": "fake-your-own-boundary",
+   "idea": "Mock or fake the interfaces you own at the edge of the system, keep their real rules, and test third-party types such as JPA against the real thing.",
+   "why": "A mock of a type you do not own encodes your guess of its behaviour, so tests stay green when the guess is wrong, and a fake that skips real rules cannot test the code that relies on them.",
+   "prompt": "Checkout tests mock EntityManager and a Stripe client class with dozens of when(...) lines. They pass, yet a retry after a gateway timeout charged a customer twice. How should the tests be rebuilt?",
+   "answer": "Wrap Stripe behind a PaymentGateway port that checkout depends on, and test checkout with a hand-written fake that keeps idempotency keys and can lose a response after charging. Test the repository against a real database instead of a mocked EntityManager, and assert on outcomes rather than verifying every call.",
+   "tags": [
+    "java",
+    "testing"
+   ],
+   "sources": [
+    "fund/java/21-junit-5-mockito-and-fakes",
+    "fund-java/21-junit-5-mockito-and-fakes/01-fake-the-payment-gateway"
+   ],
+   "siblings": [
+    "fund-java/21-junit-5-mockito-and-fakes/02-a-mock-by-hand",
+    "fund-java/21-junit-5-mockito-and-fakes/03-bug-hunt-fake-the-payment-gateway",
+    "javabootcamp/16-design-patterns/06-adapter-gateway"
+   ]
+  },
+  {
+   "id": "filter-chain-and-method-security",
+   "idea": "Security rules run in the filter chain before any controller, the first matching rule decides, and method security, like transactions, only checks calls that pass its proxy.",
+   "why": "A broad rule placed first, a role name without its prefix or a self-call around @PreAuthorize opens an endpoint while every test of the intended rule still looks right.",
+   "prompt": "Ordinary users can open /admin/users, and an internal job deletes data through a method marked @PreAuthorize(\"hasRole('ADMIN')\") without being an admin. Name the likely causes in the config and in the code.",
+   "answer": "A broad rule such as /** authenticated() sits above the admin rule, and the first match decides; or the user holds ADMIN where hasRole looks for ROLE_ADMIN. The job calls the method on this inside the same bean, which bypasses the security proxy. Order rules from specific to general and move the guarded method to another bean.",
+   "tags": [
+    "java",
+    "security"
+   ],
+   "sources": [
+    "fund/java/22-spring-security-filter-chain-and-method-security",
+    "fund-java/22-spring-security-filter-chain-and-method-security/01-first-matching-rule"
+   ],
+   "siblings": [
+    "fund-java/22-spring-security-filter-chain-and-method-security/02-filter-chain-and-security-context",
+    "fund-java/22-spring-security-filter-chain-and-method-security/03-bug-hunt-filter-chain-and-security-context",
+    "fund-java/20-jpa-transactions-lazy-loading-and-n-plus-1/02-transactional-self-invocation"
+   ]
+  },
+  {
+   "id": "json-contracts",
+   "idea": "A JSON DTO is published API: pin its key names, keep the fields clients always read, and tell an absent key from an explicit null where a PATCH must clear.",
+   "why": "A Java rename, a dropped field or a DTO-bound PATCH changes or loses data on the wire while every server test that reads its own output still passes.",
+   "prompt": "After a refactor the iOS app shows no order totals, and customers cannot remove their phone number through PATCH /customers. Both endpoints use DTOs and Spring Boot's default mapper. What happened, and what fixes each?",
+   "answer": "The total field was renamed in Java and Jackson put the new name on the wire, so old clients read nothing: pin it with @JsonProperty or expand and contract. The PATCH DTO cannot tell an absent phone from an explicit null, so clearing is impossible: read the body as a map and check containsKey.",
+   "tags": [
+    "java",
+    "json",
+    "api-contracts"
+   ],
+   "sources": [
+    "fund/java/23-jackson-json-contracts",
+    "fund-java/23-jackson-json-contracts/01-contract-changes"
+   ],
+   "siblings": [
+    "fund-java/23-jackson-json-contracts/02-absent-null-or-a-value",
+    "fund-java/23-jackson-json-contracts/03-bug-hunt-absent-null-or-a-value",
+    "javabootcamp/18-parsing-and-serialization/07-versioned-records"
+   ]
+  },
+  {
+   "id": "validation-null-and-cascade",
+   "idea": "Every constraint but the NotNull family passes null, nothing cascades without @Valid, and method validation needs the proxy: required, nested and service checks each need saying.",
+   "why": "A @Size without @NotNull, a nested list without @Valid or a self-call around @Validated lets an invalid request through while every annotation looks correct.",
+   "prompt": "An order arrives with no contact email and a line whose SKU is blank. contactEmail is @Email @Size(max = 200), and OrderLine.sku is @NotBlank. The controller uses @Valid @RequestBody. Why did both get through?",
+   "answer": "@Email and @Size treat a missing value as valid, so the email also needs @NotBlank. The lines list is not marked @Valid, so its elements are never validated; annotate it, for example List<@Valid OrderLine>, and violations then carry paths such as lines[0].sku.",
+   "tags": [
+    "java",
+    "validation"
+   ],
+   "sources": [
+    "fund/java/24-bean-validation-in-depth",
+    "fund-java/24-bean-validation-in-depth/01-a-validator-by-hand"
+   ],
+   "siblings": [
+    "fund-java/24-bean-validation-in-depth/02-violations-to-a-400",
+    "fund-java/24-bean-validation-in-depth/03-bug-hunt-a-validator-by-hand",
+    "javabootcamp/07-money-and-validation/05-validate-amount"
+   ]
+  },
+  {
+   "id": "mdc-request-ids",
+   "idea": "Log with placeholders and the exception last, once; keep a validated request id in the MDC, removed in finally and copied by hand into pool tasks.",
+   "why": "Concatenated messages lose stack traces, log-and-rethrow triples every failure, and an uncleared or uncopied MDC labels lines with the wrong request or none.",
+   "prompt": "Support has a request id from an error page. Its async email step has no id in the logs, some lines carry another request's id, and the failure appears three times. What is wrong in the code?",
+   "answer": "The filter does not remove the id in finally, so pooled threads keep it for the next request. The email task runs on a pool thread without the caller's MDC: copy its MDC map at submission and restore it around the run. Three layers log and rethrow; log once where the failure is handled.",
+   "tags": [
+    "java",
+    "logging",
+    "observability"
+   ],
+   "sources": [
+    "fund/java/25-slf4j-and-mdc-request-ids",
+    "fund-java/25-slf4j-and-mdc-request-ids/02-a-request-id-across-threads"
+   ],
+   "siblings": [
+    "fund-java/25-slf4j-and-mdc-request-ids/01-the-placeholder-rules",
+    "fund-java/25-slf4j-and-mdc-request-ids/03-bug-hunt-a-request-id-across-threads",
+    "javadrills/07-exception-flow/08-rethrow-same"
+   ]
+  },
+  {
+   "id": "client-timeouts-and-retries",
+   "idea": "Every outbound call gets a connect and a request timeout from the caller's remaining budget, and is retried only when repeating is safe and may help.",
+   "why": "java.net.http waits for ever by default, blind retries charge twice or multiply load across layers, and a call that outlives its caller wastes the capacity a recovery needs.",
+   "prompt": "During an incident the checkout API held every thread for minutes, a few customers were charged twice, and the provider saw 27 calls per failed checkout. Which client settings and rules were missing?",
+   "answer": "No request timeout was set, so calls waited for ever; derive one from the remaining deadline. Request timeouts on a POST were retried without an idempotency key, so the work ran twice. Three layers each retried three times; retry in one layer with capped, jittered backoff and honour Retry-After.",
+   "tags": [
+    "java",
+    "resilience",
+    "timeouts"
+   ],
+   "sources": [
+    "fund/java/26-http-clients-timeouts-and-retries",
+    "fund-java/26-http-clients-timeouts-and-retries/01-when-to-retry"
+   ],
+   "siblings": [
+    "fund-java/26-http-clients-timeouts-and-retries/02-timeouts-from-a-deadline",
+    "fund-java/26-http-clients-timeouts-and-retries/03-bug-hunt-when-to-retry",
+    "javabootcamp/10-rate-limits-and-resilience/04-retry-backoff"
    ]
   }
  ]
