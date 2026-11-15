@@ -38,7 +38,7 @@
         "401 Unauthorized on a DELETE"
       ],
       "answer": 2,
-      "explanation": "503 is transient and GET is safe to repeat. The 4xx answers describe the request itself, so the same request gets the same answer."
+      "explanation": "503 Service Unavailable says the server could not handle the request right now, so a later attempt may succeed, and GET is safe to repeat. The 4xx answers describe the request itself: a 422 body stays invalid, a 404 stays missing and a 401 stays unauthenticated, so the same request gets the same answer. Retrying a POST would also risk a second write."
     },
     {
       "prompt": "A POST /payments call timed out. When is it safe to retry it?",
@@ -71,7 +71,7 @@
         "The body goes out empty because its stream was read"
       ],
       "answer": 2,
-      "explanation": "SendAsync refuses a message that was already sent, with an InvalidOperationException. Build a fresh request for every attempt."
+      "explanation": "SendAsync marks a request message as sent and refuses it the second time with an InvalidOperationException (\"The request message was already sent\"), so the retry never leaves the client. HttpClient does not clone the message for you, and the refusal comes before anything is sent. Build a fresh HttpRequestMessage, with fresh content, inside the loop for every attempt."
     },
     {
       "prompt": "A service creates `new HttpClient()` for each outbound call and disposes it straight after. What happens under load?",
@@ -82,7 +82,7 @@
         "Nothing: disposing each client releases everything at once"
       ],
       "answer": 1,
-      "explanation": "Each disposed client closes its connection, which lingers in TIME_WAIT. IHttpClientFactory pools and reuses the handlers instead."
+      "explanation": "Each disposed client closes its connection, and on the client side a closed TCP connection lingers in TIME_WAIT for a while, so under load these pile up until no ports are left for new connections. Disposing does release the client object, so memory is not the issue, and parsing headers costs nothing comparable. IHttpClientFactory pools and reuses the handlers instead."
     },
     {
       "prompt": "A linked source is created from the request's token and given `CancelAfter` of 2 seconds. The 2 seconds pass. What is cancelled?",
@@ -93,7 +93,7 @@
         "Neither, because CancelAfter only affects later tasks"
       ],
       "answer": 2,
-      "explanation": "Linking works one way: the linked source listens to the request's token, but its own cancellation never flows back to the token it was linked from."
+      "explanation": "Linking works one way: the linked source listens to the request's token, but its own cancellation never flows back to the token it was linked from. After 2 seconds only the linked token is cancelled, which is exactly what lets the code tell its own timeout from a caller who left. CancelAfter is not limited to tasks started later: every holder of the token sees it."
     },
     {
       "prompt": "Three service layers each try a failing call up to 3 times. How many calls can one user request send to the bottom service?",
@@ -115,7 +115,7 @@
         "Nowhere, because the total timeout makes it redundant"
       ],
       "answer": 1,
-      "explanation": "Inside the retry, every attempt starts a fresh attempt timeout, while the total timeout outside caps the attempts and waits together."
+      "explanation": "Inside the retry, every attempt starts a fresh attempt timeout, so one hung attempt is cut off and the next gets its full time. Outside the retry it would cap the whole operation, which is the total timeout's job. Nor is it redundant: the total timeout caps the attempts and the waits together, while only the per-attempt limit stops one slow attempt from eating the whole budget."
     }
   ],
   "flashcards": [
