@@ -18,8 +18,8 @@ import { DEFAULT_CONTENT_DIR } from './routing.ts';
  *                                     point of a DESIGN IT / G2 set. Absent = the generic headline.
  *
  * Loading never refuses startup: a missing dir/file is "nothing", a malformed file is a problem (warned once,
- * the file skipped). Lazily on first use from BOOTQUEST_KEYIDEAS (a content dir); unset = the repo's content/;
- * '' or 'off' = nothing at all. Tests install their own with setKeyIdeas().
+ * the file skipped). Lazily on first use from BOOTQUEST_KEYIDEAS (a content dir); unset = the repo's content/
+ * (nothing inside a vitest run: sideFilesDir); '' or 'off' = nothing at all. Tests install their own with setKeyIdeas().
  */
 
 export const KEYIDEAS_FORMAT = 'bootquest-keyideas@1' as const;
@@ -179,12 +179,26 @@ export function readKeyIdeas(contentDir: string): KeyIdeasStore {
 let installed: KeyIdeasStore | undefined;
 const warned = new Set<string>();
 
-/** The key-ideas store in force (lazily loaded; see the header). */
+/**
+ * The content dir the side files load from when nothing is installed (this store and store/design-side.ts), or
+ * null = none. BOOTQUEST_KEYIDEAS wins ('' or 'off' = none). Unset = the repo's content/, except inside a vitest
+ * run (VITEST is set by vitest, never by the app or the CLI): there unset means none.
+ *   rv3 MF-10 (FABLE-REVIEW L9): a server test that loaded a pack subset and installed no store fell back to the
+ * repo's real 24 sections and resolved them against its few units ("sibling ... matches no live unit" in the
+ * battery log). A test that needs key ideas installs its own store (setKeyIdeas / setDesignSide) or stubs the
+ * variable (vi.stubEnv), as the keyideas tests do.
+ */
+export function sideFilesDir(): string | null {
+  const env = process.env.BOOTQUEST_KEYIDEAS;
+  if (env !== undefined) return env.trim() === '' || env.trim() === 'off' ? null : env.trim();
+  return process.env.VITEST ? null : DEFAULT_CONTENT_DIR;
+}
+
+/** The key-ideas store in force (lazily loaded; see the header and sideFilesDir). */
 export function keyIdeas(): KeyIdeasStore {
   if (installed === undefined) {
-    const env = process.env.BOOTQUEST_KEYIDEAS;
-    if (env !== undefined && (env.trim() === '' || env.trim() === 'off')) installed = EMPTY_KEYIDEAS;
-    else installed = readKeyIdeas(env !== undefined ? env.trim() : DEFAULT_CONTENT_DIR);
+    const dir = sideFilesDir();
+    installed = dir === null ? EMPTY_KEYIDEAS : readKeyIdeas(dir);
     for (const p of installed.problems) console.warn(`[bootquest api] keyideas: ${p}`);
   }
   return installed;

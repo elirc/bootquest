@@ -1,7 +1,7 @@
 import { State } from 'ts-fsrs';
 import type { Db } from '../db/database.ts';
 import { keyIdeas, warnOnce, DEFAULT_RECAP_AFTER, type KeyIdea, type KeyIdeasFile, type KeyIdeasStore } from '../store/keyideas.ts';
-import { isArchivedKey } from '../store/routing.ts';
+import { isArchivedKey, routing, type Routing } from '../store/routing.ts';
 import { READING_ATTEST_SQL, VERIFIED_PASS_SQL } from './attempts.ts';
 import { DAY_MS, dayKey, nowMs, type Clock } from './clock.ts';
 import { EB_PASS_SQL } from './eb-score.ts';
@@ -77,9 +77,28 @@ export function parseIdeaCardKey(cardKey: string, prefix: string): { section: st
   return { section: rest.slice(0, slash), id: rest.slice(slash + 1) };
 }
 
-/** Resolve every section's keys against the live units (unknown keys warned once, archived keys skipped). */
+/**
+ * rv3 MF-6: the resolution is memoised per Db until the side-file store, the routing (archive) or the unit table
+ * changes. The unit table's signature is one aggregate row (count, max id, retired count / sum, title lengths): a
+ * new, retired, restored or renamed unit changes it. Before this, /reviews/queue resolved every section (all units,
+ * every prefix) once per concept card.
+ */
+const UNIT_SIGNATURE_SQL = 'SELECT COUNT(*) AS n, MAX(id) AS m, COUNT(retired_at) AS rc, TOTAL(retired_at) AS rt, TOTAL(length(title)) AS tl, TOTAL(length(kind)) AS kl FROM unit';
+const resolved = new WeakMap<Db, { store: KeyIdeasStore; routing: Routing; sig: string; sections: ResolvedSection[] }>();
+
+/** Resolve every section's keys against the live units (unknown keys warned once, archived keys skipped). Memoised (above). */
 export function resolveSections(db: Db, store: KeyIdeasStore = keyIdeas()): ResolvedSection[] {
   if (store.sections.size === 0) return [];
+  const r = routing();
+  const sig = JSON.stringify(db.get(UNIT_SIGNATURE_SQL));
+  const hit = resolved.get(db);
+  if (hit && hit.store === store && hit.routing === r && hit.sig === sig) return hit.sections;
+  const sections = resolveSectionsUncached(db, store);
+  resolved.set(db, { store, routing: r, sig, sections });
+  return sections;
+}
+
+function resolveSectionsUncached(db: Db, store: KeyIdeasStore): ResolvedSection[] {
   const units = db.all<UnitRow>('SELECT id, key, kind, title FROM unit WHERE retired_at IS NULL ORDER BY id');
   const byKey = new Map(units.map((u) => [u.key, u]));
   const warn = (section: string, field: string, key: string): void => {
@@ -251,6 +270,19 @@ export interface RecapProgress {
   /** passed scope units needed to open the recap */
   needed: number;
   open: boolean;
+}
+
+/**
+ * rv3 MF-1 (ruling 8): a recap also needs at least RECAP_MIN_MET_IDEAS met ideas, or every live idea of the section
+ * when it has fewer (an idea with no live source can never be met, so it does not count). Without this a recap
+ * opened on one met idea, paid its XP and closed the section for good.
+ */
+export const RECAP_MIN_MET_IDEAS = 3;
+
+/** Met ideas a section's recap needs: min(RECAP_MIN_MET_IDEAS, live ideas), at least 1. */
+export function recapIdeasNeeded(s: ResolvedSection): number {
+  const live = s.ideas.filter((i) => liveSources(i).length > 0).length;
+  return Math.max(1, Math.min(RECAP_MIN_MET_IDEAS, live));
 }
 
 /** recapAfter <= 1: that fraction of the live scope units (ceil); > 1: that many passed scope units (capped at the total). */

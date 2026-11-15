@@ -28,8 +28,9 @@ import { answerWords, stripKpWeight } from '@bootquest/shared/eb-weight';
 import { z } from 'zod';
 import type { Db } from '../db/database.ts';
 import { DAY_MS, dayKey, nowMs } from '../engines/clock.ts';
-import { addReviewItem, deserializeCard, regradeMissedCard, REVIEWABLE_SQL, reviveRetiredCard, type ReviewItemRow } from '../engines/fsrs.ts';
+import { addReviewItem, regradeMissedCard, REVIEWABLE_SQL, reviveRetiredCard, type ReviewItemRow } from '../engines/fsrs.ts';
 import {
+  cappedKeyIdeaDue,
   cardKeyOf,
   ideaStatuses,
   KEYIDEA_PREFIX,
@@ -39,6 +40,7 @@ import {
   parseIdeaCardKey,
   passTimes,
   RECHECK_PREFIX,
+  recapIdeasNeeded,
   recapProgress,
   REDO_PREFIX,
   resolveSections,
@@ -56,7 +58,7 @@ import { gradeReview, runUnit, type ServiceDeps } from './service.ts';
 
 /**
  * rv2 S1 (PLAN §2.1 items 1-6; F1, F2): the key-ideas layer's API.
- *   GET  /keyideas[?track=&unit=]        sections, ideas (prompt / answer / why ONLY once the idea is met), tiles
+ *   GET  /keyideas[?track=&unit=]        sections, ideas (idea / prompt / answer / why ONLY once the idea is met), tiles
  *   GET  /keyideas/queue[?tag=&limit=]   due key-idea cards, interleaved across sections (cap 12; 10-min mode 5)
  *   GET  /keyideas/cards/:itemId         what a concept card is about (source links, the redo drill); no answer
  *   GET  /keyideas/recap/:section        the recap prompts (open recap only)
@@ -160,8 +162,17 @@ function recapRow(db: Db, section: string, kind: RecapKind): { id: number; at: n
 function sectionRecap(db: Db, s: ResolvedSection, passed: ReadonlyMap<number, number>) {
   const p = recapProgress(s, passed);
   const done = recapRow(db, s.file.section, 'recap');
-  const anyMet = s.ideas.some((i) => metAt(i, passed) !== null);
-  return { state: done ? ('done' as const) : p.open && anyMet ? ('open' as const) : ('locked' as const), passed: p.passed, total: p.total, needed: p.needed, doneAt: done?.at ?? null };
+  // rv3 MF-1 (ruling 8): the unit threshold AND at least min(3, live ideas) met ideas
+  const met = s.ideas.filter((i) => metAt(i, passed) !== null).length;
+  const open = p.open && met >= recapIdeasNeeded(s);
+  return { state: done ? ('done' as const) : open ? ('open' as const) : ('locked' as const), passed: p.passed, total: p.total, needed: p.needed, doneAt: done?.at ?? null };
+}
+
+/** Why a recap is still locked (the NOT_DUE message). */
+function lockedReason(s: ResolvedSection, passed: ReadonlyMap<number, number>, r: { passed: number; total: number; needed: number }): string {
+  if (r.passed < r.needed || r.total === 0) return `the ${s.file.title} recap opens after ${r.needed} of its ${r.total} units are passed (${r.passed} so far)`;
+  const met = s.ideas.filter((i) => metAt(i, passed) !== null).length;
+  return `the ${s.file.title} recap opens once ${recapIdeasNeeded(s)} of its ideas are met (every source of an idea passed; ${met} so far)`;
 }
 
 export function getKeyIdeas(deps: Deps, q: z.infer<typeof KeyIdeasQuery>): KeyIdeasResponse {
@@ -202,8 +213,10 @@ export function getKeyIdeas(deps: Deps, q: z.infer<typeof KeyIdeasQuery>): KeyId
       recap: recaps.find((r) => r.s === s)!.r,
       ideas: s.ideas.map((i): KeyIdeaDto => {
         const met = metAt(i, passed) !== null;
-        const base: KeyIdeaDto = { id: i.idea.id, idea: i.idea.idea, tags: [...i.idea.tags], status: status.get(cardKeyOf(KEYIDEA_PREFIX, i.section, i.idea.id))!, sources: sourceDtos(i, passed) };
-        // the leak rule (PLAN §5.3): prompt / answer / why leave the server only once every live source is passed
+        // rv3 MF-4: the idea sentence often restates a source's gate key, so it is withheld too: '' until met (the
+        // shared DTO keeps `idea` a required string; the fold shows "opens once you pass <sources>" instead)
+        const base: KeyIdeaDto = { id: i.idea.id, idea: met ? i.idea.idea : '', tags: [...i.idea.tags], status: status.get(cardKeyOf(KEYIDEA_PREFIX, i.section, i.idea.id))!, sources: sourceDtos(i, passed) };
+        // the leak rule (PLAN §5.3): idea / prompt / answer / why leave the server only once every live source is passed
         return met ? { ...base, prompt: i.idea.prompt, answer: i.idea.answer, why: i.idea.why } : base;
       }),
     })),
@@ -329,7 +342,7 @@ export function recapPrompts(deps: Deps, section: string): RecapPromptsResponse 
   const { s, passed } = requireSection(db, section);
   const r = sectionRecap(db, s, passed);
   if (r.state === 'done') throw new HttpError(409, 'ALREADY_SCORED', `the ${s.file.title} recap is done`);
-  if (r.state !== 'open') throw new HttpError(409, 'NOT_DUE', `the ${s.file.title} recap opens after ${r.needed} of its ${r.total} units are passed (${r.passed} so far)`);
+  if (r.state !== 'open') throw new HttpError(409, 'NOT_DUE', lockedReason(s, passed, r));
   return { section, title: s.file.title, kind: 'recap', prompts: metIdeas(s, passed).map((i) => ({ ideaId: i.idea.id, prompt: i.idea.prompt })) };
 }
 
@@ -344,16 +357,26 @@ export function revealIdea(deps: Deps, section: string, body: z.infer<typeof Rec
   return { ideaId: i.idea.id, answer: i.idea.answer, why: i.idea.why, sources: sourceDtos(i, passed) };
 }
 
-/** Partly / missed ideas: their key-idea card re-graded Again, due tomorrow at the latest (created if missing). */
+/**
+ * Partly / missed ideas: a REVIEWED key-idea card is re-graded Again, due tomorrow at the latest. rv3 F6: a card
+ * never reviewed keeps its capped first day (engines/keyideas.ts cappedKeyIdeaDue), and a missing one is created on
+ * the capped day, so a recap never puts more than NEW_KEYIDEA_CARDS_PER_DAY new key-idea cards on one day.
+ */
 function reenrol(db: Db, i: ResolvedIdea, passed: ReadonlyMap<number, number>, t: number, clock: Deps['clock']): string {
   const key = cardKeyOf(KEYIDEA_PREFIX, i.section, i.idea.id);
   const due = t + DAY_MS;
-  if (db.get('SELECT 1 AS x FROM review_item WHERE card_key = ?', key)) {
-    reviveRetiredCard(db, key, due, clock);
-    regradeMissedCard(db, key, due, clock);
+  const row = db.get<{ id: number; retired: number | null }>('SELECT id, retired_at AS retired FROM review_item WHERE card_key = ?', key);
+  if (row) {
+    const reviewed = db.get('SELECT 1 AS x FROM review_log WHERE review_item_id = ? LIMIT 1', row.id) !== undefined;
+    if (reviewed) {
+      reviveRetiredCard(db, key, due, clock);
+      regradeMissedCard(db, key, due, clock);
+    } else if (row.retired !== null) {
+      reviveRetiredCard(db, key, cappedKeyIdeaDue(db, t), clock);
+    }
   } else {
     const last = liveSources(i).reduce((a, b) => ((passed.get(b.unitId!) ?? 0) > (passed.get(a.unitId!) ?? 0) ? b : a));
-    addReviewItem(db, { cardKey: key, kind: 'concept', unitId: last.unitId!, dueAt: due }, clock);
+    addReviewItem(db, { cardKey: key, kind: 'concept', unitId: last.unitId!, dueAt: cappedKeyIdeaDue(db, t) }, clock);
   }
   return key;
 }
@@ -377,7 +400,7 @@ export function submitRecap(deps: Deps, section: string, body: z.infer<typeof Re
   const { s, passed } = requireSection(db, section);
   const r = sectionRecap(db, s, passed);
   if (r.state === 'done') throw new HttpError(409, 'ALREADY_SCORED', `the ${s.file.title} recap is done (it pays once)`);
-  if (r.state !== 'open') throw new HttpError(409, 'NOT_DUE', `the ${s.file.title} recap is not open yet`);
+  if (r.state !== 'open') throw new HttpError(409, 'NOT_DUE', lockedReason(s, passed, r));
   const ideas = metIdeas(s, passed);
   const got = checkItems(ideas, body.items);
   const t = nowMs(clock);
@@ -415,16 +438,26 @@ function requireRecheck(deps: Deps, itemId: number): { row: ReviewItemRow; s: Re
   if (row.retired_at !== null) throw new HttpError(409, 'NOT_DUE', 'this re-check was retired (its section left the side files)');
   if (row.due_at > nowMs(clock)) throw new HttpError(409, 'NOT_DUE', `this re-check is due ${new Date(row.due_at).toISOString()}`);
   const { s, passed } = requireSection(db, rc.section);
-  return { row, s, passed, kind, ideas: shakiest(db, metIdeas(s, passed)) };
+  // rv3 L4: the draw is fixed as of the card's due time (ideas met by then, grades logged before it), so a card
+  // graded or a source passed between the GET and the POST cannot change the five prompts and refuse the submit
+  const asOf = row.due_at;
+  return { row, s, passed, kind, ideas: shakiest(db, metIdeas(s, passed).filter((i) => metAt(i, passed)! <= asOf), asOf) };
 }
 
-/** The RECHECK_PROMPTS met ideas with the worst FSRS state: not in Review state first, then most lapses, lowest stability. */
-function shakiest(db: Db, ideas: readonly ResolvedIdea[]): ResolvedIdea[] {
+/**
+ * The RECHECK_PROMPTS shakiest met ideas as of `asOf` (review_log rows before it): never reviewed or last graded
+ * Again / Hard first, then the most Again grades, then the fewest reviews; ties keep the section order.
+ */
+function shakiest(db: Db, ideas: readonly ResolvedIdea[], asOf: number): ResolvedIdea[] {
   const score = (i: ResolvedIdea): [number, number, number] => {
-    const row = db.get<{ state: string }>('SELECT fsrs_state AS state FROM review_item WHERE card_key = ?', cardKeyOf(KEYIDEA_PREFIX, i.section, i.idea.id));
-    if (!row) return [0, 0, 0];
-    const c = deserializeCard(row.state);
-    return [c.state === 2 ? 1 : 0, -c.lapses, c.stability];
+    const log = db.all<{ rating: string }>(
+      'SELECT rl.rating FROM review_log rl JOIN review_item ri ON ri.id = rl.review_item_id WHERE ri.card_key = ? AND rl.reviewed_at < ? ORDER BY rl.reviewed_at, rl.id',
+      cardKeyOf(KEYIDEA_PREFIX, i.section, i.idea.id),
+      asOf,
+    );
+    if (log.length === 0) return [0, 0, 0];
+    const last = log[log.length - 1]!.rating;
+    return [last === 'good' || last === 'easy' ? 1 : 0, -log.filter((r) => r.rating === 'again').length, log.length];
   };
   return ideas
     .map((i, n) => ({ i, n, k: score(i) }))

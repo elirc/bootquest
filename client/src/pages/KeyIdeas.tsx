@@ -25,7 +25,9 @@ function IdeaRow({ idea }: { idea: KeyIdeaDto }) {
   return (
     <li className="keyidea" data-testid={`keyidea-${idea.id}`} data-status={idea.status}>
       <p>
-        <Chip tone={STATUS_TONE[idea.status]}>{STATUS_LABEL[idea.status]}</Chip> {idea.idea}
+        <Chip tone={STATUS_TONE[idea.status]}>{STATUS_LABEL[idea.status]}</Chip>{' '}
+        {/* rv3 MF-4: the server withholds the idea sentence ('') until every source is passed */}
+        {idea.idea !== '' ? idea.idea : <span className="muted">An idea you meet in its sources.</span>}
       </p>
       {idea.tags.length > 0 && (
         <p className="small muted">
@@ -46,7 +48,7 @@ function IdeaRow({ idea }: { idea: KeyIdeaDto }) {
         </details>
       ) : (
         <p className="small muted" data-testid="keyidea-locked">
-          The answer opens once you pass:{' '}
+          {idea.idea === '' ? 'The idea and its answer open once you pass:' : 'The answer opens once you pass:'}{' '}
           {idea.sources
             .filter((s) => s.unitId !== null && !s.passed)
             .map((s, i) => (
@@ -85,8 +87,11 @@ export function KeyIdeaFold({ section, open = false }: { section: KeyIdeaSection
         </p>
       )}
       {section.recap.state === 'locked' && section.recap.total > 0 && (
-        <p className="small muted">
-          The recap opens after {section.recap.needed} of the {section.recap.total} units ({section.recap.passed} passed).
+        <p className="small muted" data-testid="keyidea-recap-locked">
+          {section.recap.passed >= section.recap.needed
+            ? // rv3 MF-1: the unit threshold is reached; the recap also needs 3 met ideas (or all of them)
+              `The recap opens once ${Math.min(3, section.ideas.length)} of these ideas are met (every source of an idea passed).`
+            : `The recap opens after ${section.recap.needed} of the ${section.recap.total} units (${section.recap.passed} passed).`}
         </p>
       )}
     </details>
@@ -102,6 +107,32 @@ export function KeyIdeasForUnit({ unitKey }: { unitKey: string }) {
     <>
       {q.data.sections.map((s) => (
         <KeyIdeaFold key={s.section} section={s} />
+      ))}
+    </>
+  );
+}
+
+/**
+ * rv3 W10c (FABLE-REVIEW L1): today's redo card and a due re-check, named on the tile. The server serves them first
+ * in the review queue, so the first three items carry them when they are due. Mounted only inside a visible tile.
+ */
+function TodayFirst() {
+  const api = useApi();
+  const q = useAsync(() => api.getReviewQueue(3).then((r) => r.items).catch(() => []), [api]);
+  if (q.status !== 'ready') return null;
+  const firsts = q.data.filter((i) => i.cardKey.startsWith('redo:') || i.cardKey.startsWith('recheck:'));
+  if (firsts.length === 0) return null;
+  return (
+    <>
+      {firsts.map((i) => (
+        <p key={i.id} className="small" data-testid={`keyideas-first-${i.cardKey.startsWith('redo:') ? 'redo' : 'recheck'}`}>
+          <Link to="/review">
+            {i.cardKey.startsWith('redo:')
+              ? `Today's redo: ${(i.card?.front ?? '').replace(/^Redo, in practice mode: /, '') || 'one drill, in practice mode'}`
+              : `Re-check due: ${(i.card?.front ?? '').replace(/^Re-check: /, '') || 'a section recap'}`}
+          </Link>{' '}
+          <span className="muted">(first in the review queue)</span>
+        </p>
       ))}
     </>
   );
@@ -138,6 +169,7 @@ export function KeyIdeasTile() {
           ))}
         </tbody>
       </table>
+      <TodayFirst />
       {d.recapsOpen.map((r) => (
         <p key={r.section} className="small" data-testid="keyideas-recap-open">
           <Link to={`/keyideas?recap=${encodeURIComponent(r.section)}`}>Section recap: {r.title}</Link>
