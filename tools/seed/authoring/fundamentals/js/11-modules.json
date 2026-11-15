@@ -5,7 +5,7 @@
   "title": "Modules: ESM & CommonJS",
   "level": "intermediate",
   "summary": "import and export, live bindings, modules as cached singletons, CommonJS require and module.exports, interop between the two systems, and how circular dependencies behave.",
-  "lesson": "## ES modules (ESM)\n\n```js\n// counter.mjs\nexport let count = 0;\nexport function inc() { count++; }\nexport default function hello() { return 'hi'; }\n\n// main.mjs\nimport hello, { count, inc } from './counter.mjs';\ninc();\nconsole.log(count);   // 1  <- imports are LIVE bindings, not copies\ncount = 5;            // TypeError: imports are read-only views\n```\n\nFacts about ESM:\n- `import` declarations are hoisted and resolved **before** the module body runs; `import()` is the dynamic version and returns a promise.\n- Module code is always **strict**, and top-level `this` is `undefined`.\n- Top-level `await` is allowed.\n- A module is evaluated **once** per process; every importer shares the same instance. That makes a module a natural singleton (a config object, a DB pool), and also a source of hidden shared state in tests.\n- No `__dirname` / `__filename` / `require`: use `import.meta.dirname`, `import.meta.filename` (Node 20.11+) and `import.meta.url`.\n- Node treats `.mjs` as ESM, `.cjs` as CommonJS, and `.js` by the nearest package.json `\"type\"` (`\"module\"` or the default `\"commonjs\"`).\n\n## CommonJS (CJS)\n\n```js\n// math.cjs\nexports.add = (a, b) => a + b;        // adds to the exports object\nmodule.exports = { add, sub };        // REPLACES the exports object\nexports = { add };                    // does nothing: only rebinds the local variable\n\nconst { add } = require('./math.cjs');\n```\n\n`require` is a plain synchronous function: it runs the file the first time, caches `module.exports`, and returns the cached object on every later call. Values are copied out at destructuring time, so CJS has no live bindings.\n\n## Interop\n\n- ESM importing CJS: the default import is `module.exports` (`import pkg from './c.cjs'`); named imports work only when Node can detect them statically.\n- CJS loading ESM: `await import('./x.mjs')` always works. Synchronous `require()` of ESM is only available in recent Node versions and not for modules that use top-level await, so libraries usually ship both formats.\n\n## Circular dependencies\n\nIf A imports B and B imports A, one of them runs while the other is only **partly** initialised:\n- In CJS, B's `require('./a')` returns A's exports object as it is at that moment (often missing properties assigned later).\n- In ESM, touching a binding of the unfinished module before its declaration runs throws a ReferenceError (temporal dead zone).\n\nBreak cycles by moving the shared piece into a third module, or by only using the import inside functions that run later.\n\n## Named versus default exports\n\nNamed exports are greppable, refactor-friendly and tree-shakeable (bundlers drop unused ones). Many teams avoid default exports so every import uses the same name.",
+  "lesson": "## ES modules (ESM)\n\n```js\n// counter.mjs\nexport let count = 0;\nexport function inc() { count++; }\nexport default function hello() { return 'hi'; }\n\n// main.mjs\nimport hello, { count, inc } from './counter.mjs';\ninc();\nconsole.log(count);   // 1  <- imports are LIVE bindings, not copies\ncount = 5;            // TypeError: imports are read-only views\n```\n\nFacts about ESM:\n- `import` declarations are hoisted and resolved **before** the module body runs; `import()` is the dynamic version and returns a promise.\n- Module code is always **strict**, and top-level `this` is `undefined`.\n- Top-level `await` is allowed.\n- A module is evaluated **once** per process; every importer shares the same instance. That makes a module a natural singleton (a config object, a DB pool), and also a source of hidden shared state in tests.\n- No `__dirname` / `__filename` / `require`: use `import.meta.dirname`, `import.meta.filename` (Node 20.11+) and `import.meta.url`.\n- Node treats `.mjs` as ESM, `.cjs` as CommonJS, and `.js` by the nearest package.json `\"type\"` (`\"module\"` or the default `\"commonjs\"`). With no `\"type\"` field, Node 22 also checks the syntax: a `.js` file that uses `import` and does not parse as CommonJS is reparsed as ESM, with a warning and a parsing cost. State the type and skip the guess.\n\n## CommonJS (CJS)\n\n```js\n// math.cjs\nexports.add = (a, b) => a + b;        // adds to the exports object\nmodule.exports = { add, sub };        // REPLACES the exports object\nexports = { add };                    // does nothing: only rebinds the local variable\n\nconst { add } = require('./math.cjs');\n```\n\n`require` is a plain synchronous function: it runs the file the first time, caches `module.exports`, and returns the cached object on every later call. Values are copied out at destructuring time, so CJS has no live bindings.\n\n`exports`, `require`, `module`, `__filename` and `__dirname` are parameters of a wrapper function Node puts around every CommonJS file. That is why they exist here and not in ESM, and why `exports` is just a local variable: the loader only ever reads `module.exports`. A file that calls `require('./config.cjs')` in ten places runs config.cjs once and gets the same object ten times.\n\n## Interop\n\n- ESM importing CJS: the default import is `module.exports` (`import pkg from './c.cjs'`); named imports work only when Node can detect them statically.\n- CJS loading ESM: `await import('./x.mjs')` always works. Synchronous `require()` of ESM is only available in recent Node versions and not for modules that use top-level await, so libraries usually ship both formats.\n\n## Circular dependencies\n\nIf A imports B and B imports A, one of them runs while the other is only **partly** initialised:\n- In CJS, B's `require('./a')` returns A's exports object as it is at that moment (often missing properties assigned later).\n- In ESM, touching a binding of the unfinished module before its declaration runs throws a ReferenceError (temporal dead zone).\n\nBreak cycles by moving the shared piece into a third module, or by only using the import inside functions that run later.\n\n## Named versus default exports\n\nNamed exports are greppable, refactor-friendly and tree-shakeable (bundlers drop unused ones). Many teams avoid default exports so every import uses the same name.\n\nWith `export default function () {}` each importer picks a name, so one component turns up as `Button`, `Btn` and `PrimaryButton` across a codebase. A named import has to match the exported name or rename it visibly (`import { add as sum }`), so a search for `add` finds every user. Barrel files are a second trap: `export * from './math.js'` forwards the named exports but skips the default one.",
   "quiz": [
     {
       "prompt": "`counter.mjs` exports `let count = 0` and `inc()`. After `import { count, inc } ...; inc();`, what is `count` in the importer?",
@@ -16,7 +16,7 @@
         "It throws"
       ],
       "answer": 1,
-      "explanation": "ESM imports are live bindings to the exporting module's variables, not copies."
+      "explanation": "An ESM import is a live binding: the importer's `count` names the exporting module's own variable, not a snapshot taken at import time. `inc()` increments that variable inside counter.mjs, and the next read in the importer sees the new value. Expecting `0` is CommonJS thinking, where destructuring the result of `require()` copies the value once and never updates."
     },
     {
       "prompt": "What happens when an ESM importer writes `count = 5` to an imported binding?",
@@ -27,7 +27,7 @@
         "Nothing: the write is silently ignored"
       ],
       "answer": 2,
-      "explanation": "Imported bindings are read-only views. Export a function (like inc) when importers need to change state."
+      "explanation": "Only the exporting module may assign to its own variable; on the importer's side the binding is immutable. Module code is always strict, so the write is not silently ignored, and there is no local copy that could take the new value. When importers need to change shared state, export a function such as `inc()` that performs the write inside the module."
     },
     {
       "prompt": "Two different files both import `./db.mjs`. How many times does db.mjs run?",
@@ -38,7 +38,7 @@
         "Not until an export is first called"
       ],
       "answer": 0,
-      "explanation": "Each module is evaluated once per process and every importer gets the same instance."
+      "explanation": "Node keeps a module map keyed by the resolved URL. The first import evaluates db.mjs and stores its module record; every later import, from any file and from any number of import statements, gets that same record. Evaluation is also eager: it happens while the import graph loads, not lazily when an export is first called. That is why one module can hold a single DB pool."
     },
     {
       "prompt": "In CommonJS, what does `exports = { add }` inside a module do?",
@@ -49,7 +49,7 @@
         "Nothing useful: it only rebinds the local variable"
       ],
       "answer": 3,
-      "explanation": "exports starts as a reference to module.exports. Reassigning the local name breaks that link; assign module.exports instead."
+      "explanation": "Node's wrapper passes `exports` in as a parameter that starts out pointing at the same object as `module.exports`, and `require()` returns `module.exports`, never the parameter. Assigning a new object to `exports` points the parameter elsewhere and leaves `module.exports` as the original empty object, so callers get `{}`. Nothing merges and no TypeError is thrown: `exports` is an ordinary writable variable."
     },
     {
       "prompt": "What is `__dirname` inside an ES module?",
@@ -93,7 +93,7 @@
         "A RangeError for the circular require chain"
       ],
       "answer": 0,
-      "explanation": "require returns the cached, partially filled exports object to break the cycle. Properties a assigns after the require call are missing at that moment."
+      "explanation": "Node puts a module into its cache before running the module's code. When b calls `require('./a')`, a is still paused at its own require of b, so Node finds a in the cache and hands back its exports object as it stands at that moment; anything a assigns after that require line is missing. The cycle is not treated as an error, so no RangeError appears, and b gets an object, not `undefined`."
     },
     {
       "prompt": "Which statement about ESM `import` declarations is true?",
@@ -104,7 +104,7 @@
         "They copy each exported value into a local variable"
       ],
       "answer": 1,
-      "explanation": "Static imports are hoisted and linked first. Use dynamic import() for conditional or lazy loading."
+      "explanation": "A static `import` is part of the module's structure, not a statement that executes. The loader parses the file, fetches and links every imported module, and only then evaluates the body, so an import written at the bottom of a file is usable on its first line. Putting one inside an `if` block or a function is a SyntaxError; use dynamic `import()` for conditional loading. And the importer reads the exporter's variable rather than a copy of its value."
     },
     {
       "prompt": "Why do many teams prefer named exports over default exports?",
@@ -115,7 +115,7 @@
         "Node rejects default exports inside ES modules"
       ],
       "answer": 2,
-      "explanation": "Each importer can rename a default export freely, which makes code harder to search and refactor. Named exports are also easy to tree-shake."
+      "explanation": "A default export has no name the importer must match: `import x from './user.js'` binds whatever local name the importer picks, so one module turns up as `User`, `user` and `UserModel` in different files and a text search misses some. A named import must use the exported name, and renaming needs a visible `as`. This is a code-hygiene choice: default exports load no slower, and Node and TypeScript accept both."
     }
   ],
   "flashcards": [
@@ -149,7 +149,7 @@
     },
     {
       "front": "What decides ESM versus CommonJS for a .js file in Node?",
-      "back": "The type field of the nearest package.json: module means ESM, anything else means CommonJS."
+      "back": "The type field of the nearest package.json: module means ESM, commonjs means CommonJS. With no type field Node 22 runs it as CommonJS unless the file uses import/export syntax, which it then reparses as ESM with a warning."
     }
   ],
   "drills": [
@@ -190,7 +190,7 @@
           "code": "const req = mod.createLoader({});\nassert.throws(() => req('nope'), (e) => e instanceof Error && e.message.includes('nope'));"
         }
       ],
-      "explanation": "The cache entry is created BEFORE the factory runs; that one line is what makes cycles terminate:\n\n```js\nconst module = { exports: {} };\ncache.set(id, module);\nfactory(require, module, module.exports);\nreturn module.exports;\n```\n\nReturning `module.exports` (read AFTER the factory ran) is what lets `module.exports = fn` work, and why rebinding the `exports` parameter changes nothing: the loader never looks at that variable again.",
+      "explanation": "The cache entry is created BEFORE the factory runs; that one line is what makes cycles terminate:\n\n```js\nconst module = { exports: {} };\ncache.set(id, module);\nfactory(require, module, module.exports);\nreturn module.exports;\n```\n\nReturning `module.exports` (read AFTER the factory ran) is what lets `module.exports = fn` work, and why rebinding the `exports` parameter changes nothing: the loader never looks at that variable again.\n\nA tempting variant saves `const result = module.exports` before calling the factory and returns `result`. The test \"module.exports replaces the exports object\" fails on it, because the caller gets the original empty object instead of the function. Moving `cache.set` below the factory call instead makes \"a circular require gets the partly filled exports\" fail with a stack overflow: the cycle never finds a cached entry, so it starts module a again and again.",
       "hints": [
         "Every module object must be findable in the cache before its own factory starts running, or a cycle would recurse forever.",
         "Keep a cache of module records keyed by id. On a miss, find the factory and fail if there is none, store the new record before running the factory, run it with the loader and the record, and answer with the record's exports.",
@@ -235,7 +235,7 @@
           "code": "const req = mod.createLoader({});\nassert.throws(() => req('nope'), (e) => e instanceof Error && e.message.includes('nope'));"
         }
       ],
-      "explanation": "The module is cached only after its factory returns, so a circular `require('a')` from inside b finds no entry, starts a again, and recurses until the stack overflows. Put the module in the cache BEFORE running the factory: the cycle then gets the partly filled exports, which is exactly how Node behaves.",
+      "explanation": "The module is cached only after its factory returns, so a circular `require('a')` from inside b finds no entry, starts a again, and recurses until the stack overflows. Put the module in the cache BEFORE running the factory: the cycle then gets the partly filled exports, which is exactly how Node behaves.\n\nOnly the test \"a circular require gets the partly filled exports\" fails on the starter. The other five pass, because without a cycle the order of `cache.set` and the factory call makes no difference. Do not patch it with a loading set that throws on re-entry: Node hands back the partial object rather than an error, and that same test still fails.",
       "hints": [
         "Run the circular test: what happens when a requires b and b requires a?",
         "While a's factory is still running, nothing in the cache says that a is already being loaded.",
