@@ -177,9 +177,9 @@
           ]
         }
       ],
-      "explanation": "Budget = month × allowed-downtime fraction, floored to whole minutes; what is left = budget − used, never negative.\n\nFor `budgetLeftMinutes(995000, 200)`:\n- downtime ppm = 1,000,000 − 995,000 = 5,000\n- budget = 43,200 × 5,000 / 1,000,000 = 216 minutes (exact)\n- left = 216 − 200 = **16 minutes**\n\nUseful anchors: 99% ≈ 7.2 h/month, 99.9% ≈ 43 min, 99.99% ≈ 4 min, 99.999% ≈ 26 s. Each extra nine cuts the budget tenfold.",
+      "explanation": "The error budget is the unavailable share of the period. A 30-day month has 43,200 minutes, and with the SLO in ppm the budget is those minutes times the unavailable ppm, divided by 1,000,000 once at the end and rounded down to whole minutes. For the first test, 99% leaves 10,000 ppm, and 43,200 × 10,000 / 1,000,000 = 432 minutes a month.\n\nRounding to the nearest minute looks harmless because 43.2 still becomes 43, but 99.95% allows 21.6 minutes and `Math.round` hands out 22, so \"99.95% -> 21.6 rounds DOWN to 21, not the 22 Math.round gives\" fails. Leaving out the clamp on the remaining budget answers -6 for a 4-minute budget with 10 minutes used, and \"99.99% (4 min) with 10 used -> overspent, clamped at 0\" fails. Useful anchors: 99% is about 7.2 hours a month, 99.9% about 43 minutes, 99.99% about 4 minutes. Each extra nine cuts the budget tenfold.",
       "hints": [
-        "The SLO says how much of the month you must be up; the rest of the month is your downtime budget.",
+        "The SLO says how much of the month you must be up, and the rest of the month is your downtime budget.",
         "The allowed downtime is the unavailable share of the month's minutes. Work it out in ppm with one division at the end, round down to whole minutes, then take away what is already used and clamp at zero.",
         "budget = Math.floor(43200 × (1,000,000 − ppm) / 1,000,000); left = Math.max(0, budget − used)."
       ]
@@ -316,9 +316,9 @@
           ]
         }
       ],
-      "explanation": "Compute the capped backoff b once; full jitter is [0, b], equal jitter is [floor(b/2), b].\n\nFor `equalJitterBounds(500, 3000, 4)`:\n- uncapped = 500 × 2^4 = 8,000\n- b = min(3,000, 8,000) = 3,000\n- min = floor(3,000 / 2) = 1,500\n- → **{ min: 1500, max: 3000 }**\n\nA real client would then wait `min + random() × (max − min)`; testing the bounds checks your formula without any randomness.",
+      "explanation": "Compute the capped backoff once: the base doubled per attempt, never above the cap. Full jitter draws from zero up to that backoff, and equal jitter keeps the lower half, rounded down, and draws only from the upper half. For the first test, a 50 ms base at attempt 3 gives 50 × 8 = 400 ms under a 10,000 ms cap, so full jitter returns { min: 0, max: 400 } and equal jitter returns { min: 200, max: 400 }.\n\nForgetting the cap lets the backoff keep doubling: \"full jitter past the cap -> [0, 1000]\" and \"equal jitter past the cap -> [1500, 3000]\" both fail. Rounding half the backoff to the nearest millisecond instead of down turns 12.5 into 13, and \"equal jitter on an odd backoff: 25 -> [12, 25] (Math.floor)\" fails. A real client then waits a random point between min and max; returning the bounds tests the formula without any randomness.",
       "hints": [
-        "Both strategies start from the same capped exponential backoff; they differ only in where the random range starts.",
+        "Both strategies start from the same capped exponential backoff, and they differ only in where the random range starts.",
         "Work out the capped backoff once. Full jitter can wait anything from nothing up to it, and equal jitter always keeps the lower half of it, rounded down, and randomises only the upper half.",
         "b = Math.min(capMs, baseMs × 2 ** attempt); full → { min: 0, max: b }; equal → { min: Math.floor(b / 2), max: b }."
       ]
@@ -386,9 +386,9 @@
           ]
         }
       ],
-      "explanation": "Attempts × timeout plus the sum of the capped backoffs; then search upward for the largest r that still fits.\n\nFor `worstCaseTotalMs(300, 5, 200, 1000)`:\n- attempts: (5 + 1) × 300 = 1,800 ms\n- waits: 200 + 400 + 800 + min(1,000, 1,600) + min(1,000, 3,200) = 200 + 400 + 800 + 1,000 + 1,000 = 3,400 ms\n- total = 1,800 + 3,400 = **5,200 ms**\n\nFor `maxRetriesWithin(2000, 1000, 500, 5000)`: r = 1 already costs 2 × 1,000 + 500 = 2,500 > 2,000 → **0**. Retrying here only adds load: shorten the timeout or drop the retry.\n\nRelated: 04/05 `retries-within-deadline` asks the same deadline question with a constant backoff.",
+      "explanation": "Attempts × timeout plus the sum of the capped backoffs; then search upward for the largest r that still fits.\n\nFor the first test, `worstCaseTotalMs(1000, 3, 100, 10000)`: four attempts cost 4 × 1,000 = 4,000 ms and the three waits cost 100 + 200 + 400 = 700 ms, so the policy can run for 4,700 ms.\n\nFor `worstCaseTotalMs(300, 5, 200, 1000)`:\n- attempts: (5 + 1) × 300 = 1,800 ms\n- waits: 200 + 400 + 800 + min(1,000, 1,600) + min(1,000, 3,200) = 200 + 400 + 800 + 1,000 + 1,000 = 3,400 ms\n- total = 1,800 + 3,400 = **5,200 ms**\n\nFor `maxRetriesWithin(2000, 1000, 500, 5000)`: r = 1 already costs 2 × 1,000 + 500 = 2,500 > 2,000 → **0**. Retrying here only adds load: shorten the timeout or drop the retry.\n\nRelated: 04/05 `retries-within-deadline` asks the same deadline question with a constant backoff.",
       "hints": [
-        "Count the attempts (one more than the retries) and the waits between them (one per retry). In the worst case every one of them runs to the limit.",
+        "Count the attempts, one more than the retries, and the waits between them, one per retry. In the worst case every one of them runs to the limit.",
         "Count one more attempt than there are retries and one wait per retry, with every attempt timing out and every wait at its capped maximum. For the deadline, keep adding a retry while the next one still fits.",
         "total = (retries + 1) × timeoutMs + Σ_{i=0}^{retries−1} Math.min(capMs, baseMs × 2 ** i). For the inverse, try r = 0, 1, 2, … while the next r still fits."
       ]
@@ -453,7 +453,7 @@
           ]
         }
       ],
-      "explanation": "Availability is the up share of a fail-repair cycle; the inverse solves that ratio for MTTR.\n\nFor `maxMttrMinutes(2000, 999000)`:\n- MTBF in minutes = 2,000 × 60 = 120,000\n- allowed downtime share = (1,000,000 − 999,000) / 999,000 = 1,000 / 999,000\n- MTTR ≤ 120,000 × 1,000 / 999,000 = 120,000,000 / 999,000 = 120.12…\n- Math.floor → **120 minutes**\n\nCheck: availabilityPpm with MTBF 120,000 min and MTTR 120 min = 120,000,000,000 / 120,120 ≈ 999,001 ppm ≥ 999,000 ✓.",
+      "explanation": "Over one failure cycle the node is up for the MTBF and down for the MTTR, so availability is the up share of the cycle: MTBF times 1,000,000 divided by MTBF plus MTTR. For the first test, 999 hours up and 1 hour down give 999,000,000 / 1,000 = 999,000 ppm, which is 99.9%. The inverse solves the same ratio for the repair time, converts hours to minutes and rounds down.\n\nA common shortcut is 1 minus MTTR over MTBF. It is close but not exact: for the first test it gives about 998,999 ppm, and both \"MTBF 999 h, MTTR 1 h -> 999,000 ppm (99.9%)\" and the 4,999-hour test fail. Rounding the repair time to the nearest minute fails \"MTBF 1,000 h at 99.5% -> 301.5 rounds DOWN to 301, not the 302 Math.round gives\": one more minute misses the target. Fast recovery buys as many nines as rarer failures do.",
       "hints": [
         "Think of one cycle: up for MTBF, down for MTTR. Availability is the fraction of that cycle spent up.",
         "One cycle is up for the MTBF and down for the MTTR, and availability is the up share of that cycle. Turn the target inequality around to get the largest repair time, convert hours to minutes and round down so the target still holds.",
