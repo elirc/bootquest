@@ -112,6 +112,32 @@ export function KeyIdeasForUnit({ unitKey }: { unitKey: string }) {
   );
 }
 
+/**
+ * rv3 W10c (FABLE-REVIEW L1): today's redo card and a due re-check, named on the tile. The server serves them first
+ * in the review queue, so the first three items carry them when they are due. Mounted only inside a visible tile.
+ */
+function TodayFirst() {
+  const api = useApi();
+  const q = useAsync(() => api.getReviewQueue(3).then((r) => r.items).catch(() => []), [api]);
+  if (q.status !== 'ready') return null;
+  const firsts = q.data.filter((i) => i.cardKey.startsWith('redo:') || i.cardKey.startsWith('recheck:'));
+  if (firsts.length === 0) return null;
+  return (
+    <>
+      {firsts.map((i) => (
+        <p key={i.id} className="small" data-testid={`keyideas-first-${i.cardKey.startsWith('redo:') ? 'redo' : 'recheck'}`}>
+          <Link to="/review">
+            {i.cardKey.startsWith('redo:')
+              ? `Today's redo: ${(i.card?.front ?? '').replace(/^Redo, in practice mode: /, '') || 'one drill, in practice mode'}`
+              : `Re-check due: ${(i.card?.front ?? '').replace(/^Re-check: /, '') || 'a section recap'}`}
+          </Link>{' '}
+          <span className="muted">(first in the review queue)</span>
+        </p>
+      ))}
+    </>
+  );
+}
+
 /** Dashboard: one tile. Hidden when no section is loaded (or the server predates key ideas). */
 export function KeyIdeasTile() {
   const api = useApi();
@@ -143,6 +169,7 @@ export function KeyIdeasTile() {
           ))}
         </tbody>
       </table>
+      <TodayFirst />
       {d.recapsOpen.map((r) => (
         <p key={r.section} className="small" data-testid="keyideas-recap-open">
           <Link to={`/keyideas?recap=${encodeURIComponent(r.section)}`}>Section recap: {r.title}</Link>

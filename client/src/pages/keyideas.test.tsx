@@ -133,6 +133,29 @@ describe('Key ideas page, dashboard tile and the section recap', () => {
     expect(within(fold).getByRole('link', { name: 'Section recap' })).toHaveAttribute('href', '/keyideas?recap=fx-beta');
   });
 
+  it('rv3 W10c: the tile names the redo card of the day and a due re-check (first in the review queue)', async () => {
+    const card = (front: string) => ({ front, back: 'b', source: null });
+    const items = [
+      { id: 71, cardKey: 'redo:fx-beta/met', kind: 'concept' as const, unitId: 5, competencyId: null, dueAt: 1, card: card('Redo, in practice mode: Invalidate on write.') },
+      { id: 72, cardKey: 'recheck:fx-beta/14', kind: 'concept' as const, unitId: null, competencyId: null, dueAt: 2, card: card('Re-check: Fixture beta (14 days after its recap)') },
+      { id: 73, cardKey: 'flashcard:x', kind: 'card' as const, unitId: null, competencyId: null, dueAt: 3, card: card('a flashcard') },
+    ];
+    renderApp('/', { ...createMockApi(), getKeyIdeas: async () => IDEAS, getReviewQueue: async () => ({ count: 3, items }) });
+    const tile = await screen.findByTestId('keyideas-tile', {}, { timeout: 15_000 });
+    expect(await within(tile).findByTestId('keyideas-first-redo')).toHaveTextContent("Today's redo: Invalidate on write.");
+    expect(within(tile).getByTestId('keyideas-first-recheck')).toHaveTextContent('Re-check due: Fixture beta (14 days after its recap)');
+    expect(within(tile).getByRole('link', { name: /Today's redo/ })).toHaveAttribute('href', '/review');
+    expect(tile).not.toHaveTextContent('a flashcard');
+  });
+
+  it('rv3 MF-1: a locked recap whose unit threshold is reached says it waits for met ideas', async () => {
+    const locked = { ...IDEAS, recapsOpen: [], sections: [{ ...IDEAS.sections[0]!, recap: { state: 'locked' as const, passed: 2, total: 3, needed: 2, doneAt: null } }] };
+    renderApp('/keyideas', { ...createMockApi(), getKeyIdeas: async () => locked });
+    const fold = await screen.findByTestId('keyidea-fold-fx-beta');
+    expect(within(fold).getByTestId('keyidea-recap-locked')).toHaveTextContent('The recap opens once 2 of these ideas are met');
+    expect(within(fold).queryByRole('link', { name: 'Section recap' })).toBeNull();
+  });
+
   it('the dashboard tile shows owned / shaky / not yet met per track and the open recap', async () => {
     renderApp('/', { ...createMockApi(), getKeyIdeas: async () => IDEAS });
     const tile = await screen.findByTestId('keyideas-tile', {}, { timeout: 15_000 });
