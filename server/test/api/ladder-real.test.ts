@@ -113,6 +113,9 @@ describe.skipIf(!HAVE_CHECKOUT)('W7 real ladder content end to end (temp DB, no 
     expect(st.explainBack.built).toBe(ebItems.length - g2);
     expect(st.explainBack.loaded).toBe(st.explainBack.built);
     expect(st.katas).toMatchObject({ built: store.kataItems().length, loaded: store.kataItems().length });
+    // census: 52 G1 katas (W5a..mx) + 14 rv3 S4 agent katas (agentpr-ww16-katas 8, agenttools-mastermorphic-katas 6)
+    expect(store.kataItems().length).toBe(66);
+    expect(store.kataItems().filter((k) => k.provenance.repo === 'ww16' || k.provenance.repo === 'mastermorphic').length).toBe(15); // ww16-katas 1 + 8 + 6
     expect(st.retests.built).toBe(store.variantItems().length);
     // no signalpost units before the first sync; the authored G4 unit loads AFTER retests, and the
     // http-lab fixture unit never exists here -> on the FIRST boot every retest is pending
