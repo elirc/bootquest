@@ -4,11 +4,11 @@ BootQuest is the owner's single-user, local-first gamified upskilling app (npm w
 `shared/`, `tools/seed/`). This folder is the one current handoff. Everything older lives in git history and in
 [`docs/SEEDING.md`](../docs/SEEDING.md) §8 (the wave log, newest bullets at the end).
 
-> **Newest state (2026-11-15): branch `rv-wave` = fund + f52 + rv + rv2 + rv3, not on `main`.** Read
+> **Newest state (2026-11-15): `main` = fund + f52 + rv + rv2 + rv3 (landed from `rv-wave` on the owner's word).** Read
 > [`rv-wave/rv3/REPORT.md`](rv-wave/rv3/REPORT.md) first: every change of the rv, rv2 and rv3 waves for the owner, with
-> counts. The plans, stop reports and reviews behind it are in the orchestrator's copy
-> `C:\Users\Owner\Desktop\selfboot\elihandoff\rv-wave\` (`HANDOFF.md`, `review/`, `wave/`, `rv2/`, `rv3/`).
-> Landing `rv-wave` on `main` is the owner's call (O1), after the rv3 battery and Fable's review gate.
+> counts. The plans, stop reports and reviews behind it are in [`rv-wave/`](rv-wave/) (`HANDOFF.md`, `review/`,
+> `wave/`, `rv2/`, `rv3/`). Fable's final review recommended LAND (`rv-wave/rv3/FABLE-FINAL.md`), and the full battery
+> is green (`rv-wave/rv3/REPORT.md` §6).
 
 ## Read in this order
 1. [`AGENTS.md`](../AGENTS.md): the contract for every agent (ground rules, the bound and free files, content

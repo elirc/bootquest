@@ -2039,8 +2039,10 @@ resolved); quiz variety `concept` and flashcard shape `hand-authored`;
   - **S5 `rv3-f`:** W9 kata precision (approve / block on flagged katas, migration 029: `kata_verdict`,
     `kata_precision`; the G1 rule of unflagged katas pinned unchanged), the 14 katas on `paths/agentic.json` (katas
     easy 18 → 24, medium 23 → 30, hard 11 → 12) and in the agentic / review-katas scopes, these docs.
-  - **JAVA LINE — TO FILL (orchestrator, when `rv3-java2` reports):** Java 01-20 drill explanations (D1, 35 at the S2
-    stop) and lessons (L1, 20); the audit is below the bar on java only until it lands.
+  - **Java 01-20 (`rv3-java2`, merged `9726c1d9`):** drill explanations 25/60 → 60/60 and lessons 6/26 → 26/26 (334 proof
+    runs on JDK 17; tests strengthened in 7 drills); `seed:audit:explanations -- --check` is OK on every track (0 of
+    850 quiz / 323 drills / 85 lessons fail). Then Fable's final review (`rv3/FABLE-FINAL.md`, LAND), 9 obvious fixes
+    (`rv3-final`), and the full battery green (`rv3/REPORT.md` §6).
   - **Counts at S5 (`431f63b6`, by script):** Fundamentals js 33/330/238/79, csharp 26/260/208/55, java
     26/260/208/60; javadrills 98, sysdrills 129, agentdrills 8; patch katas 66; key ideas 24 files / 201 ideas;
     migrations 29; `seed:pins` 690/690; `restamp:all -- --dry-run` 703/703 fresh (700 + 2 patch packs + agentdrills).
