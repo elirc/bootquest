@@ -5,7 +5,7 @@
   "title": "Control flow & pattern matching",
   "level": "beginner",
   "summary": "switch expressions, type, property, relational, logical, tuple and list patterns, is and when, exhaustiveness, and replacing if-else ladders in request and domain code.",
-  "lesson": "## switch expressions\n\n```csharp\nstring category = statusCode switch\n{\n    >= 200 and < 300 => \"success\",\n    404              => \"not found\",\n    >= 500           => \"server error\",\n    _                => \"other\",\n};\n```\n\nA switch **expression** produces a value, every arm is an expression, and arms are tried top to bottom. If no arm matches, it throws `SwitchExpressionException` at runtime, and the compiler warns (CS8509) that the switch is not exhaustive. Always end with a discard `_` unless the input type is fully covered.\n\n## The pattern kinds\n\n```csharp\no is int n && n > 40            // type pattern with a declaration\nx is not null                   // negation\ncode is >= 400 and < 500        // relational + logical patterns\norder is { Status: \"paid\", Total: > 100m }   // property pattern\npoint is (0, 0)                 // positional pattern (records, tuples, Deconstruct)\n(isAdmin, isOwner) switch { (true, _) => \"all\", (_, true) => \"own\", _ => \"none\" }  // tuple pattern\nitems is [var first, .., var last]           // list pattern (C# 11)\n```\n\nProperty patterns can nest: `{ Customer: { Country: \"DE\" } }`. A `when` clause adds an arbitrary condition: `case Order o when o.Lines.Count == 0:`.\n\n## Patterns versus if-else ladders\n\n```csharp\ndecimal Shipping(Order o) => o switch\n{\n    { Total: >= 100m }              => 0m,\n    { Express: true }               => 15m,\n    { Customer.Country: not \"DE\" }  => 9m,     // extended property pattern\n    _                               => 4.90m,\n};\n```\n\nThe rules read as a table, the order of the rules is visible, and adding a rule is one line. Ordering still matters: the first matching arm wins, so put specific cases before general ones (the compiler reports an arm that can never match because an earlier one subsumes it).\n\n## Mapping results to HTTP responses\n\nPattern matching shines when a service returns a closed set of outcomes:\n\n```csharp\nIResult ToHttp(Result r) => r switch\n{\n    Ok<Order> ok        => Results.Ok(ok.Value),\n    NotFound            => Results.NotFound(),\n    Invalid { Errors: var e } => Results.ValidationProblem(e),\n    _                   => Results.StatusCode(500),\n};\n```\n\n## Classic statements still matter\n\n- `switch` statements (with `case` and `break`) for multi-line branches; C# forbids falling through from one non-empty case to the next.\n- `foreach` over any `IEnumerable<T>`; `for` when you need the index; `while` for unknown iteration counts.\n- `break` leaves the loop; `continue` skips to the next iteration; `return` early (\"guard clauses\") keeps nesting shallow:\n\n```csharp\nif (order is null) return Results.NotFound();\nif (!order.IsEditable) return Results.Conflict();\n// main path, not nested\n```",
+  "lesson": "## switch expressions\n\n```csharp\nstring category = statusCode switch\n{\n    >= 200 and < 300 => \"success\",\n    404              => \"not found\",\n    >= 500           => \"server error\",\n    _                => \"other\",\n};\n```\n\nA switch **expression** produces a value, every arm is an expression, and arms are tried top to bottom. If no arm matches, it throws `SwitchExpressionException` at runtime, and the compiler warns (CS8509) that the switch is not exhaustive. Always end with a discard `_` unless the input type is fully covered.\n\nBecause every arm is an expression, a switch expression cannot hold statements; a multi-line branch belongs in a switch statement or a helper method. Any arm can carry a `when` clause for a condition no pattern expresses, such as `>= 500 when retryable => \"retry\"`.\n\n## The pattern kinds\n\n```csharp\no is int n && n > 40            // type pattern with a declaration\nx is not null                   // negation\ncode is >= 400 and < 500        // relational + logical patterns\norder is { Status: \"paid\", Total: > 100m }   // property pattern\npoint is (0, 0)                 // positional pattern (records, tuples, Deconstruct)\n(isAdmin, isOwner) switch { (true, _) => \"all\", (_, true) => \"own\", _ => \"none\" }  // tuple pattern\nitems is [var first, .., var last]           // list pattern (C# 11)\n```\n\nProperty patterns can nest: `{ Customer: { Country: \"DE\" } }`. A `when` clause adds an arbitrary condition: `case Order o when o.Lines.Count == 0:`.\n\nA type pattern tests the runtime type, not the declared one: `object o = \"ana\"; o is string s` is true and gives a typed `s` with no cast that could throw. A property pattern checks for null first, so `x is { }` means \"x is not null\". The constants in relational patterns must be compile-time constants; compare with a variable in a `when` clause. In a list pattern `..` is a slice of zero or more elements, so `[1, .., 3]` also matches the two-element `[1, 3]`.\n\n## Patterns versus if-else ladders\n\n```csharp\ndecimal Shipping(Order o) => o switch\n{\n    { Total: >= 100m }              => 0m,\n    { Express: true }               => 15m,\n    { Customer.Country: not \"DE\" }  => 9m,     // extended property pattern\n    _                               => 4.90m,\n};\n```\n\nThe rules read as a table, the order of the rules is visible, and adding a rule is one line. Ordering still matters: the first matching arm wins, so put specific cases before general ones (the compiler reports an arm that can never match because an earlier one subsumes it). With the order shown, an express order with a total of 150 ships for 0, because the `Total` arm comes first; swap the first two arms and the same order costs 15.\n\n## Mapping results to HTTP responses\n\nPattern matching shines when a service returns a closed set of outcomes:\n\n```csharp\nIResult ToHttp(Result r) => r switch\n{\n    Ok<Order> ok        => Results.Ok(ok.Value),\n    NotFound            => Results.NotFound(),\n    Invalid { Errors: var e } => Results.ValidationProblem(e),\n    _                   => Results.StatusCode(500),\n};\n```\n\nThe compiler does not treat the set as closed: another file can add a new subtype of `Result` at any time, so the `_` arm stays necessary. It is the place where an unexpected outcome becomes a 500 instead of a `SwitchExpressionException`. An arm with a property condition goes before any bare arm of the same type, or the bare arm takes every value of that type and the narrower one never runs.\n\n## Classic statements still matter\n\n- `switch` statements (with `case` and `break`) for multi-line branches; C# forbids falling through from one non-empty case to the next. Stacked empty labels (`case 1: case 2:`) are allowed, and `goto case 2;` is the explicit way to continue in another section.\n- `foreach` over any `IEnumerable<T>`; `for` when you need the index; `while` for unknown iteration counts.\n- `break` leaves the loop; `continue` skips to the next iteration; `return` early (\"guard clauses\") keeps nesting shallow:\n\n```csharp\nif (order is null) return Results.NotFound();\nif (!order.IsEditable) return Results.Conflict();\n// main path, not nested\n```",
   "quiz": [
     {
       "prompt": "What does `404 switch { >= 200 and < 300 => \"ok\", 404 => \"missing\", >= 500 => \"server\", _ => \"other\" }` return?",
@@ -16,7 +16,7 @@
         "`\"server\"`"
       ],
       "answer": 2,
-      "explanation": "Arms are tried in order; 404 is not in 200..299 and matches the constant 404 arm."
+      "explanation": "A switch expression tries its arms from the top and returns the first match. 404 fails the relational arm because it is not below 300, then equals the constant 404 in the next arm, and evaluation stops there. The discard would give \"other\" only if nothing earlier had matched, and the server arm (>= 500) is never reached for a 4xx code."
     },
     {
       "prompt": "What happens when no arm of a switch expression matches at runtime?",
@@ -27,7 +27,7 @@
         "It returns the value of the last arm"
       ],
       "answer": 1,
-      "explanation": "Switch expressions must produce a value. The compiler also warns (CS8509) when the arms are not exhaustive."
+      "explanation": "A switch expression must yield a value, and there is no sensible one to invent, so the compiler adds a hidden fallback that throws SwitchExpressionException carrying the unmatched input. It never returns default(T) or reuses the value of an earlier arm. The compiler also warns with CS8509 when the arms are not exhaustive, which is the cue to add a `_` arm."
     },
     {
       "prompt": "Which pattern checks that `order` has Status \"paid\" and a Total above 100?",
@@ -38,7 +38,7 @@
         "`order is { Status: \"paid\" } and > 100m`"
       ],
       "answer": 0,
-      "explanation": "A property pattern lists properties with nested patterns; relational patterns like > 100m compare values."
+      "explanation": "Inside braces, a property pattern names each property, a colon, and a nested pattern: a constant such as \"paid\" or a relational pattern such as > 100m. Every listed property must match, and the pattern fails on null. A common mistake is writing == or > after the property name, which is expression syntax rather than pattern syntax. An `and` combines patterns that test one value, so `{ Status: \"paid\" } and > 100m` would compare the order itself with 100m."
     },
     {
       "prompt": "`(true, false) switch { (true, true) => \"both\", (true, _) => \"first\", _ => \"none\" }` gives...",
@@ -49,7 +49,7 @@
         "`\"first\"`"
       ],
       "answer": 3,
-      "explanation": "Tuple patterns match position by position; _ matches anything in that position."
+      "explanation": "A tuple pattern matches element by element, and the arms are tried in order. (true, true) fails on its second element, because the input's second value is false. (true, _) then matches: true equals true, and the discard accepts any value. The catch-all arm would give none only for an input whose first value is false, and nothing throws because the switch ends with that catch-all."
     },
     {
       "prompt": "What does `new[] { 1, 2, 3 } is [1, .., 3]` evaluate to?",
@@ -60,7 +60,7 @@
         "It throws"
       ],
       "answer": 0,
-      "explanation": "A list pattern: first element 1, any number of elements (..), last element 3."
+      "explanation": "A list pattern matches a sequence from both ends. Here 1 must be the first element and 3 the last, and the slice `..` between them accepts zero or more elements, so a three-element array passes. It compiles because arrays have a Length and an indexer, which is all a list pattern (C# 11) needs. A failed list pattern gives false; it never throws."
     },
     {
       "prompt": "Why should specific arms come before general ones?",
@@ -71,7 +71,7 @@
         "The best-matching arm wins, but ties go to whichever arm comes first"
       ],
       "answer": 2,
-      "explanation": "Arms are evaluated top to bottom; the compiler flags arms that an earlier arm already covers."
+      "explanation": "Order decides, not precision: arms are tested from the top, and evaluation stops at the first one that matches. A general arm placed early therefore takes the inputs a later, more precise arm was written for, and when the compiler can prove a later arm unreachable it reports CS8510. Nothing throws at runtime, and C# has no best-match rule between arms."
     },
     {
       "prompt": "What does `o is int n && n > 40` do when `o` is the boxed int 42?",
@@ -82,7 +82,7 @@
         "Compares o by reference with a newly boxed int"
       ],
       "answer": 1,
-      "explanation": "A type pattern tests the runtime type and binds a typed variable on success."
+      "explanation": "A type pattern checks the runtime type of the object, not the static type of the variable. o is declared object but holds a boxed int, so `is int n` succeeds, unboxes the value into n, and the && then tests 42 > 40. The pattern unboxes only after its type test passes, so no InvalidCastException is possible, and no reference comparison takes place."
     },
     {
       "prompt": "In a C# switch statement, can a non-empty case fall through into the next case?",
@@ -93,7 +93,7 @@
         "No: that is a compile error in C#"
       ],
       "answer": 3,
-      "explanation": "Implicit fall-through is forbidden to prevent a classic class of bugs. Each non-empty section must end with break, return, throw or goto."
+      "explanation": "C# requires every switch section that contains statements to end with a jump out of it: break, return, throw or goto. Reaching the next label is reported at compile time (CS0163), so the C behaviour never happens by accident. Ending with continue jumps to the next iteration of an enclosing loop, not into the next case. Stacked empty labels such as `case 1: case 2:` are still allowed."
     },
     {
       "prompt": "What is a guard clause?",
@@ -104,7 +104,7 @@
         "A Debug.Assert check that is compiled out of Release builds"
       ],
       "answer": 0,
-      "explanation": "Returning early for not-found, forbidden or invalid inputs keeps the happy path flat and readable."
+      "explanation": "A guard clause is ordinary control flow at the top of a method, such as `if (order is null) return NotFound();`. Each rejected case leaves at once, so the code after the guards runs only for valid input and needs no extra nesting. It is not an attribute or a framework feature, catches no exceptions, and unlike Debug.Assert it runs in Release builds too."
     },
     {
       "prompt": "Which pattern matches every code from 400 to 499?",
@@ -166,7 +166,7 @@
       "solutionHead": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · results to status codes★★☆ core\n//  concepts: type patterns · property patterns · switch expression\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  One table of rules instead of an if-else ladder per endpoint.\n\nusing static Bootcamp.Check;\n\nint StatusFor(Result? r) => r switch\n{\n    Ok { Created: true } => 201,\n    Ok => 200,\n    NotFound => 404,\n    Invalid { Errors.Count: > 0 } => 400,\n    Conflict => 409,\n    _ => 500,\n};\n\n",
       "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"Ok is 200, created is 201\", () =>\n{\n    Eq(StatusFor(new Ok(Created: false)), 200);\n    Eq(StatusFor(new Ok(Created: true)), 201);\n});\n\nTest(\"NotFound is 404 and Conflict is 409\", () =>\n{\n    Eq(StatusFor(new NotFound()), 404);\n    Eq(StatusFor(new Conflict(\"stale version\")), 409);\n});\n\nTest(\"Invalid with errors is 400\", () =>\n    Eq(StatusFor(new Invalid(new List<string> { \"email is required\" })), 400));\n\nTest(\"Invalid without errors is a server bug: 500 (boundary)\", () =>\n    Eq(StatusFor(new Invalid(new List<string>())), 500));\n\nTest(\"null and unknown results are 500\", () =>\n{\n    Eq(StatusFor(null), 500);\n    Eq(StatusFor(new Unexpected()), 500);\n});\n\n",
       "tail": "// ──────────────────────────── types ──────────────────────────────────────\n\nabstract record Result;\nrecord Ok(bool Created) : Result;\nrecord NotFound : Result;\nrecord Invalid(List<string> Errors) : Result;\nrecord Conflict(string Reason) : Result;\nrecord Unexpected : Result;\n",
-      "explanation": "List the specific arms before the general ones; the discard catches null and everything else:\n\n```csharp\nint StatusFor(Result? r) => r switch\n{\n    Ok { Created: true } => 201,\n    Ok => 200,\n    NotFound => 404,\n    Invalid { Errors.Count: > 0 } => 400,\n    Conflict => 409,\n    _ => 500,\n};\n```\n\nSwapping the two `Ok` arms is a compile error (the second can never match), which is exactly the kind of precedence mistake the switch expression catches for you.",
+      "explanation": "List the specific arms before the general ones; the discard catches null and everything else:\n\n```csharp\nint StatusFor(Result? r) => r switch\n{\n    Ok { Created: true } => 201,\n    Ok => 200,\n    NotFound => 404,\n    Invalid { Errors.Count: > 0 } => 400,\n    Conflict => 409,\n    _ => 500,\n};\n```\n\nSwapping the two `Ok` arms is a compile error (CS8510): the bare `Ok` arm would take every `Ok`, so the `Created` arm could never match. A bare `Invalid => 400` arm compiles, but it sends an empty error list to 400 and fails \"Invalid without errors is a server bug: 500 (boundary)\". Dropping the discard arm is not an option either: a null result would then throw SwitchExpressionException instead of answering 500.",
       "hints": [
         "Each rule is a pattern on the result's type and, for two of them, on one of its properties.",
         "Express the rules as one pattern-matching expression over the result, listing the more specific shapes before the general ones and ending with a catch-all for everything else, including no result at all.",
@@ -182,12 +182,12 @@
         "property patterns",
         "code review"
       ],
-      "instructions": "**Bug hunt.** The code in the editor is a plausible first attempt at drill 1, \"Map service results to HTTP status codes\". It compiles and passes some of the tests, but it has one real bug, the kind a reviewer should catch before it ships.\n\n**Your task.** Find the bug and fix it, changing as little as you can; the tests are the same as drill 1's. The spec is unchanged: Implement the stubbed local function `int StatusFor(Result? r)` with a switch expression:\n- `Ok` → 200, except an `Ok` whose `Created` is true → 201\n- `NotFound` → 404\n- `Invalid` with at least one error → 400; an `Invalid` with NO errors is a bug in the service → 500\n- `Conflict` → 409\n- `null` or any other result → 500\n\nThe result types are in the types section.",
+      "instructions": "**Bug hunt.** The code in the editor is a plausible first attempt at drill 1, \"Map service results to HTTP status codes\". It compiles and passes some of the tests, but it has one real bug, the kind a reviewer should catch before it ships.\n\n**Your task.** Find the bug and fix it, changing as little as you can; the tests are the same as drill 1's. The spec of the local function `int StatusFor(Result? r)`, a switch expression, is unchanged:\n- `Ok` → 200, except an `Ok` whose `Created` is true → 201\n- `NotFound` → 404\n- `Invalid` with at least one error → 400; an `Invalid` with NO errors is a bug in the service → 500\n- `Conflict` → 409\n- `null` or any other result → 500\n\nThe result types are in the types section.",
       "starterHead": "// ─────────────────────────────────────────────────────────────────────────\n//  02 · bug hunt: results to status codes★★☆ core\n//  concepts: type patterns · property patterns · switch expression\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  One table of rules instead of an if-else ladder per endpoint.\n\nusing static Bootcamp.Check;\n\n// TODO: one real bug hides in this code: find it and fix it with the smallest change.\n\nint StatusFor(Result? r) => r switch\n{\n    Ok { Created: true } => 201,\n    Ok => 200,\n    NotFound => 404,\n    Invalid => 400,\n    Conflict => 409,\n    _ => 500,\n};\n\n",
       "solutionHead": "// ─────────────────────────────────────────────────────────────────────────\n//  02 · bug hunt: results to status codes★★☆ core\n//  concepts: type patterns · property patterns · switch expression\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  One table of rules instead of an if-else ladder per endpoint.\n\nusing static Bootcamp.Check;\n\nint StatusFor(Result? r) => r switch\n{\n    Ok { Created: true } => 201,\n    Ok => 200,\n    NotFound => 404,\n    Invalid { Errors.Count: > 0 } => 400,\n    Conflict => 409,\n    _ => 500,\n};\n\n",
       "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"Ok is 200, created is 201\", () =>\n{\n    Eq(StatusFor(new Ok(Created: false)), 200);\n    Eq(StatusFor(new Ok(Created: true)), 201);\n});\n\nTest(\"NotFound is 404 and Conflict is 409\", () =>\n{\n    Eq(StatusFor(new NotFound()), 404);\n    Eq(StatusFor(new Conflict(\"stale version\")), 409);\n});\n\nTest(\"Invalid with errors is 400\", () =>\n    Eq(StatusFor(new Invalid(new List<string> { \"email is required\" })), 400));\n\nTest(\"Invalid without errors is a server bug: 500 (boundary)\", () =>\n    Eq(StatusFor(new Invalid(new List<string>())), 500));\n\nTest(\"null and unknown results are 500\", () =>\n{\n    Eq(StatusFor(null), 500);\n    Eq(StatusFor(new Unexpected()), 500);\n});\n\n",
       "tail": "// ──────────────────────────── types ──────────────────────────────────────\n\nabstract record Result;\nrecord Ok(bool Created) : Result;\nrecord NotFound : Result;\nrecord Invalid(List<string> Errors) : Result;\nrecord Conflict(string Reason) : Result;\nrecord Unexpected : Result;\n",
-      "explanation": "An `Invalid` result with no errors is a server bug, not a client mistake, so it must fall through to the discard arm and answer 500. The bare `Invalid` pattern matches every `Invalid`, empty or not. The property pattern `Invalid { Errors.Count: > 0 }` restores the boundary.",
+      "explanation": "An `Invalid` result with no errors is a server bug, not a client mistake, so it must fall through to the discard arm and answer 500. The bare `Invalid` arm is a type pattern: it matches every `Invalid`, empty or not, so the test \"Invalid without errors is a server bug: 500 (boundary)\" gets 400. The property pattern `Invalid { Errors.Count: > 0 }` restores the boundary, and an empty list then reaches `_ => 500`. Adding an `Invalid { Errors.Count: 0 } => 500` arm after the bare one is no fix: the bare arm already covers it, and the compiler rejects the new arm as unreachable.",
       "hints": [
         "Map an Invalid result whose error list is empty and compare the status with the boundary test.",
         "A type pattern alone matches every value of that type. The empty case needs its own condition.",
