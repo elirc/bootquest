@@ -136,7 +136,7 @@ async function main() {
     step('GET explain-back unit serves the 3 questions and NO key point', ebUnit.status === 200 && ebUnit.json.explainBack.questions.length === 3 && leaks.length === 0 && !/keyPoints/.test(ebUnit.text));
     // ladder dead end #2: answering BEFORE the artifact would burn leg (b) for good -> refused, nothing written
     const earlyCounts = ledgerCounts(db);
-    const earlyAns = await api('POST', `/units/${id('explain-api')}/explain-back/answers`, { answers: ['early', 'early', 'early'] });
+    const earlyAns = await api('POST', `/units/${id('explain-api')}/explain-back/answers`, { answers: Array(3).fill('an early answer written before the project artifact has passed, long enough to clear the fifteen word floor') });
     step(
       'explain-back answer BEFORE the artifact passes solo -> 409 ARTIFACT_REQUIRED naming the project unit; nothing recorded (the set is not burned)',
       earlyAns.status === 409 && earlyAns.json.error.code === 'ARTIFACT_REQUIRED' && earlyAns.json.error.message.includes(`unit ${id('project-api')}`) &&
