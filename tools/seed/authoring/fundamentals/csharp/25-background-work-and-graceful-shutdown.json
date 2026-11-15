@@ -1,0 +1,199 @@
+{
+  "format": "fundamentals-authoring@1",
+  "track": "csharp",
+  "topic": "25-background-work-and-graceful-shutdown",
+  "title": "Background work & graceful shutdown",
+  "level": "advanced",
+  "summary": "A BackgroundService loop over a stopping token, a bounded Channel between requests and the worker, a per-job catch that tells a failed job from a shutdown, stopping in order (refuse new work, drain until the deadline, hand the rest back), PeriodicTimer for periodic work, and why async void and fire-and-forget Task.Run from a request lose work.",
+  "lesson": "## A worker is a loop over a stopping token\n\nA `BackgroundService` overrides one method, `ExecuteAsync(CancellationToken stoppingToken)`. The host starts it with the app and, on shutdown, cancels `stoppingToken` and waits for `ExecuteAsync` to return, but only up to `HostOptions.ShutdownTimeout`, 30 seconds by default. A worker is a singleton, so it creates a scope per job for scoped services such as a `DbContext`:\n\n```csharp\npublic sealed class ReceiptWorker(ChannelReader<ReceiptJob> jobs, IServiceScopeFactory scopes, ILogger<ReceiptWorker> logger) : BackgroundService\n{\n    protected override async Task ExecuteAsync(CancellationToken stoppingToken)\n    {\n        await foreach (var job in jobs.ReadAllAsync(stoppingToken))\n        {\n            try\n            {\n                using var scope = scopes.CreateScope();\n                await scope.ServiceProvider.GetRequiredService<IReceiptSender>().SendAsync(job, stoppingToken);\n            }\n            catch (Exception e) when (!stoppingToken.IsCancellationRequested)\n            {\n                logger.LogError(e, \"Receipt job {JobId} failed\", job.Id);\n            }\n        }\n    }\n}\n```\n\n## A bounded queue between requests and the worker\n\n`System.Threading.Channels` gives a thread-safe queue with async waits. Bound it: `Channel.CreateBounded<ReceiptJob>(new BoundedChannelOptions(100) { FullMode = BoundedChannelFullMode.Wait })`. When 100 jobs are waiting, `WriteAsync` waits for the worker to free a slot, and `TryWrite` returns `false` at once, so an endpoint can answer 503 instead of holding the request. That is backpressure. An unbounded channel never pushes back: a slow worker turns into a memory leak. The other full modes drop an item (`DropOldest`, `DropNewest`, `DropWrite`), which suits telemetry, not orders.\n\n## One bad item must not stop the loop\n\nWrap each job, not the loop, in `try`/`catch`: log the failure with the job's id and move on. Since .NET 8 an exception that escapes `ExecuteAsync` stops the whole host, because `HostOptions.BackgroundServiceExceptionBehavior` defaults to `StopHost`. With `Ignore` the app keeps running with a dead worker, which is worse: nothing processes the queue and only one log line says why. Filter on the stopping token rather than on the exception type: a job's own timeout throws `OperationCanceledException` too, and it is a failed job, not a reason to stop.\n\n## Graceful stop: stop taking, drain, hand back\n\nOn shutdown, first refuse new jobs: `writer.Complete()` makes `TryWrite` return `false`, while the items already queued stay readable, and a reader's `ReadAllAsync` loop yields those jobs and then ends. Then finish what you can before the deadline (the token that `StopAsync` receives fires at the shutdown timeout). Whatever has not finished by then, the job in flight and the ones still queued, goes back to durable storage or a retry queue. An in-memory channel dies with the process, so work that must happen (a payment, an email to a customer) belongs in an outbox table or a durable queue, with the channel only as a fast path.\n\n## Periodic work with PeriodicTimer\n\n```csharp\nusing var timer = new PeriodicTimer(TimeSpan.FromSeconds(15));\nwhile (await timer.WaitForNextTickAsync(stoppingToken))\n{\n    await SweepAsync(stoppingToken);\n}\n```\n\n`WaitForNextTickAsync` throws `OperationCanceledException` when the token is cancelled and returns `false` once the timer is disposed. Runs never overlap, because the next wait starts only after the work. If one run takes 25 seconds with a 10-second period, the ticks missed meanwhile collapse into one: the next wait returns at once, and later ticks keep the original 10-second rhythm.\n\n## No async void, no fire-and-forget from a request\n\nAn exception in an `async void` method has no `Task` to land on, so it is rethrown on the thread pool and terminates the process. Use `async Task` and await it. Starting work from an endpoint with `_ = Task.Run(...)` has the same blind spot plus two more: the request's scoped `DbContext` is disposed when the response is sent, and the host does not know about the task, so shutdown kills it halfway. Write a job to the channel instead and let the worker own it.",
+  "quiz": [
+    {
+      "prompt": "The app is shutting down. What does the host do with the `stoppingToken` it passed to a `BackgroundService`'s `ExecuteAsync`?",
+      "choices": [
+        "Nothing; the worker thread is aborted at process exit",
+        "Cancels it, then waits up to the shutdown timeout",
+        "Cancels it and returns at once, while the loop keeps running",
+        "Disposes the worker first, then cancels the token"
+      ],
+      "answer": 1,
+      "explanation": "StopAsync on a BackgroundService cancels the token and then awaits the task that ExecuteAsync returned, so a loop that honours the token can finish its current job. The wait is bounded by HostOptions.ShutdownTimeout, 30 seconds by default. .NET never aborts threads, and services are disposed only after the hosted services have been stopped."
+    },
+    {
+      "prompt": "An `ExecuteAsync` loop awaits `handler.Handle(job)` with no try/catch, and one job throws. With the default host options on .NET 10, what happens?",
+      "choices": [
+        "The job is retried until it succeeds",
+        "The exception is logged and the next job runs",
+        "The worker ends and the host stops the app",
+        "Nothing visible: the host swallows the exception"
+      ],
+      "answer": 2,
+      "explanation": "The exception faults the task that ExecuteAsync returned, and BackgroundServiceExceptionBehavior defaults to StopHost, so the host logs the error and shuts the whole app down. Nothing retries the job, and the next job never runs because the loop is gone. With Ignore the process stays up without a worker; a per-job try/catch is the real fix."
+    },
+    {
+      "prompt": "A bounded channel created with capacity 100 and `FullMode = BoundedChannelFullMode.Wait` holds 100 jobs. What does a request's `await writer.WriteAsync(job)` do?",
+      "choices": [
+        "Throws ChannelClosedException, since the channel is full",
+        "Drops the oldest queued job to make room",
+        "Waits until the worker reads a job and frees a slot",
+        "Grows past 100, since Wait only applies to readers"
+      ],
+      "answer": 2,
+      "explanation": "Wait is backpressure: the write completes only when a reader takes an item and a slot opens, so a slow worker slows the producers instead of growing memory. Dropping the oldest item is the DropOldest mode, ChannelClosedException is for a completed channel, and the capacity limits writers. In a request, TryWrite is often better: it returns false at once and lets you answer 503."
+    },
+    {
+      "prompt": "An endpoint runs `_ = Task.Run(() => SendReceiptAsync(order, db))` with the request's DbContext and returns 202. What goes wrong?",
+      "choices": [
+        "Task.Run cannot start an async lambda, so it will not compile",
+        "The context may be disposed first, and shutdown does not wait",
+        "The 202 response waits until the receipt has actually been sent",
+        "The receipt runs twice, once per thread"
+      ],
+      "answer": 1,
+      "explanation": "The request scope, and the DbContext in it, is disposed once the request ends, so the background task can hit ObjectDisposedException halfway. The host does not track the task either, so a deploy cuts it off, and its exceptions go unobserved. Task.Run accepts async lambdas and returns at once, so the 202 is not delayed. Queue a job for a worker that owns its own scope."
+    },
+    {
+      "prompt": "A timer callback is declared `async void OnTick()`, and one tick throws. What happens?",
+      "choices": [
+        "It is rethrown on the thread pool and ends the process",
+        "The exception is stored in a Task that nobody ever awaits",
+        "The timer logs the exception and keeps ticking",
+        "Nothing, since an async void method cannot throw"
+      ],
+      "answer": 0,
+      "explanation": "An async void method returns no Task, so there is nowhere to store the exception. The async machinery rethrows it on the captured context, which in a console or ASP.NET Core app is the thread pool, and an unhandled thread-pool exception terminates the process. Timers do not catch it for you. Return Task and await it, or catch inside the method."
+    },
+    {
+      "prompt": "A `PeriodicTimer` has a 10-second period, and one run of the work takes 25 seconds. What happens next?",
+      "choices": [
+        "Two extra runs start in parallel so the schedule catches up",
+        "The two missed ticks run back to back",
+        "The timer stops, because ticks were missed",
+        "The next wait returns at once; runs never overlap"
+      ],
+      "answer": 3,
+      "explanation": "A PeriodicTimer remembers at most one pending tick. The ticks that passed during the 25-second run collapse into one, so the next WaitForNextTickAsync completes immediately, and later ticks keep the original rhythm. Nothing runs in parallel, because the loop awaits the work before it waits again, and missed ticks neither queue up nor stop the timer."
+    },
+    {
+      "prompt": "At shutdown a worker still has 40 jobs in its in-memory channel and 30 seconds left. Which stop loses nothing?",
+      "choices": [
+        "Return at once, since in-memory jobs are cheap to lose",
+        "Keep working until the queue is empty, however long it takes",
+        "Clear the channel so the next start begins from a clean state",
+        "Refuse new jobs, drain to the deadline, hand back the rest"
+      ],
+      "answer": 3,
+      "explanation": "Completing the writer stops new work while the queued items stay readable. Draining uses the shutdown window, and whatever is left, including a job cut off mid-run, goes to durable storage for a retry. Working until the queue is empty ignores the deadline, so the orchestrator kills the process mid-job, and clearing or abandoning the channel silently drops customer work."
+    },
+    {
+      "prompt": "A periodic loop is `while (await timer.WaitForNextTickAsync(stoppingToken))`. What does the wait do when the host cancels `stoppingToken`?",
+      "choices": [
+        "Throws OperationCanceledException, which ends the loop",
+        "Returns false, so the while condition ends the loop normally",
+        "Returns true one last time, then false",
+        "Keeps waiting until the next tick arrives"
+      ],
+      "answer": 0,
+      "explanation": "A cancelled token cancels the pending wait, so it throws; returning false is what a disposed timer does. The exception that leaves ExecuteAsync during a stop is expected: the host completes its shutdown without reporting a failure. Catch it only to run cleanup, and never swallow it in a way that keeps the loop alive."
+    },
+    {
+      "prompt": "After `writer.Complete()`, a worker runs `await foreach (var job in reader.ReadAllAsync())` on a channel that still holds 5 jobs. What happens?",
+      "choices": [
+        "The loop ends at once and the 5 jobs are lost",
+        "It yields all 5 jobs, then the loop ends",
+        "It throws ChannelClosedException before the first job",
+        "It waits forever for a sixth job"
+      ],
+      "answer": 1,
+      "explanation": "Completing a channel closes it for writers only. Readers still receive everything already queued, and ReadAllAsync finishes once the channel is both completed and empty, which is how a drain knows it is done. ChannelClosedException is what a WriteAsync after Complete throws, and waiting forever is what happens when nobody completes the writer."
+    },
+    {
+      "prompt": "Which per-job catch lets a worker survive any failing job, a timed-out one included, and still stop promptly on shutdown?",
+      "choices": [
+        "`catch (Exception) { }` around the whole loop",
+        "`catch (OperationCanceledException) { continue; }`",
+        "`catch (Exception ex) when (ex is not OperationCanceledException) { }`",
+        "`catch (Exception ex) when (!stoppingToken.IsCancellationRequested)`"
+      ],
+      "answer": 3,
+      "explanation": "The stopping token is the only witness of a shutdown: while it is not cancelled, every exception, a job's own OperationCanceledException included, is a job failure to log. Filtering on the exception type lets a timed-out job's cancellation escape and end the worker. Catching only cancellations lets ordinary failures through, and a catch around the whole loop ends it at the first bad job."
+    }
+  ],
+  "flashcards": [
+    {
+      "front": "BackgroundService.ExecuteAsync",
+      "back": "The long-running method of a hosted worker; it receives a token that is cancelled when the host begins to stop."
+    },
+    {
+      "front": "HostOptions.ShutdownTimeout",
+      "back": "How long the host gives its hosted services to stop before it moves on: 30 seconds by default."
+    },
+    {
+      "front": "BoundedChannelFullMode",
+      "back": "What a full bounded channel does with a new item: Wait (the default), DropOldest, DropNewest or DropWrite."
+    },
+    {
+      "front": "TryWrite on a full bounded channel",
+      "back": "Returns false at once instead of waiting, so an endpoint can answer 503 or 429 rather than hold the request open."
+    },
+    {
+      "front": "One scope per job",
+      "back": "A singleton worker creates a scope from IServiceScopeFactory for each job, so scoped services such as a DbContext live only as long as that job."
+    },
+    {
+      "front": "PeriodicTimer",
+      "back": "An async timer for a single consumer: await WaitForNextTickAsync in a loop; disposing the timer makes the wait return false."
+    },
+    {
+      "front": "When is an in-memory queue not enough?",
+      "back": "When the work must happen: the channel dies with the process, so a crash or deploy loses its items. Use a durable queue or an outbox table."
+    },
+    {
+      "front": "Why not Thread.Sleep in a worker loop?",
+      "back": "It blocks a thread-pool thread and ignores the stopping token, so a stop waits out the whole sleep. Await Task.Delay(period, stoppingToken) or a PeriodicTimer instead."
+    }
+  ],
+  "drills": [
+    {
+      "slug": "01-worker-loop-survives-bad-jobs",
+      "title": "A worker loop that survives bad jobs",
+      "difficulty": 3,
+      "skills": [
+        "Channel readers",
+        "per-job error handling",
+        "stopping token"
+      ],
+      "instructions": "**Interview prompt.** \"Our receipt worker died on Tuesday: one malformed order threw, the exception left `ExecuteAsync`, and the host shut the whole service down. Last week a version with a catch-all ignored shutdown and was killed mid-send. Write the loop properly.\"\n\n**Why it matters.** A worker loop may end for two reasons only: the queue is finished (its writer completed) or the host is stopping (the stopping token is cancelled). A failing job is neither, and that includes a job whose own timeout fired: it throws `OperationCanceledException` too, so the test for \"are we stopping?\" must be the stopping token, not the exception type.\n\n**Your task.** Implement `Task<WorkerReport> RunWorker(ChannelReader<Job> jobs, Func<Job, CancellationToken, Task> handle, List<string> log, CancellationToken stoppingToken)`:\n- wait for jobs while the queue is open (an open, empty queue is not a reason to return); return when the writer has completed and the queue is empty\n- handle jobs one at a time, in order, passing `stoppingToken` to `handle`; on success add `done <id>` to `log`\n- a job that throws adds `failed <id>: <message>` and the loop goes on, also when the exception is an `OperationCanceledException` while `stoppingToken` is not cancelled\n- an `OperationCanceledException` while `stoppingToken` is cancelled adds `stopped <id>`; the loop then ends\n- once `stoppingToken` is cancelled, start no further job, and leave the remaining jobs in the queue\n- a stop never throws out of `RunWorker`: it returns `WorkerReport(done, failed)`\n\n**Worked example.** Jobs `j1, j2, j3` where `j2` throws `card declined`: the log is `done j1`, `failed j2: card declined`, `done j3`, and the report is `(2, 1)`.",
+      "starterHead": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · worker loop survives bad jobs★★★ core\n//  concepts: ChannelReader · per-job try/catch · stopping token versus a job's own timeout\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  One job may fail; the loop may only end because the queue is done or the host is stopping.\n\nusing static Bootcamp.Check;\nusing System.Threading.Channels;\n\nasync Task<WorkerReport> RunWorker(ChannelReader<Job> jobs, Func<Job, CancellationToken, Task> handle, List<string> log, CancellationToken stoppingToken)\n{\n    // TODO: read until the queue completes or stopping is requested; catch per job; tell a stop from a job's own cancellation\n    await Task.CompletedTask;\n    throw new NotImplementedException();\n}\n\n// Given: a queue holding these jobs, completed (no more will come) or still open.\nChannelReader<Job> Queue(bool completed, params string[] ids)\n{\n    var channel = Channel.CreateUnbounded<Job>();\n    foreach (var id in ids) channel.Writer.TryWrite(new Job(id));\n    if (completed) channel.Writer.Complete();\n    return channel.Reader;\n}\n\nList<string> Left(ChannelReader<Job> reader)\n{\n    var left = new List<string>();\n    while (reader.TryRead(out var job)) left.Add(job.Id);\n    return left;\n}\n\n\n",
+      "solutionHead": "// ─────────────────────────────────────────────────────────────────────────\n//  01 · worker loop survives bad jobs★★★ core\n//  concepts: ChannelReader · per-job try/catch · stopping token versus a job's own timeout\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  One job may fail; the loop may only end because the queue is done or the host is stopping.\n\nusing static Bootcamp.Check;\nusing System.Threading.Channels;\n\nasync Task<WorkerReport> RunWorker(ChannelReader<Job> jobs, Func<Job, CancellationToken, Task> handle, List<string> log, CancellationToken stoppingToken)\n{\n    int done = 0, failed = 0;\n    try\n    {\n        while (!stoppingToken.IsCancellationRequested && await jobs.WaitToReadAsync(stoppingToken))\n        {\n            while (!stoppingToken.IsCancellationRequested && jobs.TryRead(out var job))\n            {\n                try\n                {\n                    await handle(job, stoppingToken);\n                    done++;\n                    log.Add($\"done {job.Id}\");\n                }\n                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)\n                {\n                    log.Add($\"stopped {job.Id}\");\n                }\n                catch (Exception e)\n                {\n                    failed++;\n                    log.Add($\"failed {job.Id}: {e.Message}\");\n                }\n            }\n        }\n    }\n    catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)\n    {\n        // the wait for the next job was cancelled: a normal stop\n    }\n    return new WorkerReport(done, failed);\n}\n\n// Given: a queue holding these jobs, completed (no more will come) or still open.\nChannelReader<Job> Queue(bool completed, params string[] ids)\n{\n    var channel = Channel.CreateUnbounded<Job>();\n    foreach (var id in ids) channel.Writer.TryWrite(new Job(id));\n    if (completed) channel.Writer.Complete();\n    return channel.Reader;\n}\n\nList<string> Left(ChannelReader<Job> reader)\n{\n    var left = new List<string>();\n    while (reader.TryRead(out var job)) left.Add(job.Id);\n    return left;\n}\n\n\n",
+      "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"every queued job is handled in order, and the loop ends when the writer completes\", async () =>\n{\n    var log = new List<string>();\n    var report = await RunWorker(Queue(true, \"j1\", \"j2\", \"j3\"), (_, _) => Task.CompletedTask, log, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(2));\n    Eq(new object[] { report, log }, new object[] { new WorkerReport(3, 0), new[] { \"done j1\", \"done j2\", \"done j3\" } });\n});\n\nTest(\"a job that throws is logged, and the next job still runs\", async () =>\n{\n    var log = new List<string>();\n    Task Handle(Job job, CancellationToken ct) => job.Id == \"j2\" ? throw new InvalidOperationException(\"card declined\") : Task.CompletedTask;\n    var report = await RunWorker(Queue(true, \"j1\", \"j2\", \"j3\"), Handle, log, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(2));\n    Eq(new object[] { report, log }, new object[] { new WorkerReport(2, 1), new[] { \"done j1\", \"failed j2: card declined\", \"done j3\" } });\n});\n\nTest(\"a job's own timeout counts as a failed job, not as a stop\", async () =>\n{\n    var log = new List<string>();\n    Task Handle(Job job, CancellationToken ct) => job.Id == \"j1\" ? Task.FromException(new TaskCanceledException(\"upstream timed out\")) : Task.CompletedTask;\n    var report = await RunWorker(Queue(true, \"j1\", \"j2\"), Handle, log, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(2));\n    Eq(new object[] { report, log }, new object[] { new WorkerReport(1, 1), new[] { \"failed j1: upstream timed out\", \"done j2\" } });\n});\n\nTest(\"a stop during a job ends the loop quietly and leaves the rest queued\", async () =>\n{\n    using var stopping = new CancellationTokenSource();\n    var log = new List<string>();\n    var jobs = Queue(false, \"j1\", \"j2\", \"j3\");\n    async Task Handle(Job job, CancellationToken ct)\n    {\n        if (job.Id != \"j2\") return;\n        stopping.Cancel();\n        await Task.Delay(Timeout.Infinite, ct);\n    }\n    var report = await RunWorker(jobs, Handle, log, stopping.Token).WaitAsync(TimeSpan.FromSeconds(2));\n    Eq(new object[] { report, log, Left(jobs) }, new object[] { new WorkerReport(1, 0), new[] { \"done j1\", \"stopped j2\" }, new[] { \"j3\" } });\n});\n\nTest(\"a stop between jobs does not start the next one\", async () =>\n{\n    using var stopping = new CancellationTokenSource();\n    var started = new List<string>();\n    var jobs = Queue(false, \"j1\", \"j2\", \"j3\");\n    Task Handle(Job job, CancellationToken ct)\n    {\n        started.Add(job.Id);\n        if (job.Id == \"j1\") stopping.Cancel();\n        return Task.CompletedTask;\n    }\n    var report = await RunWorker(jobs, Handle, new List<string>(), stopping.Token).WaitAsync(TimeSpan.FromSeconds(2));\n    Eq(new object[] { report, started, Left(jobs) }, new object[] { new WorkerReport(1, 0), new[] { \"j1\" }, new[] { \"j2\", \"j3\" } });\n});\n\nTest(\"an idle worker waits for work and stops when the host stops\", async () =>\n{\n    using var stopping = new CancellationTokenSource();\n    var channel = Channel.CreateUnbounded<Job>();\n    var handled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);\n    var worker = RunWorker(channel.Reader, (_, _) => { handled.TrySetResult(); return Task.CompletedTask; }, new List<string>(), stopping.Token);\n    channel.Writer.TryWrite(new Job(\"late\"));\n    await handled.Task.WaitAsync(TimeSpan.FromSeconds(2));\n    var stillWaiting = !worker.IsCompleted;\n    stopping.Cancel();\n    Eq(new object[] { stillWaiting, await worker.WaitAsync(TimeSpan.FromSeconds(2)) }, new object[] { true, new WorkerReport(1, 0) });\n});\n\nTest(\"the handler receives the stopping token\", async () =>\n{\n    using var stopping = new CancellationTokenSource();\n    CancellationToken seen = default;\n    await RunWorker(Queue(true, \"j1\"), (_, ct) => { seen = ct; return Task.CompletedTask; }, new List<string>(), stopping.Token).WaitAsync(TimeSpan.FromSeconds(2));\n    stopping.Cancel();\n    Eq(seen.IsCancellationRequested, true);\n});\n\nTest(\"an empty queue whose writer completed ends at once with nothing done (boundary)\", async () =>\n{\n    var log = new List<string>();\n    var report = await RunWorker(Queue(true), (_, _) => Task.CompletedTask, log, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(2));\n    Eq(new object[] { report, log }, new object[] { new WorkerReport(0, 0), Array.Empty<string>() });\n});\n\n",
+      "tail": "// ──────────────────────────── types ──────────────────────────────────────\n\nrecord Job(string Id);\n\nrecord WorkerReport(int Done, int Failed);\n",
+      "explanation": "Wait on the reader, catch per job, and let the stopping token decide what a cancellation means:\n\n```csharp\nwhile (!stoppingToken.IsCancellationRequested && await jobs.WaitToReadAsync(stoppingToken))\n    while (!stoppingToken.IsCancellationRequested && jobs.TryRead(out var job))\n    {\n        try { await handle(job, stoppingToken); done++; log.Add($\"done {job.Id}\"); }\n        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { log.Add($\"stopped {job.Id}\"); }\n        catch (Exception e) { failed++; log.Add($\"failed {job.Id}: {e.Message}\"); }\n    }\n// around the loops: catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { }\n```\n\nThe tests catch the usual wrong loops. Without the per-job catch, the `card declined` exception leaves the worker and \"a job that throws is logged, and the next job still runs\" fails. Filtering on the exception type, `when (e is not OperationCanceledException)`, lets the job's own timeout escape instead of counting it as failed. Dropping the stop check from the inner loop starts `j2` and `j3` after a stop. Draining with `TryRead` and returning instead of waiting ends the idle worker before the late job arrives. Letting the cancelled wait throw breaks the quiet stop of the idle worker.",
+      "hints": [
+        "The loop has exactly two reasons to end, a finished queue and a host that is stopping, and a failing job is neither of them.",
+        "Wait for the reader to have items, then take them one by one while no stop is requested. Wrap only the handling of one job, decide what a cancellation means by asking the stopping token, and treat a cancelled wait for the next job as a quiet stop.",
+        "Loop on waiting for items, take each job while the stopping token is clear, log done or failed per job, log stopped when the stopping token explains a cancellation, and swallow only the cancellation that the stopping token caused."
+      ]
+    },
+    {
+      "slug": "02-graceful-stop-with-a-deadline",
+      "title": "Stop in order: refuse, drain, hand back",
+      "difficulty": 3,
+      "skills": [
+        "graceful shutdown",
+        "channel completion",
+        "deadline tokens"
+      ],
+      "instructions": "**Interview prompt.** \"Every deploy loses a few customer emails. The worker keeps an in-memory queue; on shutdown it either drops what is queued or keeps sending until Kubernetes kills it, mid-send. Write the stop: no new work, finish what fits in the shutdown window, and hand everything else back to the outbox.\"\n\n**Why it matters.** `IHostedService.StopAsync` receives a token that fires when the host's shutdown timeout runs out. A graceful stop has three steps in this order: refuse new work, drain what is queued while there is time, and give back whatever did not finish so that a durable store can retry it. Work that is cut off mid-job did not happen and must go back too.\n\n**Your task.** Implement `Task<StopReport> DrainAndStop(Channel<Job> queue, Func<Job, CancellationToken, Task> handle, Action<Job> handBack, CancellationToken deadline)`:\n- first complete the queue's writer, so that from then on a producer's `TryWrite` returns `false`\n- then take the queued jobs in order; while `deadline` is not cancelled, run `handle(job, deadline)`\n- a job that finishes counts as done; a job that throws counts as failed and the drain goes on\n- a job cut off by the deadline (an `OperationCanceledException` while `deadline` is cancelled) is handed back\n- once `deadline` is cancelled, hand back every remaining job, in order, without starting it\n- return `StopReport(done, failed, handedBack)`; the stop never throws\n\n**Worked example.** Jobs `j1` to `j4`, and the deadline fires while `j2` runs: `j1` is done, `j2`, `j3` and `j4` are handed back in that order, and the report is `(1, 0, 3)`.",
+      "starterHead": "// ─────────────────────────────────────────────────────────────────────────\n//  02 · graceful stop with a deadline★★★ core\n//  concepts: Complete the writer · drain in order · deadline token · hand back, never drop\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Stop taking work, finish what fits before the deadline, and give the rest back.\n\nusing static Bootcamp.Check;\nusing System.Threading.Channels;\n\nasync Task<StopReport> DrainAndStop(Channel<Job> queue, Func<Job, CancellationToken, Task> handle, Action<Job> handBack, CancellationToken deadline)\n{\n    // TODO: refuse new writes first; then finish queued jobs in order until the deadline; hand back the rest\n    await Task.CompletedTask;\n    throw new NotImplementedException();\n}\n\n// Given: a queue holding these jobs.\nChannel<Job> Queue(params string[] ids)\n{\n    var channel = Channel.CreateBounded<Job>(new BoundedChannelOptions(10) { FullMode = BoundedChannelFullMode.Wait });\n    foreach (var id in ids) channel.Writer.TryWrite(new Job(id));\n    return channel;\n}\n\n\n",
+      "solutionHead": "// ─────────────────────────────────────────────────────────────────────────\n//  02 · graceful stop with a deadline★★★ core\n//  concepts: Complete the writer · drain in order · deadline token · hand back, never drop\n// ─────────────────────────────────────────────────────────────────────────\n//\n//  Stop taking work, finish what fits before the deadline, and give the rest back.\n\nusing static Bootcamp.Check;\nusing System.Threading.Channels;\n\nasync Task<StopReport> DrainAndStop(Channel<Job> queue, Func<Job, CancellationToken, Task> handle, Action<Job> handBack, CancellationToken deadline)\n{\n    queue.Writer.TryComplete();                       // from here on, producers' TryWrite returns false\n    int done = 0, failed = 0, handedBack = 0;\n    while (queue.Reader.TryRead(out var job))         // completed channels still give up what they hold\n    {\n        if (deadline.IsCancellationRequested)\n        {\n            handBack(job);\n            handedBack++;\n            continue;\n        }\n        try\n        {\n            await handle(job, deadline);\n            done++;\n        }\n        catch (OperationCanceledException) when (deadline.IsCancellationRequested)\n        {\n            handBack(job);                            // cut off mid-job: it did not finish, so it goes back\n            handedBack++;\n        }\n        catch (Exception)\n        {\n            failed++;\n        }\n    }\n    return new StopReport(done, failed, handedBack);\n}\n\n// Given: a queue holding these jobs.\nChannel<Job> Queue(params string[] ids)\n{\n    var channel = Channel.CreateBounded<Job>(new BoundedChannelOptions(10) { FullMode = BoundedChannelFullMode.Wait });\n    foreach (var id in ids) channel.Writer.TryWrite(new Job(id));\n    return channel;\n}\n\n\n",
+      "tests": "// ──────────────────────────── tests ──────────────────────────────────────\n\nTest(\"stopping refuses new work before the first queued job runs\", async () =>\n{\n    var queue = Queue(\"j1\");\n    var lateAccepted = true;\n    await DrainAndStop(queue, (j, _) => { if (j.Id == \"j1\") lateAccepted = queue.Writer.TryWrite(new Job(\"late\")); return Task.CompletedTask; }, _ => { }, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(2));\n    Eq(lateAccepted, false);\n});\n\nTest(\"with time to spare every queued job is finished, in order\", async () =>\n{\n    var finished = new List<string>();\n    var report = await DrainAndStop(Queue(\"j1\", \"j2\", \"j3\"), (j, _) => { finished.Add(j.Id); return Task.CompletedTask; }, _ => { }, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(2));\n    Eq(new object[] { report, finished }, new object[] { new StopReport(3, 0, 0), new[] { \"j1\", \"j2\", \"j3\" } });\n});\n\nTest(\"a failing job is counted and the drain goes on\", async () =>\n{\n    Task Handle(Job j, CancellationToken ct) => j.Id == \"j1\" ? Task.FromException(new InvalidOperationException(\"smtp 554\")) : Task.CompletedTask;\n    var report = await DrainAndStop(Queue(\"j1\", \"j2\"), Handle, _ => { }, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(2));\n    Eq(report, new StopReport(1, 1, 0));\n});\n\nTest(\"at the deadline the running job and everything still queued are handed back, in order\", async () =>\n{\n    using var deadline = new CancellationTokenSource();\n    var back = new List<string>();\n    async Task Handle(Job j, CancellationToken ct)\n    {\n        if (j.Id != \"j2\") return;\n        deadline.Cancel();\n        await Task.Delay(Timeout.Infinite, ct);\n    }\n    var report = await DrainAndStop(Queue(\"j1\", \"j2\", \"j3\", \"j4\"), Handle, j => back.Add(j.Id), deadline.Token).WaitAsync(TimeSpan.FromSeconds(2));\n    Eq(new object[] { report, back }, new object[] { new StopReport(1, 0, 3), new[] { \"j2\", \"j3\", \"j4\" } });\n});\n\nTest(\"after the deadline no further job is started\", async () =>\n{\n    using var deadline = new CancellationTokenSource();\n    var started = new List<string>();\n    var back = new List<string>();\n    Task Handle(Job j, CancellationToken ct)\n    {\n        started.Add(j.Id);\n        if (j.Id == \"j1\")\n        {\n            deadline.Cancel();\n            return Task.CompletedTask;   // j1 ignores the deadline and finishes anyway\n        }\n        ct.ThrowIfCancellationRequested();\n        return Task.CompletedTask;\n    }\n    var report = await DrainAndStop(Queue(\"j1\", \"j2\", \"j3\"), Handle, j => back.Add(j.Id), deadline.Token).WaitAsync(TimeSpan.FromSeconds(2));\n    Eq(new object[] { report, started, back }, new object[] { new StopReport(1, 0, 2), new[] { \"j1\" }, new[] { \"j2\", \"j3\" } });\n});\n\nTest(\"the handler gets the deadline token\", async () =>\n{\n    using var deadline = new CancellationTokenSource();\n    CancellationToken seen = default;\n    await DrainAndStop(Queue(\"j1\"), (_, ct) => { seen = ct; return Task.CompletedTask; }, _ => { }, deadline.Token).WaitAsync(TimeSpan.FromSeconds(2));\n    deadline.Cancel();\n    Eq(seen.IsCancellationRequested, true);\n});\n\nTest(\"a deadline that has already passed hands everything back and starts nothing (boundary)\", async () =>\n{\n    var started = 0;\n    var back = new List<string>();\n    var report = await DrainAndStop(Queue(\"j1\", \"j2\"), (_, _) => { started++; return Task.CompletedTask; }, j => back.Add(j.Id), new CancellationToken(canceled: true)).WaitAsync(TimeSpan.FromSeconds(2));\n    Eq(new object[] { report, started, back }, new object[] { new StopReport(0, 0, 2), 0, new[] { \"j1\", \"j2\" } });\n});\n\n",
+      "tail": "// ──────────────────────────── types ──────────────────────────────────────\n\nrecord Job(string Id);\n\nrecord StopReport(int Done, int Failed, int HandedBack);\n",
+      "explanation": "Complete the writer, then read with `TryRead` so the deadline decides each job's fate rather than ending the loop:\n\n```csharp\nqueue.Writer.TryComplete();\nwhile (queue.Reader.TryRead(out var job))\n{\n    if (deadline.IsCancellationRequested) { handBack(job); handedBack++; continue; }\n    try { await handle(job, deadline); done++; }\n    catch (OperationCanceledException) when (deadline.IsCancellationRequested) { handBack(job); handedBack++; }\n    catch (Exception) { failed++; }\n}\n```\n\nA completed channel still gives up the items it holds, so nothing is lost by completing first. Wrong versions the tests catch: skipping `TryComplete` accepts the late job in \"stopping refuses new work before the first queued job runs\"; a `break` at the deadline instead of handing back loses `j3` and `j4`; counting the deadline's cancellation as a failure reports `j2` as failed instead of handed back; no deadline check before starting starts `j2` and `j3` after the deadline; and `await foreach` over `ReadAllAsync(deadline)` throws as soon as the deadline fires instead of handing the rest back.",
+      "hints": [
+        "Three steps in a fixed order: nothing new gets in, what is queued gets a chance while time remains, and nothing that did not finish is thrown away.",
+        "Complete the writer before touching any job. Then take the queued jobs one at a time without a cancellable read, give each the deadline token while it is clear, and once the deadline has fired, or has cut a job off, hand that job and every later one back.",
+        "Complete the writer, read with the non-blocking read in a loop, skip straight to handing back once the deadline is cancelled, count finished and failed jobs, and treat a cancellation caused by the deadline as a job to hand back rather than a failure."
+      ]
+    }
+  ]
+}
