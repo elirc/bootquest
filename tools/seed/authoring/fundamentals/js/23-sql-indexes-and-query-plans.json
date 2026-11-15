@@ -5,7 +5,7 @@
   "title": "SQL indexes and query plans",
   "level": "advanced",
   "summary": "What an index is and what it costs, reading SCAN versus SEARCH in a query plan, column order in composite indexes, covering indexes, and predicates an index cannot serve.",
-  "lesson": "## What an index is\n\nAn index is a sorted copy of some columns (a B-tree) with a pointer back to each row. Finding a value takes a few page reads, where a table without one must be read from end to end. The price is paid on writes: every insert, update and delete maintains every index on the table.\n\n## Reading the plan\n\nAsk the database what it will do. In SQLite, put `EXPLAIN QUERY PLAN` in front of the query:\n\n- `SCAN orders`: every row is read.\n- `SEARCH orders USING INDEX i (customer_id=?)`: the index is used to jump to the matching entries.\n- `USING COVERING INDEX`: the index holds every column the query reads, so the table is not visited.\n- `USE TEMP B-TREE FOR ORDER BY`: the rows are sorted in a separate step.\n\nPostgres uses `EXPLAIN` and reports Seq Scan, Index Scan and Index Only Scan. Note that `EXPLAIN ANALYZE` really executes the statement.\n\n**Failure story.** An orders page took 40 ms on a developer laptop with 500 rows and 9 seconds in production with six million. `WHERE customer_id = ?` had no index, and nobody had read the plan. Small tables hide scans.\n\n## Column order in a composite index\n\nAn index on `(customer_id, status, created_at)` is sorted by customer, then by status within a customer, then by date. It can seek on a leftmost prefix: `customer_id` alone, `customer_id` with `status`, or both plus a range on `created_at`. It cannot seek on `status` alone, just as a phone book sorted by surname does not help you find everyone called Maria.\n\nPut the columns compared with `=` first, then one column used for a range or for sorting. With equality on the leading columns the entries are already in `created_at` order, so `ORDER BY created_at` needs no sort step.\n\n## Sargable predicates\n\nThe index is ordered by the stored value. Wrap the column in a function or in arithmetic and that order is useless: `substr(created_at, 1, 10) = ?`, `lower(email) = ?`, `price * 2 > ?` and `LIKE '%son'` all scan. Keep the bare column on one side:\n\n```sql\nWHERE created_at >= ? AND created_at < ?   -- start of day, start of next day\n```\n\n**Failure story.** A \"sign-ups today\" tile ran `WHERE date(created_at) = ?`. The column was indexed, the plan still said SCAN, and the tile grew slower every week until the dashboard timed out. A half-open range fixed it with no schema change.\n\n## Do not over-index\n\nOne composite index serves several queries through its prefixes: `(a)` is redundant beside `(a, b)`. Check plans against production-sized data, because planners choose by table statistics and an empty table can get a different plan.",
+  "lesson": "## What an index is\n\nAn index is a sorted copy of some columns (a B-tree) with a pointer back to each row. Finding a value takes a few page reads, where a table without one must be read from end to end. The price is paid on writes: every insert, update and delete maintains every index on the table.\n\n## Reading the plan\n\nAsk the database what it will do. In SQLite, put `EXPLAIN QUERY PLAN` in front of the query:\n\n- `SCAN orders`: every row is read.\n- `SEARCH orders USING INDEX i (customer_id=?)`: the index is used to jump to the matching entries.\n- `USING COVERING INDEX`: the index holds every column the query reads, so the table is not visited.\n- `USE TEMP B-TREE FOR ORDER BY`: the rows are sorted in a separate step.\n\nPostgres uses `EXPLAIN` and reports Seq Scan, Index Scan and Index Only Scan. Note that `EXPLAIN ANALYZE` really executes the statement.\n\n**Failure story.** An orders page took 40 ms on a developer laptop with 500 rows and 9 seconds in production with six million. `WHERE customer_id = ?` had no index, and nobody had read the plan. Small tables hide scans.\n\n## Column order in a composite index\n\nAn index on `(customer_id, status, created_at)` is sorted by customer, then by status within a customer, then by date. It can seek on a leftmost prefix: `customer_id` alone, `customer_id` with `status`, or both plus a range on `created_at`. It cannot seek on `status` alone, just as a phone book sorted by surname does not help you find everyone called Maria.\n\nPut the columns compared with `=` first, then one column used for a range or for sorting. With equality on the leading columns the entries are already in `created_at` order, so `ORDER BY created_at` needs no sort step.\n\n## Sargable predicates\n\nThe index is ordered by the stored value. Wrap the column in a function or in arithmetic and that order is useless: `substr(created_at, 1, 10) = ?`, `lower(email) = ?`, `price * 2 > ?` and `LIKE '%son'` all scan. Keep the bare column on one side:\n\n```sql\nWHERE created_at >= ? AND created_at < ?   -- start of day, start of next day\n```\n\n**Failure story.** A \"sign-ups today\" tile ran `WHERE date(created_at) = ?`. The column was indexed, the plan still said SCAN, and the tile grew slower every week until the dashboard timed out. A half-open range fixed it with no schema change.\n\n## Do not over-index\n\nOne composite index serves several queries through its prefixes: `(a)` is redundant beside `(a, b)`. Each extra index costs work on every insert, update and delete, so before adding one, look for an existing index whose leftmost columns already cover the query. Check plans against production-sized data, because planners choose by table statistics and an empty table can get a different plan.",
   "quiz": [
     {
       "prompt": "What does a line reading `SCAN orders` mean in SQLite's EXPLAIN QUERY PLAN output?",
@@ -38,7 +38,7 @@
         "ORDER BY on a text column is skipped whenever an index is present"
       ],
       "answer": 1,
-      "explanation": "Fixing the two leading columns leaves a contiguous run of entries ordered by the third. The database reads that run backwards for DESC."
+      "explanation": "Fixing customer_id and status by equality leaves one contiguous run of index entries, and inside that run the entries are sorted by created_at. The database walks the run backwards for DESC, so the rows arrive already in order and the plan shows no sort step. The index keeps no separate newest-first copy, and the table rows themselves are not kept in created_at order."
     },
     {
       "prompt": "The column created_at is indexed. Why does `WHERE date(created_at) = ?` still scan the table?",
@@ -60,7 +60,7 @@
         "`upper(substr(name, 1, 1)) = 'O'`"
       ],
       "answer": 2,
-      "explanation": "The range compares the bare column, so it maps to one contiguous stretch of the index. The others hide the column behind a function or start with a wildcard."
+      "explanation": "The range compares the bare column, so it maps to one contiguous stretch of the sorted index that the database can seek into. `lower(name)` and `upper(substr(...))` hide the column inside a function, so a plain index on name cannot seek for them, and `LIKE '%son'` starts with a wildcard, which leaves no prefix to seek to. SQLite's plan shows SEARCH for the range and SCAN for the other three."
     },
     {
       "prompt": "What does `USING COVERING INDEX` in a plan tell you?",
@@ -82,7 +82,7 @@
         "Every insert, update and delete must also maintain that index"
       ],
       "answer": 3,
-      "explanation": "Reads that do not use the index ignore it. Writes cannot: each one has to keep every index in step with the table."
+      "explanation": "Every write has to keep each index of the table in step: an insert adds an entry, a delete removes one, and an update of an indexed column moves one. Reads that do not use the new index simply ignore it, and primary-key lookups do not slow down as indexes are added. On a busy table that extra work on every write is the price."
     },
     {
       "prompt": "A table has an index on `(tenant_id)` and another on `(tenant_id, status)`. What is true of the first one?",
@@ -93,7 +93,7 @@
         "It is redundant: SQLite merges indexes that share a first column"
       ],
       "answer": 0,
-      "explanation": "A leftmost prefix of a composite index works like an index on those columns alone, so the single-column one only adds write cost."
+      "explanation": "A leftmost prefix of a composite index works like an index on those columns alone, so `(tenant_id, status)` already serves `WHERE tenant_id = ?` and the single-column index only adds write cost. A two-column index can seek on its first column by itself, and SQLite does not merge indexes that share a first column: dropping the redundant one is your job."
     },
     {
       "prompt": "Queries filter `WHERE tenant_id = ? AND created_at >= ?` and also `WHERE tenant_id = ?` alone. Which single index serves both?",
@@ -104,7 +104,7 @@
         "`(tenant_id, id)`"
       ],
       "answer": 1,
-      "explanation": "An index is sorted by its first column, then the next: `(tenant_id, created_at)` seeks to one tenant and then ranges over its times, and its prefix also serves tenant_id alone. With created_at first, the equality on tenant_id cannot narrow the seek."
+      "explanation": "An index is sorted by its first column, then the next: `(tenant_id, created_at)` seeks to one tenant and then ranges over its times, and its prefix also serves tenant_id alone. With created_at first, the equality on tenant_id cannot narrow the seek. `(tenant_id, id)` serves the tenant lookup but not the time range."
     },
     {
       "prompt": "`price` has an index. Which predicate selects the same rows as `WHERE price * 1.2 > 120` and can still seek on it?",
