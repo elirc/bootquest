@@ -4054,6 +4054,537 @@
     "fund-java/23-jackson-json-contracts/02-absent-null-or-a-value",
     "fund-java/23-jackson-json-contracts/03-bug-hunt-absent-null-or-a-value"
    ]
+  },
+  {
+   "id": "24-bean-validation-in-depth",
+   "order": 24,
+   "title": "Bean Validation in depth: null rules, cascading, groups, errors",
+   "level": "advanced",
+   "summary": "Where constraints live and when they run, NotNull versus NotEmpty versus NotBlank, why null passes every other constraint, @Valid cascading into nested objects and list elements, method validation through a proxy, custom and cross-field constraints, groups and Default, and a 400 body that helps without leaking secrets.",
+   "lesson": "## Constraints live on the DTO\n\n```java\npublic record CreateOrder(\n    @NotNull @Valid Address shipTo,\n    @NotEmpty @Size(max = 50) List<@Valid OrderLine> lines,\n    @Size(max = 500) String note,\n    @NotBlank @Email String contactEmail) {}\n\n@PostMapping(\"/orders\")\nResponseEntity<OrderDto> create(@Valid @RequestBody CreateOrder body) { ... }\n```\n\nJakarta Bean Validation reads annotations on fields, getters or record components. In a Spring MVC controller, `@Valid` on a `@RequestBody` parameter runs the validator after the JSON is bound; any violation throws `MethodArgumentNotValidException` before your method runs, and Spring answers 400. The validator reports EVERY violation it finds, not just the first one, so one round trip tells the client everything to fix.\n\n## NotNull, NotEmpty and NotBlank are three different rules\n\n`@NotNull` only refuses `null`. `@NotEmpty` also refuses an empty string or collection. `@NotBlank` is for strings and refuses `null`, `\"\"` and whitespace such as `\"   \"`. Every other built-in constraint treats `null` as VALID: `@Size(min = 2)`, `@Email`, `@Pattern` and `@Min` pass a missing value. This is deliberate (each constraint checks one thing), so a required field needs `@NotNull` or `@NotBlank` next to its format rules. On a primitive `int`, `@NotNull` does nothing: a missing JSON value is already `0` (topic 23), and only `@Min(1)` notices.\n\n## Nothing cascades unless you say @Valid\n\nA constraint on `Address.city` is not checked when you validate an `Order` that holds an `Address`, unless the `shipTo` component is marked `@Valid`. The same goes for collections: `List<@Valid OrderLine>` (or `@Valid` on the list) validates each element. Violations then carry a property path such as `shipTo.city` or `lines[2].quantity`, which is what the client should see next to each field.\n\n## Method validation goes through a proxy\n\nOutside controllers, `@Validated` on a Spring bean turns on method validation: constraint annotations on its method parameters and return values are checked by a proxy (`MethodValidationPostProcessor`) and a violation throws `ConstraintViolationException`. Like `@Transactional` and `@PreAuthorize` (topics 20 and 22), a call on `this` inside the bean skips the proxy and skips the checks. Validate at the edge where data enters, and treat service-level checks as a second line, not the only one.\n\n## Custom and cross-field constraints\n\nA rule the built-ins cannot express gets its own annotation and a `ConstraintValidator<A, T>`. Follow the convention and return `true` for `null`, leaving \"required\" to `@NotNull`. A rule over two fields, such as \"end date after start date\", is a class-level constraint whose validator sees the whole object; attach its violation to the field that should be highlighted. Keep business rules that need the database (is this coupon still valid?) in the service: a validator should be a fast, pure check.\n\n## Groups: one DTO, two rule sets\n\n`@NotNull(groups = OnUpdate.class) Long id` applies only when that group is validated, for example with `@Validated(OnUpdate.class)`. Constraints without a group belong to `Default`, and validating `OnUpdate` alone does NOT check them unless `OnUpdate extends Default`. Groups are easy to get subtly wrong; two small DTOs, one for create and one for update, are often clearer.\n\n## A 400 the client can act on\n\nMap violations to one response: status 400, a stable title, and per field the list of messages (Spring's `ProblemDetail` with an `errors` extension works well). Echoing the rejected value helps for a quantity, but never for a password, a token or a card number: those values end up in logs and screenshots.\n",
+   "quiz": [
+    {
+     "key": "fund:java/24-bean-validation-in-depth/q01",
+     "prompt": "A DTO has `@Size(min = 2, max = 40) String name`. The request body has no `name` at all. What does validation report?",
+     "choices": [
+      "A size violation, since null has no length",
+      "Nothing: Size treats null as valid",
+      "A NullPointerException inside the validator",
+      "A 500, because the field could not be bound"
+     ],
+     "answer": 1,
+     "explanation": "Every built-in constraint except the NotNull family treats null as valid, so Size has nothing to check and the request passes. That is deliberate: each annotation checks one property. A required name needs @NotBlank or @NotNull next to @Size; the validator neither throws nor turns a missing field into a size violation."
+    },
+    {
+     "key": "fund:java/24-bean-validation-in-depth/q02",
+     "prompt": "Which constraint refuses `null`, `\"\"` and `\"   \"` for a String field?",
+     "choices": [
+      "@NotNull",
+      "@NotEmpty",
+      "@Size(min = 1)",
+      "@NotBlank"
+     ],
+     "answer": 3,
+     "explanation": "@NotBlank refuses null and any string whose trimmed content is empty. @NotEmpty refuses null and the empty string but accepts three spaces, @NotNull accepts both empty forms, and @Size(min = 1) passes null and counts spaces as characters. Pick @NotBlank for names and other text a person must actually type."
+    },
+    {
+     "key": "fund:java/24-bean-validation-in-depth/q03",
+     "prompt": "A controller method takes `@Valid @RequestBody CreateOrder body`, and the body breaks two constraints. What happens?",
+     "choices": [
+      "MethodArgumentNotValidException, before the method runs",
+      "The method runs with body.errors() filled in",
+      "Only the first violation is reported, as a 422",
+      "Spring drops the invalid fields and goes on"
+     ],
+     "answer": 0,
+     "explanation": "Spring validates the bound body before calling the method and throws MethodArgumentNotValidException, which the default handling turns into a 400. Both violations are collected, not only the first, and the method never runs with a half-valid object. Fields are never dropped silently, and the default status is 400, not 422."
+    },
+    {
+     "key": "fund:java/24-bean-validation-in-depth/q04",
+     "prompt": "`CreateOrder` holds `Address shipTo` without `@Valid`; `Address.city` is `@NotBlank`. A request has `\"city\": \"\"`. What does validating `CreateOrder` report?",
+     "choices": [
+      "shipTo.city: must not be blank",
+      "A violation on shipTo itself",
+      "Nothing: Address is not validated",
+      "An error, because Address needs @Validated"
+     ],
+     "answer": 2,
+     "explanation": "Validation does not cascade into a nested object unless the reference is marked @Valid, so the blank city is never looked at and no path is reported. @Validated is for Spring proxies and groups, not for cascading. Mark the component @Valid, and the violation appears with the path shipTo.city."
+    },
+    {
+     "key": "fund:java/24-bean-validation-in-depth/q05",
+     "prompt": "A bean is annotated `@Validated`; its public `register(@Email String email)` is called as `this.register(...)` from another method of the same bean. Is the email checked?",
+     "choices": [
+      "Yes, the annotation is on the method",
+      "Only when assertions are enabled",
+      "Yes, but the violation is only logged",
+      "No: the call skips the validating proxy"
+     ],
+     "answer": 3,
+     "explanation": "Method validation is applied by a proxy around the bean, and a call on this goes straight to the target object, so no check runs at all. It is the same trap as @Transactional and @PreAuthorize. Assertions and logging play no part; call through another bean, or validate at the edge."
+    },
+    {
+     "key": "fund:java/24-bean-validation-in-depth/q06",
+     "prompt": "A DTO declares `@NotNull int quantity`, and the client omits quantity. What does the server see?",
+     "choices": [
+      "quantity is 0 and passes",
+      "A NotNull violation for quantity",
+      "A JSON parse error",
+      "quantity is null in the DTO"
+     ],
+     "answer": 0,
+     "explanation": "A primitive cannot be null, so the missing value binds to 0 and @NotNull has nothing to refuse. The JSON is valid and no parse error occurs. Use Integer with @NotNull when sending the field is required, or @Min(1) when zero is not a legal quantity, so the bad request is caught."
+    },
+    {
+     "key": "fund:java/24-bean-validation-in-depth/q07",
+     "prompt": "You write a `@PostalCode` constraint. What should its `ConstraintValidator.isValid` return for `null`?",
+     "choices": [
+      "false, since null is not a postal code",
+      "true, and leave required to @NotNull",
+      "It should throw IllegalArgumentException",
+      "It depends on the country being checked"
+     ],
+     "answer": 1,
+     "explanation": "The convention for every built-in constraint is that null is valid and presence is a separate rule. Returning false would make the field silently required, and throwing from a validator turns a bad request into a 500. Follow the convention so @PostalCode can sit on optional fields and combine with @NotNull where needed."
+    },
+    {
+     "key": "fund:java/24-bean-validation-in-depth/q08",
+     "prompt": "`id` has `@NotNull(groups = OnUpdate.class)`, `name` has a plain `@NotBlank`, and the controller uses `@Validated(OnUpdate.class)`. Which checks run?",
+     "choices": [
+      "Both, because groups only add rules",
+      "name only, because id is not in Default",
+      "Neither: groups need a group sequence",
+      "Only id: name is in the Default group"
+     ],
+     "answer": 3,
+     "explanation": "A constraint without a group belongs to Default, and validating only OnUpdate checks only the OnUpdate constraints, so the blank name gets through. Groups do not add to Default unless OnUpdate extends Default, and no group sequence is needed for a single group. Two small DTOs often avoid the confusion."
+    },
+    {
+     "key": "fund:java/24-bean-validation-in-depth/q09",
+     "prompt": "A start date must be before an end date in the same booking. Where does that rule belong?",
+     "choices": [
+      "In a class-level constraint on the booking",
+      "In @Past on the start date",
+      "Inside the JSON deserializer",
+      "In a database trigger only"
+     ],
+     "answer": 0,
+     "explanation": "A rule over two fields needs a validator that sees the whole object, which is what a class-level constraint gets. @Past compares one field with now, not with another field. A deserializer should only build the object, and a trigger alone reports the problem as a database error long after the request should have been refused."
+    },
+    {
+     "key": "fund:java/24-bean-validation-in-depth/q10",
+     "prompt": "A signup request breaks `@Size(min = 12)` on `password`. What should the 400 body include for that field?",
+     "choices": [
+      "The message and the rejected password",
+      "Only a generic \"bad request\" with no fields",
+      "The message, never the rejected value",
+      "The message and the value, base64-encoded"
+     ],
+     "answer": 2,
+     "explanation": "The client needs to know which field failed and why, so the message belongs in the body, but a password must never be echoed: response bodies end up in logs, proxies and screenshots. Base64 is not protection. A generic error without fields hides what the user has to fix."
+    }
+   ],
+   "flashcards": [
+    {
+     "key": "fund:java/24-bean-validation-in-depth/c01",
+     "front": "Null and the built-in constraints",
+     "back": "Every constraint except @NotNull, @NotEmpty and @NotBlank accepts null, so presence and format are two separate annotations."
+    },
+    {
+     "key": "fund:java/24-bean-validation-in-depth/c02",
+     "front": "@NotNull, @NotEmpty or @NotBlank?",
+     "back": "Not null at all; not null and length or size above zero; for text, not null and containing a non-whitespace character."
+    },
+    {
+     "key": "fund:java/24-bean-validation-in-depth/c03",
+     "front": "Cascading validation",
+     "back": "Mark a nested object or the element type of a collection with @Valid; violations then carry paths like lines[2].quantity."
+    },
+    {
+     "key": "fund:java/24-bean-validation-in-depth/c04",
+     "front": "@Valid on a @RequestBody",
+     "back": "Spring validates after binding and throws MethodArgumentNotValidException, answered with 400, before the handler runs."
+    },
+    {
+     "key": "fund:java/24-bean-validation-in-depth/c05",
+     "front": "Method validation and self-calls",
+     "back": "@Validated beans are checked by a proxy, so constraints on a method called through this are skipped."
+    },
+    {
+     "key": "fund:java/24-bean-validation-in-depth/c06",
+     "front": "Writing a ConstraintValidator",
+     "back": "Treat null as valid, keep it fast and pure, and leave lookups that need the database to the service."
+    },
+    {
+     "key": "fund:java/24-bean-validation-in-depth/c07",
+     "front": "Validation groups and Default",
+     "back": "Constraints without groups are in Default; validating another group checks only that group unless it extends Default."
+    },
+    {
+     "key": "fund:java/24-bean-validation-in-depth/c08",
+     "front": "A useful validation error body",
+     "back": "Status 400, a stable title, messages per field; echo rejected values only for fields that are not secrets."
+    }
+   ],
+   "drillKeys": [
+    "fund-java/24-bean-validation-in-depth/01-a-validator-by-hand",
+    "fund-java/24-bean-validation-in-depth/02-violations-to-a-400",
+    "fund-java/24-bean-validation-in-depth/03-bug-hunt-a-validator-by-hand"
+   ]
+  },
+  {
+   "id": "25-slf4j-and-mdc-request-ids",
+   "order": 25,
+   "title": "SLF4J and the MDC: log lines you can follow",
+   "level": "advanced",
+   "summary": "Parameterised SLF4J messages and why they are cheap when disabled, the trailing exception, logging once at the right level, a request id in the MDC set at the edge and cleared in finally, carrying the MDC into pool threads, refusing forged ids, and keeping secrets out of logs.",
+   "lesson": "## Parameterised messages, not string building\n\n```java\nprivate static final Logger log = LoggerFactory.getLogger(OrderService.class);\n\nlog.debug(\"pricing order {} with {} lines\", order.id(), order.lines().size());\nlog.warn(\"payment {} declined for order {}\", paymentId, orderId);\nlog.error(\"could not capture payment {}\", paymentId, e);   // e goes last: printed with its stack trace\n```\n\nSLF4J fills each `{}` with the next argument's `toString()`, and only when the level is enabled. `log.debug(\"total \" + expensive())` builds the string and calls `expensive()` even when debug is off; the parameterised form does neither (an argument that is itself costly to compute still needs `if (log.isDebugEnabled())` or a supplier in SLF4J 2's fluent API). A `{}` with no argument left is printed as it is, extra arguments are ignored, and an escaped placeholder, written `\"\\\\{}\"` in Java source, prints a literal `{}`.\n\n## The exception goes last, and only once\n\nPass the exception as the last argument, after the values for every `{}`: SLF4J treats a trailing `Throwable` as the exception to print with its stack trace. Writing `\"failed: \" + e` keeps only the message and loses the stack. Log an exception where you handle it; logging it and then rethrowing it prints the same failure once per layer, and the real cause is hard to find in the duplicates.\n\n## Levels say who must act\n\nERROR: someone must act now, a request or job failed. WARN: something degraded but was handled (a fallback, a retry that later worked). INFO: business events worth counting (order placed, payment captured). DEBUG: detail for developers, off in production by default. A level is a promise to whoever is on call; a log full of ERRORs nobody acts on hides the one that matters.\n\n## MDC: context every line can print\n\nThe Mapped Diagnostic Context is a per-thread map of key/value pairs. Put the request id in it once, at the edge, and a pattern such as `%X{requestId}` (or a JSON encoder) prints it on every log line that thread writes, without passing the id to every method. Accept an incoming `X-Request-Id` only if it matches a strict format, otherwise generate one: a raw header copied into logs lets a caller inject fake log lines. Return the id in the response so a user's bug report can name it.\n\n## Set it at the edge, clear it in finally\n\n```java\nMDC.put(\"requestId\", id);\ntry {\n    chain.doFilter(request, response);\n} finally {\n    MDC.remove(\"requestId\");\n}\n```\n\nServer threads are pooled. A context that is not removed in `finally` stays on the thread and labels the NEXT request's lines with the wrong id, the same leak as an uncleared security context (topic 22). `MDC.putCloseable` in a try-with-resources does the same in one line.\n\n## MDC does not follow work to another thread\n\nWork handed to an executor, a `CompletableFuture` or a scheduled job runs on a thread with its own, usually empty, context. Capture `MDC.getCopyOfContextMap()` where the task is created, install it with `MDC.setContextMap` around the task, and put the worker's previous context back afterwards. Spring's `TaskDecorator` is the hook for this in a `ThreadPoolTaskExecutor`.\n\n## Never log secrets\n\nPasswords, tokens, full card numbers and session cookies do not belong in logs, at any level: logs are copied to more places and kept longer than databases. Log ids, not payloads; mask what must appear (`****4242`); and make `toString()` of a credentials type safe, because `log.info(\"login {}\", credentials)` calls it.\n",
+   "quiz": [
+    {
+     "key": "fund:java/25-slf4j-and-mdc-request-ids/q01",
+     "prompt": "Debug logging is off. Which statement still builds a string and calls `summarize(order)`?",
+     "choices": [
+      "log.debug(\"order {}\", order)",
+      "log.debug(\"order \" + summarize(order))",
+      "if (log.isDebugEnabled()) log.debug(\"order {}\", summarize(order))",
+      "log.debug(\"order {} {}\", order, 1)"
+     ],
+     "answer": 1,
+     "explanation": "Java evaluates the argument before calling debug, so the concatenation and summarize run even though the line is then dropped. The parameterised forms only pass references and call toString when the level is on, and the isDebugEnabled guard skips summarize entirely. Use placeholders for cheap values and a guard for costly ones."
+    },
+    {
+     "key": "fund:java/25-slf4j-and-mdc-request-ids/q02",
+     "prompt": "What does `log.error(\"could not capture payment {}\", paymentId, e)` print, where `e` is an exception?",
+     "choices": [
+      "The message with e.toString() in place of {}",
+      "The message with paymentId, and e with its stack trace",
+      "Only the stack trace, without the message",
+      "Nothing: two arguments need two {}"
+     ],
+     "answer": 1,
+     "explanation": "The placeholder takes paymentId, and SLF4J treats the trailing Throwable as the exception to log, so the stack trace follows the message. Nothing is dropped, and a mismatch between arguments and placeholders is not an error. Concatenating the exception into the text instead would lose its stack trace."
+    },
+    {
+     "key": "fund:java/25-slf4j-and-mdc-request-ids/q03",
+     "prompt": "A service catches an exception, logs it at ERROR and rethrows it; the controller logs it again; so does a filter. What is the problem?",
+     "choices": [
+      "SLF4J refuses to log one exception twice",
+      "The stack trace is lost on the second log",
+      "The rethrow changes the exception type",
+      "One failure shows up as three errors"
+     ],
+     "answer": 3,
+     "explanation": "Each layer that logs and rethrows adds a copy, so one failure looks like three and alerts or dashboards count it three times. SLF4J does not stop duplicates, and rethrowing keeps both the type and the stack trace. Log where the exception is handled, and let the others add context by wrapping it with a cause."
+    },
+    {
+     "key": "fund:java/25-slf4j-and-mdc-request-ids/q04",
+     "prompt": "A payment provider timed out, and the retry succeeded. Which level fits that event?",
+     "choices": [
+      "WARN: degraded, but handled",
+      "ERROR, because a call failed",
+      "DEBUG, since the user saw nothing",
+      "INFO, as a business event"
+     ],
+     "answer": 0,
+     "explanation": "The system degraded and recovered on its own, which is what WARN is for: worth seeing in aggregate, no one needs to act right now. ERROR would page someone for a handled event, DEBUG is usually off in production so the pattern would vanish, and the payment itself is the business event, not the timeout."
+    },
+    {
+     "key": "fund:java/25-slf4j-and-mdc-request-ids/q05",
+     "prompt": "A filter copies the raw `X-Request-Id` header into the MDC. Why is that risky?",
+     "choices": [
+      "The MDC only accepts numeric values",
+      "Request ids must be generated by the server",
+      "A header with a newline can forge log lines",
+      "Headers are not readable inside filters"
+     ],
+     "answer": 2,
+     "explanation": "A caller controls that header, and a value with a newline and fake fields writes lines that look like they came from the server. The MDC takes any string, and a client-supplied id is useful for tracing if it is checked. Accept it only when it matches a strict pattern, otherwise generate one."
+    },
+    {
+     "key": "fund:java/25-slf4j-and-mdc-request-ids/q06",
+     "prompt": "A filter calls `MDC.put(\"requestId\", id)` and then the chain, but has no `finally`. The chain throws. What happens next on that thread?",
+     "choices": [
+      "The servlet container clears the MDC for you",
+      "The id stays and labels the next request",
+      "The exception removes the MDC entry",
+      "The next MDC.put fails with an error"
+     ],
+     "answer": 1,
+     "explanation": "The MDC is a thread-local map, and pooled server threads serve many requests, so an entry that is not removed stays behind and tags the next request's lines with the wrong id. Neither the container nor the exception clears it, and a later put simply overwrites. Remove it in finally, or use MDC.putCloseable."
+    },
+    {
+     "key": "fund:java/25-slf4j-and-mdc-request-ids/q07",
+     "prompt": "A request handler submits work to an `ExecutorService`. What request id does the task's log line carry?",
+     "choices": [
+      "The handler's id, because MDC is inherited",
+      "The id of the first request the pool served",
+      "Whatever the worker thread has, often none",
+      "An id the executor generates for each task"
+     ],
+     "answer": 2,
+     "explanation": "The MDC belongs to a thread, and pool threads are not children of the request thread, so the task sees the worker's own context, usually empty. Nothing is inherited or generated per task. Capture the context map when the task is created and install it around the task, for example with a TaskDecorator."
+    },
+    {
+     "key": "fund:java/25-slf4j-and-mdc-request-ids/q08",
+     "prompt": "When should a task wrapper read `MDC.getCopyOfContextMap()`?",
+     "choices": [
+      "When the task is created, on the caller's thread",
+      "When the task starts, on the worker thread",
+      "After the task ends, to restore it",
+      "Never: setContextMap copies it for you"
+     ],
+     "answer": 0,
+     "explanation": "Only the caller's thread holds the request's context, so the copy must be taken when the task is created. Reading it when the task starts gives the worker's context, which is the bug the wrapper exists to fix. The worker's own map is read separately at that point so it can be put back afterwards."
+    },
+    {
+     "key": "fund:java/25-slf4j-and-mdc-request-ids/q09",
+     "prompt": "`log.info(\"login attempt {}\", credentials)` logs a record `Credentials(user, password)`. What is printed by default?",
+     "choices": [
+      "Only the class name of the object",
+      "The user and the password, from the record's toString",
+      "A masked password, because SLF4J hides fields",
+      "Nothing until a toString is written"
+     ],
+     "answer": 1,
+     "explanation": "The placeholder calls toString, and a record's generated toString prints every component, password included. SLF4J does not inspect or mask fields, and a record always has a toString. Override toString on types that carry secrets, and prefer logging an id over the object."
+    },
+    {
+     "key": "fund:java/25-slf4j-and-mdc-request-ids/q10",
+     "prompt": "What does `log.info(\"set \\\\{} has {} items\", 3)` print?",
+     "choices": [
+      "set 3 has {} items",
+      "An error: escapes are not supported",
+      "set {} has {} items",
+      "set {} has 3 items"
+     ],
+     "answer": 3,
+     "explanation": "A backslash before a placeholder escapes it, so the first {} is printed literally and does not use an argument; the 3 goes to the second one. Without the escape the 3 would fill the first placeholder, and the backslash itself is not printed. Escapes are supported, so there is no error; a double backslash would print one backslash and then substitute."
+    }
+   ],
+   "flashcards": [
+    {
+     "key": "fund:java/25-slf4j-and-mdc-request-ids/c01",
+     "front": "Why placeholders instead of +",
+     "back": "The message is formatted only when the level is enabled, so a disabled debug line costs almost nothing."
+    },
+    {
+     "key": "fund:java/25-slf4j-and-mdc-request-ids/c02",
+     "front": "Where does the exception go in an SLF4J call?",
+     "back": "After the values for every {}; a trailing Throwable is printed with its stack trace."
+    },
+    {
+     "key": "fund:java/25-slf4j-and-mdc-request-ids/c03",
+     "front": "Log and rethrow",
+     "back": "Each layer that does it duplicates the failure; log where it is handled and wrap with a cause elsewhere."
+    },
+    {
+     "key": "fund:java/25-slf4j-and-mdc-request-ids/c04",
+     "front": "What is the MDC?",
+     "back": "A per-thread map of context, such as a request id, that the log pattern prints on every line."
+    },
+    {
+     "key": "fund:java/25-slf4j-and-mdc-request-ids/c05",
+     "front": "MDC on pooled server threads",
+     "back": "Put at the edge, remove in finally, or the entry labels the next request served by that thread."
+    },
+    {
+     "key": "fund:java/25-slf4j-and-mdc-request-ids/c06",
+     "front": "MDC and executors",
+     "back": "Copy the context where the task is created, install it around the task, then restore the worker's own."
+    },
+    {
+     "key": "fund:java/25-slf4j-and-mdc-request-ids/c07",
+     "front": "Trusting an incoming request id",
+     "back": "Only when it matches a strict format; otherwise generate one, since raw headers can forge log lines."
+    },
+    {
+     "key": "fund:java/25-slf4j-and-mdc-request-ids/c08",
+     "front": "Secrets in logs",
+     "back": "Never: log ids not payloads, mask what must appear, and keep toString of credential types safe."
+    }
+   ],
+   "drillKeys": [
+    "fund-java/25-slf4j-and-mdc-request-ids/01-the-placeholder-rules",
+    "fund-java/25-slf4j-and-mdc-request-ids/02-a-request-id-across-threads",
+    "fund-java/25-slf4j-and-mdc-request-ids/03-bug-hunt-a-request-id-across-threads"
+   ]
+  },
+  {
+   "id": "26-http-clients-timeouts-and-retries",
+   "order": 26,
+   "title": "HTTP clients: timeouts, retries and deadline budgets",
+   "level": "advanced",
+   "summary": "Why java.net.http waits for ever without a timeout, connect versus request timeouts, slow dependencies and bulkheads, which methods and failures may be retried, exponential backoff with jitter and Retry-After, retry amplification across layers, deadline budgets, and testing timeouts without waiting.",
+   "lesson": "## No timeout means wait for ever\n\n```java\nHttpClient client = HttpClient.newBuilder()\n    .connectTimeout(Duration.ofSeconds(2))\n    .followRedirects(HttpClient.Redirect.NEVER)\n    .build();\n\nHttpRequest request = HttpRequest.newBuilder(URI.create(\"https://prices.internal/v1/sku/42\"))\n    .timeout(Duration.ofMillis(800))\n    .GET()\n    .build();\n\nHttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());\n```\n\n`java.net.http.HttpClient` (JDK 11+) has no request timeout unless you set one: the javadoc says leaving it out is the same as an infinite duration. `connectTimeout` bounds the TCP and TLS setup; `HttpRequest.timeout` makes `send` throw `HttpTimeoutException` (and `sendAsync` complete exceptionally with it) when the response does not arrive in time. Spring's older `RestTemplate` on its default request factory also waits indefinitely. Set both timeouts on every client, deliberately, per dependency.\n\n## A slow dependency is worse than a dead one\n\nA dead service fails fast; a slow one holds a thread, a connection and the user's request for as long as you let it. With 200 request threads and a dependency that answers in 30 s, a burst of traffic parks every thread on it. Short timeouts, a bulkhead (a cap on concurrent calls) and a circuit breaker that stops calling a failing dependency keep one bad service from taking the rest down.\n\n## Retry only what is safe to repeat\n\nGET, HEAD, OPTIONS, PUT and DELETE are idempotent by definition (RFC 9110): doing them twice has the effect of doing them once. A POST is not, unless the server deduplicates it by an idempotency key. A connect timeout is safe to retry for any method, because nothing reached the server; a request timeout is not, because the server may have done the work and only the answer was lost.\n\n## Retry only what may succeed next time\n\nRetry 429 (too many requests), 502, 503, 504 and transport failures. Do not retry 400, 401, 403, 404 or 409: the same request will get the same answer. A plain 500 is usually a bug on the other side, not a blip, so many clients do not retry it either.\n\n## Back off, add jitter, honour Retry-After\n\nWait before each retry, doubling the wait each time up to a cap, and pick a random point below it (\"full jitter\") so a thousand clients do not retry in the same millisecond. When the server sends `Retry-After`, use it (capped at what you are willing to wait). Limit attempts, and count them across the whole call chain: three layers that each retry three times turn one failure into 27 calls.\n\n## Budgets: the deadline belongs to the caller\n\nThe user's request has one deadline. Each outbound call gets the time that is LEFT, minus a small reserve for building the answer, and never more than its own cap. When too little is left to be useful, fail at once instead of starting a call that cannot finish. Passing the deadline on (a header such as `X-Deadline`) lets the next service stop work nobody is waiting for.\n\n## Test timeouts without waiting for them\n\nInject a `Clock` and decide timeouts as plain values, then assert on `request.timeout()` and `client.connectTimeout()`: both are readable `Optional`s on the JDK objects. Keep real network tests few, against a local stub server, with timeouts in milliseconds.\n",
+   "quiz": [
+    {
+     "key": "fund:java/26-http-clients-timeouts-and-retries/q01",
+     "prompt": "An `HttpRequest` is built without `.timeout(...)` and sent with `client.send`. The server accepts the connection and never answers. What happens?",
+     "choices": [
+      "send throws HttpTimeoutException after the JDK default of 30 s",
+      "send blocks for as long as the server stays silent",
+      "send throws at once with HttpTimeoutException",
+      "send returns a 504 response it makes up itself"
+     ],
+     "answer": 1,
+     "explanation": "Leaving out the request timeout is the same as an infinite one, so send keeps waiting for a response that never comes. There is no hidden 30-second default, the client never invents a 504, and an immediate exception would need a timeout that was set. Set a per-request timeout on every call to a dependency."
+    },
+    {
+     "key": "fund:java/26-http-clients-timeouts-and-retries/q02",
+     "prompt": "What does `HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2))` bound?",
+     "choices": [
+      "Setting up the connection only",
+      "The whole call, from connect to the last body byte",
+      "Only the TLS handshake, after TCP connects",
+      "The time between two chunks of the response body"
+     ],
+     "answer": 0,
+     "explanation": "connectTimeout covers establishing the connection; once it is up, how long the response may take is the request's own timeout. It does not bound the whole call or the gaps between body chunks, and it is not limited to the TLS part. Set both, because a connected but slow server is the common case."
+    },
+    {
+     "key": "fund:java/26-http-clients-timeouts-and-retries/q03",
+     "prompt": "A POST to create a payment times out after the request was sent. Should the client retry it as is?",
+     "choices": [
+      "Yes, a timeout means the server never saw it",
+      "Yes, but only after waiting the full backoff",
+      "No, because POST bodies cannot be sent twice",
+      "No, not without an idempotency key"
+     ],
+     "answer": 3,
+     "explanation": "A request timeout means the answer did not arrive, not that the work did not happen, so a blind retry can charge twice. Waiting longer does not change that, and a body can technically be sent again. With an idempotency key the server returns the first result instead of acting twice, which makes the retry safe."
+    },
+    {
+     "key": "fund:java/26-http-clients-timeouts-and-retries/q04",
+     "prompt": "Which failure is safe to retry even for a POST without an idempotency key?",
+     "choices": [
+      "A read timeout after the whole body was sent",
+      "A connect timeout: nothing reached the server",
+      "A 503 Service Unavailable from the load balancer",
+      "A 409 Conflict answer from the payment provider API"
+     ],
+     "answer": 1,
+     "explanation": "When the connection never came up, no request reached the server, so repeating it cannot duplicate anything. After a read timeout or a 503 the request did arrive and may have run, and a 409 is a definite answer that a retry will only repeat. Treat transport failures by when they happened, not by their name."
+    },
+    {
+     "key": "fund:java/26-http-clients-timeouts-and-retries/q05",
+     "prompt": "Which response is NOT worth retrying?",
+     "choices": [
+      "429 Too Many Requests",
+      "503 Service Unavailable",
+      "404 Not Found",
+      "504 Gateway Timeout"
+     ],
+     "answer": 2,
+     "explanation": "A 404 is a definite answer about the resource, and asking again gets the same answer, so retrying only adds load. 429, 503 and 504 describe a temporary condition on the server or a proxy, which may clear in a moment, ideally after the wait the server suggests in Retry-After."
+    },
+    {
+     "key": "fund:java/26-http-clients-timeouts-and-retries/q06",
+     "prompt": "Why add random jitter to exponential backoff?",
+     "choices": [
+      "So that many clients do not retry at the same moment",
+      "Because servers reject requests that are evenly spaced",
+      "To make the total wait shorter than plain doubling",
+      "So that the backoff never reaches its cap"
+     ],
+     "answer": 0,
+     "explanation": "Clients that failed together would otherwise retry together, hitting the recovering server with synchronised waves. Jitter spreads them out. Servers do not reject regular spacing, full jitter usually waits less only on average, and the cap still applies. Pick a random delay under the current ceiling."
+    },
+    {
+     "key": "fund:java/26-http-clients-timeouts-and-retries/q07",
+     "prompt": "A 429 response carries `Retry-After: 2`. Your backoff would wait 100 ms. What should the client do?",
+     "choices": [
+      "Wait 100 ms: the client controls its own backoff",
+      "Retry at once, since 429 means try again",
+      "Give up, because 429 is a client error",
+      "Wait about 2 seconds, as the server asked"
+     ],
+     "answer": 3,
+     "explanation": "Retry-After is the server telling you when capacity will be back, so it overrides your own guess, within a cap you choose. Retrying sooner earns another 429 and adds to the overload, and 429 is precisely the 4xx that is meant to be retried later. Retry-After in seconds is the common form."
+    },
+    {
+     "key": "fund:java/26-http-clients-timeouts-and-retries/q08",
+     "prompt": "The gateway retries 3 times, the service behind it retries 3 times, and its database client retries 3 times. One request hits a failing database. How many database calls can that cause?",
+     "choices": [
+      "3, because only the database client retries it",
+      "9, two layers of three",
+      "Up to 27, three layers of three",
+      "1, since retries are deduplicated"
+     ],
+     "answer": 2,
+     "explanation": "Each layer repeats everything beneath it, so three layers of three attempts multiply to 27 calls for one user request. Nothing deduplicates them, and the gateway's retries repeat the service's retries too. Retry in one layer, usually the one closest to the failure, and give the others a budget."
+    },
+    {
+     "key": "fund:java/26-http-clients-timeouts-and-retries/q09",
+     "prompt": "A request must finish within 300 ms and 250 ms are already spent. The price call normally gets 800 ms. What timeout should it get?",
+     "choices": [
+      "800 ms, its usual per-call setting",
+      "About 30 ms, the rest minus a reserve, or none",
+      "300 ms, the full deadline of the incoming request",
+      "No timeout at all, to give the call its best chance"
+     ],
+     "answer": 1,
+     "explanation": "Only 50 ms are left, and part of that is needed to build the answer, so the call gets the small remainder, or none at all when that is too little to be useful. 800 ms or 300 ms would outlive the caller, who has already given up, and no timeout means waiting for ever. Budgets flow from the caller's deadline."
+    },
+    {
+     "key": "fund:java/26-http-clients-timeouts-and-retries/q10",
+     "prompt": "How can a unit test check that a request is built with an 800 ms timeout without sending it?",
+     "choices": [
+      "Send it to a server that sleeps for 801 ms",
+      "Mock HttpClient and capture the arguments of its send call",
+      "It cannot: the timeout is private to the request",
+      "Assert request.timeout() equals Optional.of(800 ms)"
+     ],
+     "answer": 3,
+     "explanation": "HttpRequest exposes its timeout as an Optional, so building the request with an injected clock and asserting on that value tests the decision directly. A sleeping server makes the test slow and timing-dependent, and mocking HttpClient tests the mock. The value is public, so nothing is hidden."
+    }
+   ],
+   "flashcards": [
+    {
+     "key": "fund:java/26-http-clients-timeouts-and-retries/c01",
+     "front": "java.net.http with no request timeout",
+     "back": "Leaving it out equals an infinite duration, so a silent server holds the calling thread indefinitely."
+    },
+    {
+     "key": "fund:java/26-http-clients-timeouts-and-retries/c02",
+     "front": "connectTimeout versus request timeout",
+     "back": "One bounds establishing the connection, the other the wait for the response; set both per dependency."
+    },
+    {
+     "key": "fund:java/26-http-clients-timeouts-and-retries/c03",
+     "front": "Which methods may be retried as they are?",
+     "back": "GET, HEAD, OPTIONS, PUT and DELETE; a POST only with an idempotency key the server honours."
+    },
+    {
+     "key": "fund:java/26-http-clients-timeouts-and-retries/c04",
+     "front": "Connect timeout versus read timeout, for retries",
+     "back": "Before connecting nothing reached the server; after sending, the work may already have happened."
+    },
+    {
+     "key": "fund:java/26-http-clients-timeouts-and-retries/c05",
+     "front": "Which statuses are worth a retry?",
+     "back": "429, 502, 503 and 504; other 4xx answers will repeat, and a plain 500 is usually a bug."
+    },
+    {
+     "key": "fund:java/26-http-clients-timeouts-and-retries/c06",
+     "front": "Backoff with full jitter",
+     "back": "Double the ceiling each attempt up to a cap, and wait a random time under it so clients spread out."
+    },
+    {
+     "key": "fund:java/26-http-clients-timeouts-and-retries/c07",
+     "front": "Retry amplification",
+     "back": "Layers that each retry multiply their attempts; retry in one layer and budget the rest."
+    },
+    {
+     "key": "fund:java/26-http-clients-timeouts-and-retries/c08",
+     "front": "Deadline budgets",
+     "back": "Give each call the time left minus a reserve, capped; fail fast when too little remains, and pass the deadline on."
+    }
+   ],
+   "drillKeys": [
+    "fund-java/26-http-clients-timeouts-and-retries/01-when-to-retry",
+    "fund-java/26-http-clients-timeouts-and-retries/02-timeouts-from-a-deadline",
+    "fund-java/26-http-clients-timeouts-and-retries/03-bug-hunt-when-to-retry"
+   ]
   }
  ]
 }
