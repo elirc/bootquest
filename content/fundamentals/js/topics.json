@@ -3540,7 +3540,7 @@
       "`10`"
      ],
      "answer": 0,
-     "explanation": "The comparison is unknown for the three NULL rows, and WHERE keeps only rows where it is true: the five 'open' rows."
+     "explanation": "For the three NULL rows the comparison `status <> 'void'` is unknown, not true, and WHERE keeps only rows where the condition is true. That leaves the five 'open' rows. Answering 8 treats NULL as a value that differs from 'void'. When the NULL rows belong in the result, say so: `WHERE status <> 'void' OR status IS NULL`."
     },
     {
      "key": "fund:js/21-sql-queries-nulls-and-joins/q02",
@@ -3564,7 +3564,7 @@
       "OFFSET is applied before the sort, so page two is unsorted"
      ],
      "answer": 1,
-     "explanation": "The order among ties is undefined and may differ between two executions. A unique tiebreaker such as the id fixes it."
+     "explanation": "When many rows share one created_at, the sort leaves their order undefined, and two executions of the query may break the tie differently. A row can then show on page one and again on page two while another is skipped. Nothing is merged or rejected: the database may return ties in any order. Add a unique tiebreaker, `ORDER BY created_at, id`."
     },
     {
      "key": "fund:js/21-sql-queries-nulls-and-joins/q04",
@@ -3588,7 +3588,7 @@
       "`NULL` and `0`"
      ],
      "answer": 1,
-     "explanation": "The left join still produces one row for that customer, so COUNT(*) is 1. Its o.id is NULL, which COUNT(o.id) does not count."
+     "explanation": "The outer join keeps the customer and fills the order columns with NULL, so that customer still owns one joined row and COUNT(*) gives 1. COUNT(o.id) counts only non-NULL values, and the single o.id is NULL, so it gives 0. Neither aggregate answers NULL here. After an outer join, count related rows with COUNT(o.id)."
     },
     {
      "key": "fund:js/21-sql-queries-nulls-and-joins/q06",
@@ -3600,7 +3600,7 @@
       "WHERE accepts any expression; HAVING accepts column names"
      ],
      "answer": 2,
-     "explanation": "That is why HAVING can test an aggregate such as COUNT(o.id) < 3 and WHERE cannot."
+     "explanation": "WHERE is applied to each row before GROUP BY forms the groups, and HAVING is applied to the groups afterwards. That is why HAVING can test an aggregate such as `COUNT(o.id) < 3`, which does not exist yet while WHERE runs. The order is not the other way round, and neither clause is limited to one table or to bare column names."
     },
     {
      "key": "fund:js/21-sql-queries-nulls-and-joins/q07",
@@ -3612,7 +3612,7 @@
       "`600`"
      ],
      "answer": 2,
-     "explanation": "The two joins produce 3 x 2 = 6 rows, each carrying a 50: every payment is counted once per line item."
+     "explanation": "Each join multiplies the rows: the order's 3 line items times its 2 payments give 6 joined rows, and every one of them carries a payment of 50. SUM adds 50 six times, so the answer is 300 rather than the real 100. Every payment is counted once per line item, which is why each child table is aggregated before it is joined."
     },
     {
      "key": "fund:js/21-sql-queries-nulls-and-joins/q08",
@@ -3624,7 +3624,7 @@
       "Two genuine payments of the same amount would be counted once"
      ],
      "answer": 3,
-     "explanation": "DISTINCT removes equal values, not duplicated rows. Aggregate the payments per order in a subquery and join that result."
+     "explanation": "DISTINCT inside SUM removes equal values, not duplicated rows. If an order really has two payments of 50, `SUM(DISTINCT p.amount)` gives 50 and silently loses one of them. DISTINCT is not ignored inside aggregates, so the total does not stay inflated: it becomes wrong in the other direction. Aggregate the payments per order in a subquery and join that result instead."
     },
     {
      "key": "fund:js/21-sql-queries-nulls-and-joins/q09",
@@ -3719,7 +3719,7 @@
       "The equality test in a SELECT ignores letter case in every database"
      ],
      "answer": 0,
-     "explanation": "Check-then-insert is a race between requests. The constraint is evaluated by the database at write time, where both inserts meet."
+     "explanation": "Check-then-insert is a race between requests: two concurrent sign-ups can both run the SELECT, both see no row, and both insert. Only the database sees both writes, and the UNIQUE constraint refuses the second one at write time. Speed is not the issue, since a lookup on an indexed email is fast, and neither is the visibility of committed rows."
     },
     {
      "key": "fund:js/22-sql-schema-design-and-constraints/q03",
@@ -3755,7 +3755,7 @@
       "When PRAGMA foreign_keys is ON for the connection"
      ],
      "answer": 3,
-     "explanation": "Enforcement is a per-connection setting that the SQLite library leaves off by default. Some drivers, node:sqlite among them, switch it on for you."
+     "explanation": "SQLite parses REFERENCES but enforces it only while `PRAGMA foreign_keys = ON` is set on that connection, and the library leaves it off by default for backward compatibility. A STRICT table or an explicit transaction changes nothing here. Some drivers switch it on for you, node:sqlite among them, so check what your driver does instead of assuming."
     },
     {
      "key": "fund:js/22-sql-schema-design-and-constraints/q06",
@@ -3791,7 +3791,7 @@
       "`CREATE UNIQUE INDEX ... ON addresses (is_primary) WHERE customer_id IS NOT NULL`"
      ],
      "answer": 2,
-     "explanation": "The partial index contains only primary rows, so customer_id is unique among those and unrestricted elsewhere. UNIQUE (customer_id, is_primary) would also limit each customer to one non-primary address."
+     "explanation": "The partial index holds only the rows where is_primary = 1, so customer_id must be unique among primary rows and is unrestricted for the rest. A plain UNIQUE (customer_id, is_primary) would also allow just one non-primary address per customer. A CHECK on 0 or 1 limits the values in a row, not how many rows share them."
     },
     {
      "key": "fund:js/22-sql-schema-design-and-constraints/q09",
@@ -3862,7 +3862,7 @@
    "title": "SQL indexes and query plans",
    "level": "advanced",
    "summary": "What an index is and what it costs, reading SCAN versus SEARCH in a query plan, column order in composite indexes, covering indexes, and predicates an index cannot serve.",
-   "lesson": "## What an index is\n\nAn index is a sorted copy of some columns (a B-tree) with a pointer back to each row. Finding a value takes a few page reads, where a table without one must be read from end to end. The price is paid on writes: every insert, update and delete maintains every index on the table.\n\n## Reading the plan\n\nAsk the database what it will do. In SQLite, put `EXPLAIN QUERY PLAN` in front of the query:\n\n- `SCAN orders`: every row is read.\n- `SEARCH orders USING INDEX i (customer_id=?)`: the index is used to jump to the matching entries.\n- `USING COVERING INDEX`: the index holds every column the query reads, so the table is not visited.\n- `USE TEMP B-TREE FOR ORDER BY`: the rows are sorted in a separate step.\n\nPostgres uses `EXPLAIN` and reports Seq Scan, Index Scan and Index Only Scan. Note that `EXPLAIN ANALYZE` really executes the statement.\n\n**Failure story.** An orders page took 40 ms on a developer laptop with 500 rows and 9 seconds in production with six million. `WHERE customer_id = ?` had no index, and nobody had read the plan. Small tables hide scans.\n\n## Column order in a composite index\n\nAn index on `(customer_id, status, created_at)` is sorted by customer, then by status within a customer, then by date. It can seek on a leftmost prefix: `customer_id` alone, `customer_id` with `status`, or both plus a range on `created_at`. It cannot seek on `status` alone, just as a phone book sorted by surname does not help you find everyone called Maria.\n\nPut the columns compared with `=` first, then one column used for a range or for sorting. With equality on the leading columns the entries are already in `created_at` order, so `ORDER BY created_at` needs no sort step.\n\n## Sargable predicates\n\nThe index is ordered by the stored value. Wrap the column in a function or in arithmetic and that order is useless: `substr(created_at, 1, 10) = ?`, `lower(email) = ?`, `price * 2 > ?` and `LIKE '%son'` all scan. Keep the bare column on one side:\n\n```sql\nWHERE created_at >= ? AND created_at < ?   -- start of day, start of next day\n```\n\n**Failure story.** A \"sign-ups today\" tile ran `WHERE date(created_at) = ?`. The column was indexed, the plan still said SCAN, and the tile grew slower every week until the dashboard timed out. A half-open range fixed it with no schema change.\n\n## Do not over-index\n\nOne composite index serves several queries through its prefixes: `(a)` is redundant beside `(a, b)`. Check plans against production-sized data, because planners choose by table statistics and an empty table can get a different plan.\n",
+   "lesson": "## What an index is\n\nAn index is a sorted copy of some columns (a B-tree) with a pointer back to each row. Finding a value takes a few page reads, where a table without one must be read from end to end. The price is paid on writes: every insert, update and delete maintains every index on the table.\n\n## Reading the plan\n\nAsk the database what it will do. In SQLite, put `EXPLAIN QUERY PLAN` in front of the query:\n\n- `SCAN orders`: every row is read.\n- `SEARCH orders USING INDEX i (customer_id=?)`: the index is used to jump to the matching entries.\n- `USING COVERING INDEX`: the index holds every column the query reads, so the table is not visited.\n- `USE TEMP B-TREE FOR ORDER BY`: the rows are sorted in a separate step.\n\nPostgres uses `EXPLAIN` and reports Seq Scan, Index Scan and Index Only Scan. Note that `EXPLAIN ANALYZE` really executes the statement.\n\n**Failure story.** An orders page took 40 ms on a developer laptop with 500 rows and 9 seconds in production with six million. `WHERE customer_id = ?` had no index, and nobody had read the plan. Small tables hide scans.\n\n## Column order in a composite index\n\nAn index on `(customer_id, status, created_at)` is sorted by customer, then by status within a customer, then by date. It can seek on a leftmost prefix: `customer_id` alone, `customer_id` with `status`, or both plus a range on `created_at`. It cannot seek on `status` alone, just as a phone book sorted by surname does not help you find everyone called Maria.\n\nPut the columns compared with `=` first, then one column used for a range or for sorting. With equality on the leading columns the entries are already in `created_at` order, so `ORDER BY created_at` needs no sort step.\n\n## Sargable predicates\n\nThe index is ordered by the stored value. Wrap the column in a function or in arithmetic and that order is useless: `substr(created_at, 1, 10) = ?`, `lower(email) = ?`, `price * 2 > ?` and `LIKE '%son'` all scan. Keep the bare column on one side:\n\n```sql\nWHERE created_at >= ? AND created_at < ?   -- start of day, start of next day\n```\n\n**Failure story.** A \"sign-ups today\" tile ran `WHERE date(created_at) = ?`. The column was indexed, the plan still said SCAN, and the tile grew slower every week until the dashboard timed out. A half-open range fixed it with no schema change.\n\n## Do not over-index\n\nOne composite index serves several queries through its prefixes: `(a)` is redundant beside `(a, b)`. Each extra index costs work on every insert, update and delete, so before adding one, look for an existing index whose leftmost columns already cover the query. Check plans against production-sized data, because planners choose by table statistics and an empty table can get a different plan.\n",
    "quiz": [
     {
      "key": "fund:js/23-sql-indexes-and-query-plans/q01",
@@ -3898,7 +3898,7 @@
       "ORDER BY on a text column is skipped whenever an index is present"
      ],
      "answer": 1,
-     "explanation": "Fixing the two leading columns leaves a contiguous run of entries ordered by the third. The database reads that run backwards for DESC."
+     "explanation": "Fixing customer_id and status by equality leaves one contiguous run of index entries, and inside that run the entries are sorted by created_at. The database walks the run backwards for DESC, so the rows arrive already in order and the plan shows no sort step. The index keeps no separate newest-first copy, and the table rows themselves are not kept in created_at order."
     },
     {
      "key": "fund:js/23-sql-indexes-and-query-plans/q04",
@@ -3922,7 +3922,7 @@
       "`upper(substr(name, 1, 1)) = 'O'`"
      ],
      "answer": 2,
-     "explanation": "The range compares the bare column, so it maps to one contiguous stretch of the index. The others hide the column behind a function or start with a wildcard."
+     "explanation": "The range compares the bare column, so it maps to one contiguous stretch of the sorted index that the database can seek into. `lower(name)` and `upper(substr(...))` hide the column inside a function, so a plain index on name cannot seek for them, and `LIKE '%son'` starts with a wildcard, which leaves no prefix to seek to. SQLite's plan shows SEARCH for the range and SCAN for the other three."
     },
     {
      "key": "fund:js/23-sql-indexes-and-query-plans/q06",
@@ -3946,7 +3946,7 @@
       "Every insert, update and delete must also maintain that index"
      ],
      "answer": 3,
-     "explanation": "Reads that do not use the index ignore it. Writes cannot: each one has to keep every index in step with the table."
+     "explanation": "Every write has to keep each index of the table in step: an insert adds an entry, a delete removes one, and an update of an indexed column moves one. Reads that do not use the new index simply ignore it, and primary-key lookups do not slow down as indexes are added. On a busy table that extra work on every write is the price."
     },
     {
      "key": "fund:js/23-sql-indexes-and-query-plans/q08",
@@ -3958,7 +3958,7 @@
       "It is redundant: SQLite merges indexes that share a first column"
      ],
      "answer": 0,
-     "explanation": "A leftmost prefix of a composite index works like an index on those columns alone, so the single-column one only adds write cost."
+     "explanation": "A leftmost prefix of a composite index works like an index on those columns alone, so `(tenant_id, status)` already serves `WHERE tenant_id = ?` and the single-column index only adds write cost. A two-column index can seek on its first column by itself, and SQLite does not merge indexes that share a first column: dropping the redundant one is your job."
     },
     {
      "key": "fund:js/23-sql-indexes-and-query-plans/q09",
@@ -3970,7 +3970,7 @@
       "`(tenant_id, id)`"
      ],
      "answer": 1,
-     "explanation": "An index is sorted by its first column, then the next: `(tenant_id, created_at)` seeks to one tenant and then ranges over its times, and its prefix also serves tenant_id alone. With created_at first, the equality on tenant_id cannot narrow the seek."
+     "explanation": "An index is sorted by its first column, then the next: `(tenant_id, created_at)` seeks to one tenant and then ranges over its times, and its prefix also serves tenant_id alone. With created_at first, the equality on tenant_id cannot narrow the seek. `(tenant_id, id)` serves the tenant lookup but not the time range."
     },
     {
      "key": "fund:js/23-sql-indexes-and-query-plans/q10",
@@ -4029,7 +4029,7 @@
    "title": "SQL transactions and application code",
    "level": "advanced",
    "summary": "Atomic multi-statement writes with rollback, lost updates and the versioned UPDATE, bound parameters against injection, upsert, and keyset pagination written in SQL.",
-   "lesson": "## Atomicity\n\nA transaction turns several statements into one unit: `BEGIN`, the statements, `COMMIT`. If anything fails, `ROLLBACK` undoes all of it. In application code that is a try/catch: commit at the end of the try, roll back and rethrow in the catch.\n\n**Failure story.** A wallet transfer ran the debit and the credit as two separate statements. A deploy restarted the process between them. Money left one account and arrived nowhere, and support reconciled balances by hand for a week.\n\nAn `UPDATE` that matches no row is not an error. It reports zero changed rows, so check the count, or a transfer to a mistyped account \"succeeds\". Keep transactions short and never call another service inside one.\n\n## Lost updates\n\nRead, compute, write back loses updates: two requests read stock 5 and both write 4. Three repairs:\n\n- Let the database do the arithmetic: `SET stock = stock - 1 WHERE id = ? AND stock > 0`.\n- Optimistic: `UPDATE docs SET title = ?, version = version + 1 WHERE id = ? AND version = ?`. Zero changed rows means someone else wrote first: answer 409.\n- Pessimistic: Postgres locks the row with `SELECT ... FOR UPDATE` until commit. SQLite has no such clause; it allows one writer at a time, and `BEGIN IMMEDIATE` takes the write lock up front.\n\n## Parameters, never string building\n\nGluing input into SQL lets input become SQL. Send the statement with placeholders (`?`, or `$1` in Postgres) and the values separately; a value can then never change the statement's structure.\n\n**Failure story.** A product search concatenated the term into a query that ended in `AND tenant_id = 7`. A visitor typed a quote followed by a comment marker, the tenant filter was commented out, and the page listed every customer's products.\n\nParameters carry values only. A column name or a sort direction must come from an allow-list in code. Inside a `LIKE` pattern, a `%` or `_` typed by the user is still a wildcard: escape it and declare the escape character with `ESCAPE`.\n\n## Upsert\n\n\"Insert, or update when it exists\" written as a select followed by an insert is a race. Use one statement, which needs a unique constraint on the conflict column:\n\n```sql\nINSERT INTO settings (user_id, theme) VALUES (?, ?)\nON CONFLICT (user_id) DO UPDATE SET theme = excluded.theme;\n```\n\nPostgres and SQLite share this syntax; MySQL writes `ON DUPLICATE KEY UPDATE`.\n\n## Keyset pagination in SQL\n\n```sql\nSELECT id, created_at FROM posts\nWHERE (created_at, id) < (?, ?)\nORDER BY created_at DESC, id DESC LIMIT 20;\n```\n\nThe row comparison continues exactly after the last row of the previous page, and an index on `(created_at, id)` seeks straight to it. `OFFSET 100000` reads and throws away 100,000 rows first.\n",
+   "lesson": "## Atomicity\n\nA transaction turns several statements into one unit: `BEGIN`, the statements, `COMMIT`. If anything fails, `ROLLBACK` undoes all of it. In application code that is a try/catch: commit at the end of the try, roll back and rethrow in the catch.\n\n**Failure story.** A wallet transfer ran the debit and the credit as two separate statements. A deploy restarted the process between them. Money left one account and arrived nowhere, and support reconciled balances by hand for a week.\n\nAn `UPDATE` that matches no row is not an error. It reports zero changed rows, so check the count, or a transfer to a mistyped account \"succeeds\". Keep transactions short and never call another service inside one.\n\n## Lost updates\n\nRead, compute, write back loses updates: two requests read stock 5 and both write 4. Three repairs:\n\n- Let the database do the arithmetic: `SET stock = stock - 1 WHERE id = ? AND stock > 0`.\n- Optimistic: `UPDATE docs SET title = ?, version = version + 1 WHERE id = ? AND version = ?`. Zero changed rows means someone else wrote first: answer 409.\n- Pessimistic: Postgres locks the row with `SELECT ... FOR UPDATE` until commit. SQLite has no such clause; it allows one writer at a time, and `BEGIN IMMEDIATE` takes the write lock up front.\n\n## Parameters, never string building\n\nGluing input into SQL lets input become SQL. Send the statement with placeholders (`?`, or `$1` in Postgres) and the values separately; a value can then never change the statement's structure.\n\n**Failure story.** A product search concatenated the term into a query that ended in `AND tenant_id = 7`. A visitor typed a quote followed by a comment marker, the tenant filter was commented out, and the page listed every customer's products.\n\nParameters carry values only. A column name or a sort direction must come from an allow-list in code. Inside a `LIKE` pattern, a `%` or `_` typed by the user is still a wildcard: escape it and declare the escape character with `ESCAPE`.\n\n## Upsert\n\n\"Insert, or update when it exists\" written as a select followed by an insert is a race. Use one statement, which needs a unique constraint on the conflict column:\n\n```sql\nINSERT INTO settings (user_id, theme) VALUES (?, ?)\nON CONFLICT (user_id) DO UPDATE SET theme = excluded.theme;\n```\n\nPostgres and SQLite share this syntax; MySQL writes `ON DUPLICATE KEY UPDATE`.\n\n## Keyset pagination in SQL\n\n```sql\nSELECT id, created_at FROM posts\nWHERE (created_at, id) < (?, ?)\nORDER BY created_at DESC, id DESC LIMIT 20;\n```\n\nThe row comparison continues exactly after the last row of the previous page, and an index on `(created_at, id)` seeks straight to it. `OFFSET 100000` reads and throws away 100,000 rows first. The id in the pair breaks ties, so rows that share a timestamp are neither repeated nor skipped.\n",
    "quiz": [
     {
      "key": "fund:js/24-sql-transactions-and-app-code/q01",
@@ -4041,7 +4041,7 @@
       "Neither change, because statements on one connection share a unit"
      ],
      "answer": 2,
-     "explanation": "Without an explicit transaction every statement is its own transaction. Wrapping both in BEGIN ... COMMIT makes the pair all-or-nothing."
+     "explanation": "Without an explicit transaction every statement is its own transaction and commits when it finishes. The debit had already committed when the process died, so it stays, and the credit never ran. Nothing replays the second statement, and a dropped connection only undoes work that was not committed yet. Wrapping both in BEGIN ... COMMIT makes the pair all-or-nothing."
     },
     {
      "key": "fund:js/24-sql-transactions-and-app-code/q02",
@@ -4053,7 +4053,7 @@
       "It succeeds and reports one changed row"
      ],
      "answer": 1,
-     "explanation": "Matching nothing is a valid outcome for an UPDATE. The caller has to read the changed-row count to notice."
+     "explanation": "Matching nothing is a valid outcome for an UPDATE, so the statement succeeds with zero changed rows. There is no constraint error to roll back, and an UPDATE never inserts the missing account. The caller has to read the changed-row count, `changes` in node:sqlite, to notice that the id did not exist and answer 404."
     },
     {
      "key": "fund:js/24-sql-transactions-and-app-code/q03",
@@ -4065,7 +4065,7 @@
       "Stock is 4: the second write was rejected"
      ],
      "answer": 0,
-     "explanation": "Both writes succeed and store the same stale result. `SET stock = stock - 1` makes the database do the arithmetic on the current value."
+     "explanation": "Both requests computed 5 - 1 from the same stale read and both write 4, so both writes succeed and one decrement is lost. Nothing rejects the second write and the two do not cancel out. `SET stock = stock - 1` makes the database do the arithmetic on the current value, and the same two requests then leave 3."
     },
     {
      "key": "fund:js/24-sql-transactions-and-app-code/q04",
@@ -4077,7 +4077,7 @@
       "409 Conflict: the row changed since it was read"
      ],
      "answer": 3,
-     "explanation": "The id matched and the version did not, so another writer got there first. The client must re-read and decide what to do with its edit."
+     "explanation": "The id matched and the version did not, so another writer saved first and this edit was based on a stale copy. 409 Conflict tells the client to re-read and decide what to do with its change. A 404 would be false because the row exists, and a 200 would claim the edit was saved when nothing was written."
     },
     {
      "key": "fund:js/24-sql-transactions-and-app-code/q05",
@@ -4089,7 +4089,7 @@
       "The value is encrypted before it is compared with the column"
      ],
      "answer": 1,
-     "explanation": "The statement is parsed with a placeholder in it; the value is only ever data. Nothing is stripped, so a name like O'Brien is stored exactly as typed."
+     "explanation": "The statement is parsed with a placeholder in it, and the value is bound afterwards as data, so its text never reaches the SQL parser. Nothing strips quotes or comment markers and no keyword filter runs: a name like O'Brien, or `x' OR '1'='1`, is stored and compared exactly as typed."
     },
     {
      "key": "fund:js/24-sql-transactions-and-app-code/q06",
@@ -4113,7 +4113,7 @@
       "A SELECT that locks the matching row before the insert"
      ],
      "answer": 0,
-     "explanation": "The conflict target must be something the database can conflict on: a unique index. Without one the statement is rejected."
+     "explanation": "The conflict target must be something the database can conflict on: a unique index or the primary key on user_id. Without one SQLite rejects the statement because the ON CONFLICT clause matches no PRIMARY KEY or UNIQUE constraint. No transaction, trigger or locking SELECT is needed, since the upsert is one atomic statement."
     },
     {
      "key": "fund:js/24-sql-transactions-and-app-code/q08",
@@ -4208,7 +4208,7 @@
       "Node throws a concurrency error when the second read starts"
      ],
      "answer": 2,
-     "explanation": "Both reads happen before either write, so both see a free seat. Nothing in an unconditional write notices the other request."
+     "explanation": "With two requests in flight, both reads can finish before either write, so both see a free seat and both checks pass. An unconditional write does not look at what is stored, so the second one overwrites the first and each request reports success. Nothing makes the second request wait, and no duplicate-key error fires unless the schema itself has a unique constraint."
     },
     {
      "key": "fund:js/25-lost-updates-and-optimistic-concurrency/q02",
@@ -4232,7 +4232,7 @@
       "Nothing was written: the row is gone or its version has moved on"
      ],
      "answer": 3,
-     "explanation": "The WHERE clause matched no row, so no row changed. The handler must report that instead of answering as if the save worked."
+     "explanation": "The WHERE clause matched no row, so nothing was written: the row was deleted, or another save moved its version on. A count of 0 is not a deadlock rollback or an overflow, and an identical body would still match and count as one changed row. The handler must report the conflict instead of answering as if the save worked."
     },
     {
      "key": "fund:js/25-lost-updates-and-optimistic-concurrency/q04",
@@ -4244,7 +4244,7 @@
       "503 Service Unavailable, so the client resends the same body later"
      ],
      "answer": 1,
-     "explanation": "The edit was made against data that has changed. Applying it would erase two other saves; resending the same body can never succeed."
+     "explanation": "The edit was made against version 3, and the row has had two other saves since. Applying it on top of version 5 would silently erase those saves, and resending the same body later can never succeed, so a 503 misleads the client too. 409 Conflict with the current row lets the user redo the edit on fresh data."
     },
     {
      "key": "fund:js/25-lost-updates-and-optimistic-concurrency/q05",
@@ -4256,7 +4256,7 @@
       "It lets the last writer win, expecting edits to overlap rarely"
      ],
      "answer": 1,
-     "explanation": "The optimism is about conflicts being rare, so nobody waits on a lock. The write still verifies, and a mismatch is reported."
+     "explanation": "The optimism is about conflicts being rare: nobody takes a lock while the user edits, so nobody waits. The write still verifies the version and reports a mismatch, which is what separates it from last writer wins, where the later save silently overwrites. Locking the row early, before the edit, is the pessimistic approach."
     },
     {
      "key": "fund:js/25-lost-updates-and-optimistic-concurrency/q06",
@@ -4292,7 +4292,7 @@
       "No, but only because the second read may be served from a stale cache"
      ],
      "answer": 2,
-     "explanation": "A second check only narrows the gap. The gap closes when the check and the write are one conditional operation."
+     "explanation": "A second check only narrows the gap: another request can still write between that read and the write, and the unconditional write then overwrites it. Two reads that return the same version number prove nothing about what happens after them. The gap closes only when the check and the write are one conditional statement, such as `UPDATE ... WHERE version = ?`."
     },
     {
      "key": "fund:js/25-lost-updates-and-optimistic-concurrency/q09",
@@ -4375,7 +4375,7 @@
       "The server rolled the order back when the connection closed"
      ],
      "answer": 1,
-     "explanation": "A lost request and a lost response look the same from outside. That uncertainty is the reason clients retry and servers must expect repeats."
+     "explanation": "From outside, a request lost on its way to the server and a response lost on its way back look the same: no answer. The order may or may not exist, and a closed connection does not roll back work the server already committed. That uncertainty is the reason clients retry, and the reason servers must expect the same request twice."
     },
     {
      "key": "fund:js/26-idempotent-writes/q02",
@@ -4399,7 +4399,7 @@
       "Delete the first order, then process the request again"
      ],
      "answer": 0,
-     "explanation": "The retry must look to the client exactly like the answer it missed: same order, no second effect."
+     "explanation": "The retry must look to the client exactly like the answer it missed: the saved status and body for the same order, and no second effect. Creating a second order is the double charge the key exists to prevent, and a 409 would punish a client for doing the right thing after a timeout."
     },
     {
      "key": "fund:js/26-idempotent-writes/q04",
@@ -4411,7 +4411,7 @@
       "Overwrite the stored order with the fields of the new body"
      ],
      "answer": 2,
-     "explanation": "A retry repeats the same request. A different body under an old key is a client bug, and replaying or overwriting would hide it."
+     "explanation": "A retry repeats the same request, so one key with a different body is a client bug, for example a key generated once and reused for the next order. Replaying the first response would hide that bug behind an answer about another order, and overwriting the stored order would change data the first caller already relies on. 422 names the problem."
     },
     {
      "key": "fund:js/26-idempotent-writes/q05",
@@ -4435,7 +4435,7 @@
       "Otherwise Node exits on an unhandled rejection inside the map"
      ],
      "answer": 1,
-     "explanation": "A settled promise never changes. If the map keeps handing it out, a failure that was transient becomes permanent for that key."
+     "explanation": "A settled promise never changes: once the first insert rejects, that promise stays rejected, and reading it again does not re-run the insert. If the map keeps handing it out, a failure that was transient becomes permanent for that key. Delete the entry when the promise settles, in a finally block, so the next retry starts a fresh attempt."
     },
     {
      "key": "fund:js/26-idempotent-writes/q07",
@@ -4447,7 +4447,7 @@
       "As a duplicate, because that id was handled already"
      ],
      "answer": 3,
-     "explanation": "The id names the event; the counter only describes the delivery. Comparing whole payloads would process every redelivery again."
+     "explanation": "The event id names the event, and the attempt counter only describes this delivery, so the payload differs while the event is the same one. Treating it as new, or as a newer version, would process the event twice. An error such as 400 tells the provider the delivery failed, and most providers then retry it. Record handled ids and answer 2xx to a duplicate."
     },
     {
      "key": "fund:js/26-idempotent-writes/q08",
@@ -4459,7 +4459,7 @@
       "`UPDATE stock SET qty = qty - 1 WHERE sku = 'A1'`"
      ],
      "answer": 0,
-     "explanation": "Setting a fixed value gives the same row however often it runs. The increments apply twice, and the insert adds a second shipment."
+     "explanation": "Setting a fixed value gives the same row however often it runs, so the status update is safe to repeat. The balance and stock statements apply their arithmetic again on every run, and the INSERT adds a second shipment row for order 7. A queue that delivers twice needs statements like the first one, or a dedupe key."
     },
     {
      "key": "fund:js/26-idempotent-writes/q09",
@@ -4530,7 +4530,7 @@
    "title": "Pagination that does not drift",
    "level": "advanced",
    "summary": "Why offset pages repeat and skip rows, keyset pagination on (createdAt, id), opaque cursors treated as untrusted input, and hasMore without a count query.",
-   "lesson": "## Offset pages drift\n\n`LIMIT 20 OFFSET 40` means \"skip 40 rows of whatever the result is right now\". The result moves between requests.\n\n**Story 1: the duplicated post.** A feed is sorted newest first. A user loads page 1. Three new posts arrive. Page 2 (`OFFSET 20`) now begins three rows earlier in the old numbering, so the last three posts of page 1 appear again.\n\n**Story 2: the skipped invoice.** An export job walks invoices with offsets while an admin deletes one from page 1. Every later row moves up by one, so the first row of page 2 slides into page 1's range and is never exported. Nobody notices until the totals disagree.\n\nOffsets are also slow deep down: the database produces and throws away every skipped row.\n\n## Keyset pagination\n\nInstead of a position, remember the **last row you saw** and ask for rows strictly after it in the sort order:\n\n```sql\nSELECT * FROM posts\nWHERE created_at < :c OR (created_at = :c AND id < :i)\nORDER BY created_at DESC, id DESC\nLIMIT 21\n```\n\nInserts above the cursor and deletes anywhere cannot change what \"after this row\" means, so there are no duplicates and no gaps. With an index on `(created_at, id)` the database seeks straight to the cursor.\n\nTwo rules make it correct:\n\n- The sort key must be **unique**. `created_at` alone is not: rows sharing a timestamp straddle a page boundary and get skipped (with `<`) or repeated (with `<=`). Add `id` as a tie-breaker and compare the pair.\n- Compare **values**; do not look the cursor row up. That row may have been deleted since, and the comparison still works.\n\nThe price: no \"jump to page 7\", only next and previous.\n\n## Opaque cursors\n\nSend the position as one string, for example base64url of `{\"createdAt\":…,\"id\":…}`. Opaque means clients must not build or parse it, so you may change its contents later. It does **not** mean secret or trusted: base64 is readable, and a cursor is user input. Decode defensively. Bad base64, bad JSON and wrong types all become a 400, never a 500, and you copy out only the fields you expect, so extras are dropped.\n\n## hasMore without COUNT\n\n`SELECT COUNT(*)` on every page request scans the table for a number that is stale on arrival. Instead fetch **one row more than the page size**: if the extra row comes back there is another page, and you drop it before responding. Checking \"did I get a full page\" is wrong when the last page is exactly full.\n\n## Clamp the limit\n\nWhatever the client asks for, the server decides: a default when `limit` is missing, a minimum of 1, and a maximum such as 100.\n",
+   "lesson": "## Offset pages drift\n\n`LIMIT 20 OFFSET 40` means \"skip 40 rows of whatever the result is right now\". The result moves between requests.\n\n**Story 1: the duplicated post.** A feed is sorted newest first. A user loads page 1. Three new posts arrive. Page 2 (`OFFSET 20`) now begins three rows earlier in the old numbering, so the last three posts of page 1 appear again.\n\n**Story 2: the skipped invoice.** An export job walks invoices with offsets while an admin deletes one from page 1. Every later row moves up by one, so the first row of page 2 slides into page 1's range and is never exported. Nobody notices until the totals disagree.\n\nOffsets are also slow deep down: the database produces and throws away every skipped row.\n\n## Keyset pagination\n\nInstead of a position, remember the **last row you saw** and ask for rows strictly after it in the sort order:\n\n```sql\nSELECT * FROM posts\nWHERE created_at < :c OR (created_at = :c AND id < :i)\nORDER BY created_at DESC, id DESC\nLIMIT 21\n```\n\nInserts above the cursor and deletes anywhere cannot change what \"after this row\" means, so there are no duplicates and no gaps. With an index on `(created_at, id)` the database seeks straight to the cursor.\n\nTwo rules make it correct:\n\n- The sort key must be **unique**. `created_at` alone is not: rows sharing a timestamp straddle a page boundary and get skipped (with `<`) or repeated (with `<=`). Add `id` as a tie-breaker and compare the pair.\n- Compare **values**; do not look the cursor row up. That row may have been deleted since, and the comparison still works.\n\nThe price: no \"jump to page 7\", only next and previous.\n\n## Opaque cursors\n\nSend the position as one string, for example base64url of `{\"createdAt\":…,\"id\":…}`. Opaque means clients must not build or parse it, so you may change its contents later. It does **not** mean secret or trusted: base64 is readable, and a cursor is user input. Decode defensively. Bad base64, bad JSON and wrong types all become a 400, never a 500, and you copy out only the fields you expect, so extras are dropped.\n\n## hasMore without COUNT\n\n`SELECT COUNT(*)` on every page request scans the table for a number that is stale on arrival. Instead fetch **one row more than the page size**: if the extra row comes back there is another page, and you drop it before responding. Checking \"did I get a full page\" is wrong when the last page is exactly full.\n\n## Clamp the limit\n\nWhatever the client asks for, the server decides: a default when `limit` is missing, a minimum of 1, and a maximum such as 100. That keeps one request from asking the database for a million rows, and it keeps the page size a decision of the API rather than of the caller.\n",
    "quiz": [
     {
      "key": "fund:js/27-pagination-that-does-not-drift/q01",
@@ -4566,7 +4566,7 @@
       "It is returned, because ties are broken by rowid"
      ],
      "answer": 2,
-     "explanation": "The second row's timestamp equals the cursor's, so a strict comparison excludes it. Using <= instead would repeat the first row."
+     "explanation": "The second row's timestamp equals the cursor's, so the strict `created_at < ?` excludes it, and no later page asks for that timestamp again: the row is skipped for good. It is not returned twice or moved to the end, and nothing breaks the tie by rowid unless the ORDER BY says so. Switching to <= would repeat the first row instead. Add the id as a tie-breaker."
     },
     {
      "key": "fund:js/27-pagination-that-does-not-drift/q04",
@@ -4578,7 +4578,7 @@
       "It must order rows uniquely, such as time plus id"
      ],
      "answer": 3,
-     "explanation": "Any columns work as long as no two rows compare equal. A tie-breaker such as the id makes a non-unique column safe."
+     "explanation": "Any columns work as long as no two rows compare equal in the sort, because the cursor has to name one exact position. A timestamp alone is not enough, whatever its precision, since two rows can still share it, and nothing requires a single auto-increment column. A tie-breaker such as the id makes a non-unique column safe."
     },
     {
      "key": "fund:js/27-pagination-that-does-not-drift/q05",
@@ -4602,7 +4602,7 @@
       "It never expires, so clients may keep it indefinitely"
      ],
      "answer": 2,
-     "explanation": "Opaque is a contract about who may interpret the string. Base64 is readable by anyone, and whatever comes back is still client input."
+     "explanation": "Opaque is a contract about who may interpret the string: clients pass it back untouched, so the server may change its format at any time. It is not encryption, since base64 is readable by anyone, and it does not let the server trust it: whatever comes back is client input and is validated like any other. Cursors can still expire."
     },
     {
      "key": "fund:js/27-pagination-that-does-not-drift/q07",
@@ -4614,7 +4614,7 @@
       "404, because the page the cursor points at does not exist"
      ],
      "answer": 0,
-     "explanation": "A malformed cursor is a bad request. A 500 blames the server, and silently restarting sends a buggy client round the first page forever."
+     "explanation": "A cursor that does not decode is malformed client input, so the answer is 400 Bad Request. A 500 blames the server for the client's mistake, and quietly serving the first page sends a buggy client round the same page forever. A 404 suggests that data is gone when the request itself was wrong."
     },
     {
      "key": "fund:js/27-pagination-that-does-not-drift/q08",
@@ -4626,7 +4626,7 @@
       "Ask for 21 rows and see whether the extra one arrives"
      ],
      "answer": 3,
-     "explanation": "The extra row answers the question inside the same query. A full page of exactly 20 says nothing about whether a 21st row exists."
+     "explanation": "Fetching one row more than the page size answers the question inside the same query: if a 21st row arrives there is more, and it is dropped from the response. A full page of exactly 20 says nothing about whether a 21st exists, and the last id plus one may be a deleted row while later ids still exist."
     },
     {
      "key": "fund:js/27-pagination-that-does-not-drift/q09",
@@ -4638,7 +4638,7 @@
       "`WHERE price > 20 OR id > 7`"
      ],
      "answer": 1,
-     "explanation": "The row comparison means price above 20, or price 20 with an id above 7, which is exactly \"after the last row\". The AND forms skip higher-priced rows with small ids, and the OR form brings back cheaper rows with large ids."
+     "explanation": "The row comparison means price above 20, or price 20 with an id above 7, which is exactly \"after the last row\". The tempting AND forms skip higher-priced rows with small ids, and the OR form brings back cheaper rows with large ids."
     },
     {
      "key": "fund:js/27-pagination-that-does-not-drift/q10",
@@ -4697,7 +4697,7 @@
    "title": "Authorization and tenant scoping",
    "level": "advanced",
    "summary": "Authentication versus authorization, IDOR, tenant-scoped repositories, 404 versus 403, mass assignment and allow-lists, and a deny-by-default permission function.",
-   "lesson": "## Authentication is not authorization\n\nAuthentication answers \"who is this?\". Authorization answers \"may they do THIS to THAT?\". A valid session proves only the first. Most serious CRUD breaches are a logged-in user reaching data that belongs to someone else.\n\n**Story 1: the invoice in the URL.** `GET /invoices/1041` runs `SELECT * FROM invoices WHERE id = ?`. The route requires a login, so it feels protected. A customer changes 1041 to 1042 and reads another company's invoice. This is an **IDOR** (insecure direct object reference): the id is treated as proof of access. Unguessable UUIDs slow the attack down; they are not a permission check.\n\n**Story 2: the forgotten write path.** The team scoped every list and detail query by tenant. `DELETE /invoices/:id` was written later and deletes by id alone. The reads were safe, so nobody looked again.\n\n## Tenant scoping\n\nIn a multi-tenant app every query carries the tenant: `WHERE id = ? AND tenant_id = ?`. The tenant id comes from the **session**, never from the body, the query string or a header the client controls. Do not rely on each handler remembering. Build a repository bound to one tenant, so that unscoped access is not there to call: it filters reads, updates and deletes, stamps the tenant on creates, and refuses to change `tenant_id`.\n\n## 404 or 403\n\nWhen a row exists but belongs to another tenant, answer **404**, exactly as if it did not exist. A 403 confirms that the id is real and lets an attacker map your data. Use **403** when the caller may know the resource exists but lacks the role: a viewer pressing Delete. **401** means not logged in at all.\n\n## Mass assignment\n\n`db.update(id, req.body)` lets a client send fields the form never showed: `role`, `tenantId`, `ownerId`, `price`. Copy an **allow-list** of fields per role. A deny-list (\"everything except role\") fails the day someone adds a sensitive column. Unknown roles get nothing.\n\n## Writing the rule\n\nKeep the decision in one function, `can(user, action, resource)`, and check in this order:\n\n1. Same tenant? If not, deny, whatever the role. An admin is an admin of *their* tenant.\n2. Does the role allow the action? For example: viewers read; members also edit what they own; admins edit and delete anything in the tenant.\n3. Otherwise **deny by default**: unknown actions and unknown roles get false.\n\nTest both directions. A rule that refuses everything passes every \"must be denied\" test, so also assert the cases that must be allowed, or the fix for a leak becomes an outage. And enforce on the server: hiding a button is not access control.\n",
+   "lesson": "## Authentication is not authorization\n\nAuthentication answers \"who is this?\". Authorization answers \"may they do THIS to THAT?\". A valid session proves only the first. Most serious CRUD breaches are a logged-in user reaching data that belongs to someone else.\n\n**Story 1: the invoice in the URL.** `GET /invoices/1041` runs `SELECT * FROM invoices WHERE id = ?`. The route requires a login, so it feels protected. A customer changes 1041 to 1042 and reads another company's invoice. This is an **IDOR** (insecure direct object reference): the id is treated as proof of access. Unguessable UUIDs slow the attack down; they are not a permission check.\n\n**Story 2: the forgotten write path.** The team scoped every list and detail query by tenant. `DELETE /invoices/:id` was written later and deletes by id alone. The reads were safe, so nobody looked again.\n\n## Tenant scoping\n\nIn a multi-tenant app every query carries the tenant: `WHERE id = ? AND tenant_id = ?`. The tenant id comes from the **session**, never from the body, the query string or a header the client controls. Do not rely on each handler remembering. Build a repository bound to one tenant, so that unscoped access is not there to call: it filters reads, updates and deletes, stamps the tenant on creates, and refuses to change `tenant_id`.\n\n## 404 or 403\n\nWhen a row exists but belongs to another tenant, answer **404**, exactly as if it did not exist. A 403 confirms that the id is real and lets an attacker map your data. Use **403** when the caller may know the resource exists but lacks the role: a viewer pressing Delete. **401** means not logged in at all.\n\n## Mass assignment\n\n`db.update(id, req.body)` lets a client send fields the form never showed: `role`, `tenantId`, `ownerId`, `price`. Copy an **allow-list** of fields per role. A deny-list (\"everything except role\") fails the day someone adds a sensitive column. Unknown roles get nothing. Server-owned fields such as `id`, `createdAt` and `version` are never copied from a body at all.\n\n## Writing the rule\n\nKeep the decision in one function, `can(user, action, resource)`, and check in this order:\n\n1. Same tenant? If not, deny, whatever the role. An admin is an admin of *their* tenant.\n2. Does the role allow the action? For example: viewers read; members also edit what they own; admins edit and delete anything in the tenant.\n3. Otherwise **deny by default**: unknown actions and unknown roles get false.\n\nTest both directions. A rule that refuses everything passes every \"must be denied\" test, so also assert the cases that must be allowed, or the fix for a leak becomes an outage. And enforce on the server: hiding a button is not access control.\n",
    "quiz": [
     {
      "key": "fund:js/28-authorization-and-tenant-scoping/q01",
@@ -4709,7 +4709,7 @@
       "The id belongs in the request body rather than the URL"
      ],
      "answer": 2,
-     "explanation": "The login proves who is calling, not that this invoice is theirs. Nothing in the query ties the row to the caller."
+     "explanation": "The login proves who is calling, not that this invoice is theirs. Nothing in the query ties the row to the caller's tenant, so any logged-in user who knows or guesses an id reads it. LIMIT 1 changes nothing, because an id already matches one row, and moving the id into the body adds no check. Scope the query with the tenant from the session."
     },
     {
      "key": "fund:js/28-authorization-and-tenant-scoping/q02",
@@ -4733,7 +4733,7 @@
       "No, an id that leaks still opens the row without a check"
      ],
      "answer": 3,
-     "explanation": "Ids travel in URLs, logs, emails and screenshots. Making them hard to guess slows enumeration, but the missing permission check is still missing."
+     "explanation": "Ids travel in URLs, logs, emails, exports and screenshots, so a UUID leaks like any other id. Making ids hard to guess slows enumeration, and generating them on the server does not change that, but the missing permission check is still missing: whoever holds the id opens the row. UUIDs are fine as keys, and speed is not the point."
     },
     {
      "key": "fund:js/28-authorization-and-tenant-scoping/q04",
@@ -4745,7 +4745,7 @@
       "400, because the id is not valid for this user"
      ],
      "answer": 1,
-     "explanation": "Any answer that differs from the one for an unused id confirms that the invoice exists, which lets a caller map other tenants' data."
+     "explanation": "A 404 is exactly what the caller gets for an unused id, so it confirms nothing. A 403 says the invoice exists and is protected, and any answer that differs from the unused-id answer lets a caller map other tenants' data by probing ids. A 401 is wrong too: the session is valid, it just does not reach this row."
     },
     {
      "key": "fund:js/28-authorization-and-tenant-scoping/q05",
@@ -4757,7 +4757,7 @@
       "409, because the document is still in use elsewhere"
      ],
      "answer": 2,
-     "explanation": "The caller is logged in and already knows the document exists, so there is nothing to hide. What is missing is the permission."
+     "explanation": "The caller is logged in and already knows the document exists, because they can read it, so there is nothing to hide and a 404 would only confuse. What is missing is the delete permission of the viewer role, which is what 403 says. A 401 would ask for a login that is already there, and the document being in use plays no part."
     },
     {
      "key": "fund:js/28-authorization-and-tenant-scoping/q06",
@@ -4769,7 +4769,7 @@
       "It stops working as soon as the body contains nested JSON"
      ],
      "answer": 1,
-     "explanation": "A deny-list is open by default, so every new column is exposed until somebody remembers to add it. An allow-list is closed by default."
+     "explanation": "A deny-list is open by default: every column added later, such as an isAdmin flag or a credit limit, is writable from the request body until somebody remembers to list it. An allow-list is closed by default, so a forgotten field is merely not saved. Speed has nothing to do with it, and neither list rejects harmless form fields by itself."
     },
     {
      "key": "fund:js/28-authorization-and-tenant-scoping/q07",
@@ -4781,7 +4781,7 @@
       "Deny, because the tenant check precedes any role"
      ],
      "answer": 3,
-     "explanation": "A role is granted inside one tenant. Checking the tenant first means no role, however powerful, reaches across the boundary."
+     "explanation": "A role is granted inside one tenant, so the admin of tenant A holds no role at all in tenant B. Checking the tenant first means no role, however powerful, reaches across the boundary, which rules out \"admins may delete any resource\". Inside their own tenant the same admin may well delete, and whether a resource has an owner does not change the cross-tenant answer."
     },
     {
      "key": "fund:js/28-authorization-and-tenant-scoping/q08",
@@ -4793,7 +4793,7 @@
       "Allow, and log a warning for the team to review later"
      ],
      "answer": 0,
-     "explanation": "Deny by default fails safely: a forgotten rule shows up as a visible bug report instead of a silent hole."
+     "explanation": "Deny by default fails safely: an action the function does not know, new or misspelled, stays closed until someone writes its rule, so a forgotten rule shows up as a visible bug report instead of a silent hole. Allowing it, even with a logged warning, opens every new action before anyone has decided who may use it, and reading is a different action altogether."
     },
     {
      "key": "fund:js/28-authorization-and-tenant-scoping/q09",
@@ -4972,7 +4972,7 @@
       "Old pods, whose queries still name `name`, until replaced"
      ],
      "answer": 3,
-     "explanation": "A rename is instant, so every query from pods still running the previous release fails until they are replaced, and a rollback fails the same way. Expand and contract avoids it: add full_name, write both, backfill, switch reads, and drop name last."
+     "explanation": "A rename is instant, so every query from pods still running the previous release fails until they are replaced, and a rollback to that release fails the same way. SQLite keeps no alias for the old name, and the new pods are fine because they already ask for full_name. Renaming safely takes several deploys, never one statement."
     },
     {
      "key": "fund:js/29-schema-changes-under-live-traffic/q10",
@@ -5043,7 +5043,7 @@
       "The report id and role, since the id already implies the tenant too"
      ],
      "answer": 2,
-     "explanation": "Any input that changes the response belongs in the key. Leaving out the tenant serves one tenant's figures to another; leaving out the role serves a manager's view to everyone else."
+     "explanation": "Any input that changes the response belongs in the key. Leaving out the tenant serves one tenant's figures to another, and leaving out the role serves a manager's view to everyone else. Roles matter for this read, not only for writes, and the id implies no tenant, because report ids are templates that every tenant shares."
     },
     {
      "key": "fund:js/30-cache-correctness/q02",
@@ -5067,7 +5067,7 @@
       "`'{\"b\":1,\"a\":{}}'`"
      ],
      "answer": 1,
-     "explanation": "An array replacer is an allow-list applied at every depth, so the nested z is dropped. Sorting keys this way makes different nested filters share one cache key."
+     "explanation": "An array replacer is an allow-list applied at every depth, so the nested z is dropped as well. The tempting answer keeps z, as if the list filtered only the top level. Sorting keys this way therefore makes different nested filters share one cache key."
     },
     {
      "key": "fund:js/30-cache-correctness/q04",
@@ -5103,7 +5103,7 @@
       "The database write is skipped, since the key is already gone from cache"
      ],
      "answer": 0,
-     "explanation": "Between the delete and the commit, a miss loads the old row and stores it again. Write first, then delete."
+     "explanation": "Between the delete and the commit, a read that misses loads the old row from the database and stores it again, so the stale value stays until its TTL ends. Nothing is refused or rolled back, and the database write still happens: only the cache is wrong. Write first, then delete the key."
     },
     {
      "key": "fund:js/30-cache-correctness/q07",
@@ -5127,7 +5127,7 @@
       "It has expired, and the read returns undefined until a later load runs"
      ],
      "answer": 2,
-     "explanation": "Its age is exactly 500 ms, which is not below the TTL. An injected clock lets a test hit 1499 and 1500 exactly."
+     "explanation": "At t = 1500 ms the age is exactly 500 ms, which is not below the TTL, so the entry has expired: the read loads the value again and stores the fresh result, rather than serving the old one or returning undefined. A stale-while-revalidate cache would behave differently, but this one has no such rule. An injected clock lets a test hit 1499 and 1500 exactly."
     },
     {
      "key": "fund:js/30-cache-correctness/q09",
@@ -5198,7 +5198,7 @@
    "title": "N+1 queries and query budgets",
    "level": "advanced",
    "summary": "Spotting the 1 + N query pattern, fixing it with one batched query per relation, DataLoader-style per-tick loaders, and tests that assert a query budget that does not grow with the data.",
-   "lesson": "## What N+1 looks like\n\n```js\nconst orders = await db.listOrders();                    // 1 query\nfor (const o of orders) {\n  o.customer = await db.customerById(o.customerId);      // + 1 query per order\n}\n```\n\nOne query fetches a list, then the code runs one more query per row. An ORM's lazy relation does the same behind an innocent property access, and a GraphQL resolver per field does it per item.\n\n## Why it hides until production\n\nWith five seed rows and the database on the same machine, 1 + N queries take a few milliseconds. In production every query pays a network round trip, the lists are long, and each request holds a pooled connection for the whole loop.\n\nFailure story: an order history page made 1 + 2N queries (customer and line items per order). It took 12 ms on seed data and 3 seconds for a customer with 400 orders: 801 queries per page view, and a few such users at once drained the connection pool for everyone.\n\n## Batch: one query per relation\n\nCollect the distinct ids, load them with one query (`WHERE id IN (...)`) or a JOIN, put the rows in a `Map` by id, and attach them by lookup. Never zip the results by position: without `ORDER BY` the rows come back in whatever order the database likes, and ids with no row are simply missing. Skip the query for an empty list, because Postgres rejects `IN ()` as a syntax error. Chunk huge lists: databases cap bind parameters per statement, and SQLite's default limit is 32,766.\n\n## Loaders: batching per tick\n\nWhen the code that needs a row cannot see the whole list (nested resolvers, helpers called per item), use a DataLoader-style loader. Every `load(key)` made in the same tick is collected; then the loader removes duplicates, calls the batch function once with the keys and hands each caller the value at its key's position. The batch function must return exactly one value per key, in key order, with an `Error` for a key that failed.\n\nFailure story: a team made their loader a module-level singleton with a cache. The batching worked, but the cache outlived requests, so a row loaded for one user's request was served to the next user, past their permissions. Create loaders per request.\n\n## Query budgets in tests\n\nResponse-time assertions are flaky and do not catch N+1 on small fixtures. Count queries instead: subscribe to the driver's query event (or wrap the client), run the handler for 1, 10 and 200 rows and assert the same small ceiling for each. A count that grows with N is an N+1. A count exactly at the budget passes. When the budget fails, print every query that ran, so the failure message answers \"which query repeated?\" without a debugger.\n",
+   "lesson": "## What N+1 looks like\n\n```js\nconst orders = await db.listOrders();                    // 1 query\nfor (const o of orders) {\n  o.customer = await db.customerById(o.customerId);      // + 1 query per order\n}\n```\n\nOne query fetches a list, then the code runs one more query per row. An ORM's lazy relation does the same behind an innocent property access, and a GraphQL resolver per field does it per item. The count grows with the data: 20 orders in a test fixture make 21 queries, and 2,000 in production make 2,001.\n\n## Why it hides until production\n\nWith five seed rows and the database on the same machine, 1 + N queries take a few milliseconds. In production every query pays a network round trip, the lists are long, and each request holds a pooled connection for the whole loop.\n\nFailure story: an order history page made 1 + 2N queries (customer and line items per order). It took 12 ms on seed data and 3 seconds for a customer with 400 orders: 801 queries per page view, and a few such users at once drained the connection pool for everyone.\n\n## Batch: one query per relation\n\nCollect the distinct ids, load them with one query (`WHERE id IN (...)`) or a JOIN, put the rows in a `Map` by id, and attach them by lookup. Never zip the results by position: without `ORDER BY` the rows come back in whatever order the database likes, and ids with no row are simply missing. Skip the query for an empty list, because Postgres rejects `IN ()` as a syntax error. Chunk huge lists: databases cap bind parameters per statement, and SQLite's default limit is 32,766.\n\n## Loaders: batching per tick\n\nWhen the code that needs a row cannot see the whole list (nested resolvers, helpers called per item), use a DataLoader-style loader. Every `load(key)` made in the same tick is collected; then the loader removes duplicates, calls the batch function once with the keys and hands each caller the value at its key's position. The batch function must return exactly one value per key, in key order, with an `Error` for a key that failed.\n\nFailure story: a team made their loader a module-level singleton with a cache. The batching worked, but the cache outlived requests, so a row loaded for one user's request was served to the next user, past their permissions. Create loaders per request.\n\n## Query budgets in tests\n\nResponse-time assertions are flaky and do not catch N+1 on small fixtures. Count queries instead: subscribe to the driver's query event (or wrap the client), run the handler for 1, 10 and 200 rows and assert the same small ceiling for each. A count that grows with N is an N+1. A count exactly at the budget passes. When the budget fails, print every query that ran, so the failure message answers \"which query repeated?\" without a debugger.\n",
    "quiz": [
     {
      "key": "fund:js/31-n-plus-one-and-query-budgets/q01",
@@ -5210,7 +5210,7 @@
       "`400`"
      ],
      "answer": 1,
-     "explanation": "One query for the list plus one per order: 1 + N. A batched version makes 2 whatever N is."
+     "explanation": "One query fetches the 200 orders, then every order costs one more query: 1 + N = 201. Two is what a batched version makes whatever N is, and 400 would need two lookups per order. The count grows with the data, which is why the problem hides on small fixtures and shows up in production."
     },
     {
      "key": "fund:js/31-n-plus-one-and-query-budgets/q02",
@@ -5234,7 +5234,7 @@
       "In insertion order, with a NULL row for each id that has no match"
      ],
      "answer": 0,
-     "explanation": "SQL promises no order without ORDER BY, and IN returns only matching rows. Index the result by id and look each one up."
+     "explanation": "SQL promises no order without ORDER BY, so the rows may come back in any order: not the order of the IN list, and not sorted descending (SQLite happens to answer 3, 7 here). IN also returns only matching rows, so an id with no customer is simply missing, with no NULL placeholder. Index the result by id in a Map and look each one up."
     },
     {
      "key": "fund:js/31-n-plus-one-and-query-budgets/q04",
@@ -5258,7 +5258,7 @@
       "`[2, 1]`"
      ],
      "answer": 1,
-     "explanation": "Keys of one tick are de-duplicated and passed once, in the order they were first requested. Both load(1) calls receive the same value."
+     "explanation": "Keys requested in one tick are de-duplicated and passed once, in the order they were first requested, so the batch function sees one list of two keys. It is tempting to expect every call's key, repeats included, but the second 1 never reaches it, the keys are not wrapped in one array per call, and the order is first-seen, not reversed. Both load(1) calls resolve to the same value."
     },
     {
      "key": "fund:js/31-n-plus-one-and-query-budgets/q06",
@@ -5282,7 +5282,7 @@
       "A shared cache serves one user's rows to the next user, past their rights"
      ],
      "answer": 3,
-     "explanation": "Per-request loaders still batch within a request, and their cache ends with it, so no data crosses users or goes stale between requests."
+     "explanation": "A loader cache that lives for the whole process serves rows loaded for one user to the next user, past their rights, and keeps serving them after the data changes. A per-request loader still batches inside the request, and its cache ends with it. Loaders hold no database connection and need no socket, and Node does not limit a process to one pending batch."
     },
     {
      "key": "fund:js/31-n-plus-one-and-query-budgets/q08",
@@ -5294,7 +5294,7 @@
       "Time spent in queries is less than half of the total request time"
      ],
      "answer": 2,
-     "explanation": "Counts are deterministic; timings vary by machine and stay small on small fixtures. A count that grows with the row count is the N+1 signature."
+     "explanation": "Query counts are deterministic, while timings vary by machine and stay small on small fixtures, so a one-second or 5 ms assertion passes with the N+1 still in place. A count that grows with the row count is the N+1 signature: assert the same ceiling for 1, 10 and 200 rows."
     },
     {
      "key": "fund:js/31-n-plus-one-and-query-budgets/q09",
@@ -5377,7 +5377,7 @@
       "A test that runs the old and the new implementation side by side at once"
      ],
      "answer": 0,
-     "explanation": "Passing a clock or id generator in as a parameter creates a seam: a test supplies its own without touching the handler."
+     "explanation": "A seam is a place where you can change what the code does without editing it at that spot. Passing a clock or an id generator in as a parameter creates one: a test supplies its own and the handler never changes. It is not a module boundary that keeps shared state, a comment that marks deletable code, or a side-by-side run of two versions."
     },
     {
      "key": "fund:js/32-seams-fakes-and-answerable-logs/q02",
@@ -5389,7 +5389,7 @@
       "The Date constructor is slower than Date.now, so the tests time out"
      ],
      "answer": 2,
-     "explanation": "The real clock is a hidden input. toISOString always formats in UTC; the problem is that the instant itself is outside the test's control."
+     "explanation": "The real clock is a hidden input: the handler reads it, and the test has no way to choose the instant, so it can only assert a loose range. toISOString always formats in UTC, so laptops and CI agree on the format, and new Date() is not cached. Pass a clock in, and the test can assert the exact string."
     },
     {
      "key": "fund:js/32-seams-fakes-and-answerable-logs/q03",
@@ -5425,7 +5425,7 @@
       "From a fresh reimplementation that follows the old docs"
      ],
      "answer": 0,
-     "explanation": "The goal is to prove the refactor changed nothing, so the tests pin current behaviour. Fixing a wrong result is a separate, deliberate change."
+     "explanation": "Characterization tests prove that a refactor changed nothing, so they pin what the code returns today, odd results included. Taking the values from the product spec or from a reimplementation would turn the refactor into a behaviour change, and taking them from the refactored version proves nothing at all. Fixing a wrong result is a separate, deliberate change with its own test."
     },
     {
      "key": "fund:js/32-seams-fakes-and-answerable-logs/q06",
@@ -5449,7 +5449,7 @@
       "One JSON line per request with tenantId, status, requestId and time"
      ],
      "answer": 3,
-     "explanation": "Structured fields can be filtered and grouped. Free text, stack traces and in-memory counters do not say which tenant or request was affected."
+     "explanation": "Structured fields can be filtered and grouped, so a per-request JSON line answers the question with one query over the time window. A free-text line, a stack trace or an in-memory count of 500s per minute says neither which tenant nor which request was affected, and the counter is gone when the process restarts."
     },
     {
      "key": "fund:js/32-seams-fakes-and-answerable-logs/q08",
@@ -5544,7 +5544,7 @@
       "It is 256 bits wide, so long passwords collide with the short ones"
      ],
      "answer": 1,
-     "explanation": "A general-purpose hash is designed to be quick. Password hashing wants the opposite: scrypt, bcrypt and Argon2 make every guess expensive."
+     "explanation": "A general-purpose hash is built to be quick, so a salt only stops precomputed tables: guesses against one stolen hash still run at an enormous rate. Even plain Node on a busy laptop managed about 60,000 salted SHA-256 guesses a second, against about 4 default scrypt calls. SHA-256 is not reversible and not keyed. Password hashing wants slow: scrypt, bcrypt or Argon2."
     },
     {
      "key": "fund:js/33-authentication-sessions-and-tokens/q02",
@@ -5568,7 +5568,7 @@
       "`Path=/`"
      ],
      "answer": 1,
-     "explanation": "HttpOnly keeps the cookie out of document.cookie, so an injected script cannot copy it. Secure is about HTTPS and SameSite about cross-site requests."
+     "explanation": "HttpOnly keeps the cookie out of `document.cookie`, so an injected script cannot read and copy the session id. Secure only makes the browser send the cookie over HTTPS, SameSite=Strict controls whether it goes along on cross-site requests, and Path limits the URLs it is sent to. None of those three hides it from page JavaScript."
     },
     {
      "key": "fund:js/33-authentication-sessions-and-tokens/q04",
@@ -5580,7 +5580,7 @@
       "A captured request is replayed after the session behind it has expired"
      ],
      "answer": 2,
-     "explanation": "The id never changes hands after login; the attacker already has it. Issuing a fresh id at login and destroying the old one ends the attack."
+     "explanation": "The attacker plants an id he knows, for example through a link or a cookie set on a shared machine, and the victim then logs in on it. The id never changes hands after login, because the attacker already has it, which sets it apart from stealing a cookie with an injected script or guessing short ids. Issuing a fresh id at login and destroying the old one ends the attack."
     },
     {
      "key": "fund:js/33-authentication-sessions-and-tokens/q05",
@@ -5592,7 +5592,7 @@
       "Anyone holding the token: the payload is encoded, not encrypted"
      ],
      "answer": 3,
-     "explanation": "Base64url is an encoding. The signature protects the claims from being changed, not from being read, so secrets do not belong in a JWT."
+     "explanation": "The payload is base64url-encoded JSON, so anyone holding the token can decode the claims without the secret. The HS256 signature protects the claims from being changed, not from being read: nothing is encrypted, and the payload is not a one-way hash. Secrets and personal data do not belong in a JWT."
     },
     {
      "key": "fund:js/33-authentication-sessions-and-tokens/q06",
@@ -5604,7 +5604,7 @@
       "Reject it when the payload claims an admin role: other roles are harmless"
      ],
      "answer": 2,
-     "explanation": "The header is attacker-controlled input. A verifier that lets it choose the algorithm lets anyone forge any token."
+     "explanation": "The header is attacker-controlled input. An HS256 verifier decides the algorithm itself and rejects anything else, `alg: none` included, on every route and for every role. A verifier that lets the token pick its algorithm lets anyone forge a token by stripping the signature, so an exp in the future or a read-only route changes nothing."
     },
     {
      "key": "fund:js/33-authentication-sessions-and-tokens/q07",
@@ -5616,7 +5616,7 @@
       "Yes: exp is the issue time, which has passed"
      ],
      "answer": 0,
-     "explanation": "RFC 7519 defines exp as the time on or after which the token must not be accepted, expressed in seconds since the epoch."
+     "explanation": "RFC 7519 defines exp as the time on or after which the token must not be accepted, in seconds since the epoch, so at exactly 1800000000 it has already expired. A check written as `now > exp` lets it through for one more second. exp is not counted in milliseconds and is not the issue time, which is `iat`."
     },
     {
      "key": "fund:js/33-authentication-sessions-and-tokens/q08",
@@ -5628,7 +5628,7 @@
       "Revoke every token descended from that login and require a new one"
      ],
      "answer": 3,
-     "explanation": "A second use proves the token exists in two places, and the server cannot know which holder is the user. Revoking the family locks the thief out too."
+     "explanation": "A second use proves the token exists in two places, and the server cannot know which holder is the real user. Issuing a new pair would hand the thief fresh tokens, and rejecting only the reused one leaves the later tokens, possibly the thief's, valid. Revoking the whole family locks both out, and the user simply logs in again."
     },
     {
      "key": "fund:js/33-authentication-sessions-and-tokens/q09",

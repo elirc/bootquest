@@ -5,7 +5,7 @@
   "title": "SQL transactions and application code",
   "level": "advanced",
   "summary": "Atomic multi-statement writes with rollback, lost updates and the versioned UPDATE, bound parameters against injection, upsert, and keyset pagination written in SQL.",
-  "lesson": "## Atomicity\n\nA transaction turns several statements into one unit: `BEGIN`, the statements, `COMMIT`. If anything fails, `ROLLBACK` undoes all of it. In application code that is a try/catch: commit at the end of the try, roll back and rethrow in the catch.\n\n**Failure story.** A wallet transfer ran the debit and the credit as two separate statements. A deploy restarted the process between them. Money left one account and arrived nowhere, and support reconciled balances by hand for a week.\n\nAn `UPDATE` that matches no row is not an error. It reports zero changed rows, so check the count, or a transfer to a mistyped account \"succeeds\". Keep transactions short and never call another service inside one.\n\n## Lost updates\n\nRead, compute, write back loses updates: two requests read stock 5 and both write 4. Three repairs:\n\n- Let the database do the arithmetic: `SET stock = stock - 1 WHERE id = ? AND stock > 0`.\n- Optimistic: `UPDATE docs SET title = ?, version = version + 1 WHERE id = ? AND version = ?`. Zero changed rows means someone else wrote first: answer 409.\n- Pessimistic: Postgres locks the row with `SELECT ... FOR UPDATE` until commit. SQLite has no such clause; it allows one writer at a time, and `BEGIN IMMEDIATE` takes the write lock up front.\n\n## Parameters, never string building\n\nGluing input into SQL lets input become SQL. Send the statement with placeholders (`?`, or `$1` in Postgres) and the values separately; a value can then never change the statement's structure.\n\n**Failure story.** A product search concatenated the term into a query that ended in `AND tenant_id = 7`. A visitor typed a quote followed by a comment marker, the tenant filter was commented out, and the page listed every customer's products.\n\nParameters carry values only. A column name or a sort direction must come from an allow-list in code. Inside a `LIKE` pattern, a `%` or `_` typed by the user is still a wildcard: escape it and declare the escape character with `ESCAPE`.\n\n## Upsert\n\n\"Insert, or update when it exists\" written as a select followed by an insert is a race. Use one statement, which needs a unique constraint on the conflict column:\n\n```sql\nINSERT INTO settings (user_id, theme) VALUES (?, ?)\nON CONFLICT (user_id) DO UPDATE SET theme = excluded.theme;\n```\n\nPostgres and SQLite share this syntax; MySQL writes `ON DUPLICATE KEY UPDATE`.\n\n## Keyset pagination in SQL\n\n```sql\nSELECT id, created_at FROM posts\nWHERE (created_at, id) < (?, ?)\nORDER BY created_at DESC, id DESC LIMIT 20;\n```\n\nThe row comparison continues exactly after the last row of the previous page, and an index on `(created_at, id)` seeks straight to it. `OFFSET 100000` reads and throws away 100,000 rows first.",
+  "lesson": "## Atomicity\n\nA transaction turns several statements into one unit: `BEGIN`, the statements, `COMMIT`. If anything fails, `ROLLBACK` undoes all of it. In application code that is a try/catch: commit at the end of the try, roll back and rethrow in the catch.\n\n**Failure story.** A wallet transfer ran the debit and the credit as two separate statements. A deploy restarted the process between them. Money left one account and arrived nowhere, and support reconciled balances by hand for a week.\n\nAn `UPDATE` that matches no row is not an error. It reports zero changed rows, so check the count, or a transfer to a mistyped account \"succeeds\". Keep transactions short and never call another service inside one.\n\n## Lost updates\n\nRead, compute, write back loses updates: two requests read stock 5 and both write 4. Three repairs:\n\n- Let the database do the arithmetic: `SET stock = stock - 1 WHERE id = ? AND stock > 0`.\n- Optimistic: `UPDATE docs SET title = ?, version = version + 1 WHERE id = ? AND version = ?`. Zero changed rows means someone else wrote first: answer 409.\n- Pessimistic: Postgres locks the row with `SELECT ... FOR UPDATE` until commit. SQLite has no such clause; it allows one writer at a time, and `BEGIN IMMEDIATE` takes the write lock up front.\n\n## Parameters, never string building\n\nGluing input into SQL lets input become SQL. Send the statement with placeholders (`?`, or `$1` in Postgres) and the values separately; a value can then never change the statement's structure.\n\n**Failure story.** A product search concatenated the term into a query that ended in `AND tenant_id = 7`. A visitor typed a quote followed by a comment marker, the tenant filter was commented out, and the page listed every customer's products.\n\nParameters carry values only. A column name or a sort direction must come from an allow-list in code. Inside a `LIKE` pattern, a `%` or `_` typed by the user is still a wildcard: escape it and declare the escape character with `ESCAPE`.\n\n## Upsert\n\n\"Insert, or update when it exists\" written as a select followed by an insert is a race. Use one statement, which needs a unique constraint on the conflict column:\n\n```sql\nINSERT INTO settings (user_id, theme) VALUES (?, ?)\nON CONFLICT (user_id) DO UPDATE SET theme = excluded.theme;\n```\n\nPostgres and SQLite share this syntax; MySQL writes `ON DUPLICATE KEY UPDATE`.\n\n## Keyset pagination in SQL\n\n```sql\nSELECT id, created_at FROM posts\nWHERE (created_at, id) < (?, ?)\nORDER BY created_at DESC, id DESC LIMIT 20;\n```\n\nThe row comparison continues exactly after the last row of the previous page, and an index on `(created_at, id)` seeks straight to it. `OFFSET 100000` reads and throws away 100,000 rows first. The id in the pair breaks ties, so rows that share a timestamp are neither repeated nor skipped.",
   "quiz": [
     {
       "prompt": "A handler runs a debit UPDATE and then a credit UPDATE as two separate auto-committed statements. The process dies after the first one. What is stored?",
@@ -16,7 +16,7 @@
         "Neither change, because statements on one connection share a unit"
       ],
       "answer": 2,
-      "explanation": "Without an explicit transaction every statement is its own transaction. Wrapping both in BEGIN ... COMMIT makes the pair all-or-nothing."
+      "explanation": "Without an explicit transaction every statement is its own transaction and commits when it finishes. The debit had already committed when the process died, so it stays, and the credit never ran. Nothing replays the second statement, and a dropped connection only undoes work that was not committed yet. Wrapping both in BEGIN ... COMMIT makes the pair all-or-nothing."
     },
     {
       "prompt": "`UPDATE accounts SET balance = balance + 50 WHERE id = ?` is run with an id that is not in the table. What happens?",
@@ -27,7 +27,7 @@
         "It succeeds and reports one changed row"
       ],
       "answer": 1,
-      "explanation": "Matching nothing is a valid outcome for an UPDATE. The caller has to read the changed-row count to notice."
+      "explanation": "Matching nothing is a valid outcome for an UPDATE, so the statement succeeds with zero changed rows. There is no constraint error to roll back, and an UPDATE never inserts the missing account. The caller has to read the changed-row count, `changes` in node:sqlite, to notice that the id did not exist and answer 404."
     },
     {
       "prompt": "Two requests each read stock = 5 and each then run `UPDATE items SET stock = 4 WHERE id = 1`. What is the result?",
@@ -38,7 +38,7 @@
         "Stock is 4: the second write was rejected"
       ],
       "answer": 0,
-      "explanation": "Both writes succeed and store the same stale result. `SET stock = stock - 1` makes the database do the arithmetic on the current value."
+      "explanation": "Both requests computed 5 - 1 from the same stale read and both write 4, so both writes succeed and one decrement is lost. Nothing rejects the second write and the two do not cancel out. `SET stock = stock - 1` makes the database do the arithmetic on the current value, and the same two requests then leave 3."
     },
     {
       "prompt": "`UPDATE docs SET title = ?, version = version + 1 WHERE id = ? AND version = ?` reports zero changed rows, and a row with that id exists. What should the API answer?",
@@ -49,7 +49,7 @@
         "409 Conflict: the row changed since it was read"
       ],
       "answer": 3,
-      "explanation": "The id matched and the version did not, so another writer got there first. The client must re-read and decide what to do with its edit."
+      "explanation": "The id matched and the version did not, so another writer saved first and this edit was based on a stale copy. 409 Conflict tells the client to re-read and decide what to do with its change. A 404 would be false because the row exists, and a 200 would claim the edit was saved when nothing was written."
     },
     {
       "prompt": "Why can a value passed as a bound parameter (`WHERE name = ?`) not inject SQL?",
@@ -60,7 +60,7 @@
         "The value is encrypted before it is compared with the column"
       ],
       "answer": 1,
-      "explanation": "The statement is parsed with a placeholder in it; the value is only ever data. Nothing is stripped, so a name like O'Brien is stored exactly as typed."
+      "explanation": "The statement is parsed with a placeholder in it, and the value is bound afterwards as data, so its text never reaches the SQL parser. Nothing strips quotes or comment markers and no keyword filter runs: a name like O'Brien, or `x' OR '1'='1`, is stored and compared exactly as typed."
     },
     {
       "prompt": "Which part of a query can NOT be supplied as a bound parameter?",
@@ -82,7 +82,7 @@
         "A SELECT that locks the matching row before the insert"
       ],
       "answer": 0,
-      "explanation": "The conflict target must be something the database can conflict on: a unique index. Without one the statement is rejected."
+      "explanation": "The conflict target must be something the database can conflict on: a unique index or the primary key on user_id. Without one SQLite rejects the statement because the ON CONFLICT clause matches no PRIMARY KEY or UNIQUE constraint. No transaction, trigger or locking SELECT is needed, since the upsert is one atomic statement."
     },
     {
       "prompt": "Why does `WHERE (created_at, id) < (?, ?) ORDER BY created_at DESC, id DESC LIMIT 20` stay fast on page 5,000 when OFFSET does not?",

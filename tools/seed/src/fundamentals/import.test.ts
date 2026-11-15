@@ -98,7 +98,8 @@ describe('refusals (nothing written)', () => {
       const q = x.quiz.find((qq) => qq.choices[qq.answer]!.split(/\s+/).length >= 3)!;
       x.flashcards[0]!.back = `Remember: ${q.choices[q.answer]}.`;
     }, /restates Q\d+'s keyed answer/));
-  it('a drill that breaks its drill bank rule (hint 3 as code)', () => refuses((x) => ((x.drills[0]!.hints as string[])[2] = 'return opts ?? {};'), /hint 3/));
+  // the js drill bank (sysdrills) gates hint 2 since the rv wave (R3-09); this test passed on a hint-3 change only while another js drill broke the hint-2 rule (F11)
+  it('a drill that breaks its drill bank rule (hint 2 as code)', () => refuses((x) => ((x.drills[0]!.hints as string[])[1] = 'return opts ?? {};'), /hint 2 must be the approach in words/));
   it('a file named differently from its topic', () => {
     const body = real('js', t);
     const root = authoring('js', { '01-other-name': body });

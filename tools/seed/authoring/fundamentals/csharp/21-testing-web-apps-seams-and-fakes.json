@@ -38,7 +38,7 @@
         "Only SmtpNotifier runs, because the app's registration came first"
       ],
       "answer": 2,
-      "explanation": "A single resolve gets the last registration, but IEnumerable resolves every registration in order. Call RemoveAll for the service before adding the fake."
+      "explanation": "A single resolve of INotifier gets the last registration, but `IEnumerable<INotifier>` resolves every registration in order, so the dispatcher calls SmtpNotifier and then the fake, and the real notifier still sends mail. Two registrations of one service type are legal, so startup does not fail. Call `RemoveAll<INotifier>()` before adding the fake."
     },
     {
       "prompt": "Email has a unique index. A test that uses EF Core's InMemory provider signs up the same email twice and gets 201 both times, while production returns 500 the second time. Why?",
@@ -60,7 +60,7 @@
         "Each new connection opens its own empty in-memory database"
       ],
       "answer": 3,
-      "explanation": "An in-memory SQLite database belongs to its connection. Keep one connection open for the factory's lifetime and create the schema on it."
+      "explanation": "An in-memory SQLite database belongs to the connection that opened it, so each new connection starts with its own empty database and the second request finds no tables. SQLite does not drop tables after a commit, and nothing turns read-only. Keep one open connection for the factory's lifetime, hand it to every DbContext, and create the schema on it once."
     },
     {
       "prompt": "Which test is the most likely to break after a refactor that keeps the endpoint's behaviour the same?",
@@ -71,7 +71,7 @@
         "Freezing the clock, then checking ExpiresAt in the response"
       ],
       "answer": 1,
-      "explanation": "Asserting the call order of internal methods ties the test to one implementation. The other three check outcomes that any correct implementation produces."
+      "explanation": "Asserting that Save ran before GetById ties the test to one implementation: a refactor that reorders, merges or caches those calls breaks it while the endpoint behaves exactly as before. The fake outbox, the 409 and the frozen ExpiresAt checks assert outcomes that any correct implementation produces, so they survive the refactor."
     },
     {
       "prompt": "Two integration tests pass when run alone but fail together in a different order. What is the likely cause?",
@@ -82,7 +82,7 @@
         "The test server's port is reused before it is released"
       ],
       "answer": 2,
-      "explanation": "Shared data couples tests to their order. Give each test class its own database, or reset what each test touches."
+      "explanation": "Tests that share one database can depend on each other's rows: one inserts the email the other expects to be free, so the result depends on the order they run in. CreateClient caches no responses, and the factory does not lose state between the tests that share it: keeping it is the problem. Give each test class its own database, or reset what each test touches."
     },
     {
       "prompt": "How do integration tests call `[Authorize]` endpoints as different users without a real identity provider?",
@@ -93,7 +93,7 @@
         "Register a test auth handler that reads the user from a header"
       ],
       "answer": 3,
-      "explanation": "A test authentication scheme builds the ClaimsPrincipal from a header, so the real authorization rules still decide 401, 403 or 200."
+      "explanation": "A test authentication scheme reads the user from a request header and builds the ClaimsPrincipal, so each test picks its user while the app's real authorization policies still decide 401, 403 or 200. Turning authorization off tests none of those rules, and signing tokens with the production key puts that key into the test code."
     },
     {
       "prompt": "A service reads `clock.GetUtcNow()` once for CreatedAt and again for ExpiresAt. What can go wrong?",
@@ -104,7 +104,7 @@
         "Nothing: every read inside one request returns the same instant"
       ],
       "answer": 0,
-      "explanation": "Each read returns the time of that read. One read per operation gives every timestamp of the action the same instant."
+      "explanation": "Each read returns the time of that read, so the two stamps can differ and ExpiresAt is not exactly CreatedAt plus 7 days. TimeProvider does not throw on a second read, both reads are UTC, and nothing caches the instant per request. Read the clock once per operation and derive every timestamp of the action from that one value."
     },
     {
       "prompt": "In a WebApplicationFactory test of the signup endpoint, what should be replaced with fakes?",

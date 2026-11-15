@@ -5,7 +5,7 @@
   "title": "Authorization and tenant scoping",
   "level": "advanced",
   "summary": "Authentication versus authorization, IDOR, tenant-scoped repositories, 404 versus 403, mass assignment and allow-lists, and a deny-by-default permission function.",
-  "lesson": "## Authentication is not authorization\n\nAuthentication answers \"who is this?\". Authorization answers \"may they do THIS to THAT?\". A valid session proves only the first. Most serious CRUD breaches are a logged-in user reaching data that belongs to someone else.\n\n**Story 1: the invoice in the URL.** `GET /invoices/1041` runs `SELECT * FROM invoices WHERE id = ?`. The route requires a login, so it feels protected. A customer changes 1041 to 1042 and reads another company's invoice. This is an **IDOR** (insecure direct object reference): the id is treated as proof of access. Unguessable UUIDs slow the attack down; they are not a permission check.\n\n**Story 2: the forgotten write path.** The team scoped every list and detail query by tenant. `DELETE /invoices/:id` was written later and deletes by id alone. The reads were safe, so nobody looked again.\n\n## Tenant scoping\n\nIn a multi-tenant app every query carries the tenant: `WHERE id = ? AND tenant_id = ?`. The tenant id comes from the **session**, never from the body, the query string or a header the client controls. Do not rely on each handler remembering. Build a repository bound to one tenant, so that unscoped access is not there to call: it filters reads, updates and deletes, stamps the tenant on creates, and refuses to change `tenant_id`.\n\n## 404 or 403\n\nWhen a row exists but belongs to another tenant, answer **404**, exactly as if it did not exist. A 403 confirms that the id is real and lets an attacker map your data. Use **403** when the caller may know the resource exists but lacks the role: a viewer pressing Delete. **401** means not logged in at all.\n\n## Mass assignment\n\n`db.update(id, req.body)` lets a client send fields the form never showed: `role`, `tenantId`, `ownerId`, `price`. Copy an **allow-list** of fields per role. A deny-list (\"everything except role\") fails the day someone adds a sensitive column. Unknown roles get nothing.\n\n## Writing the rule\n\nKeep the decision in one function, `can(user, action, resource)`, and check in this order:\n\n1. Same tenant? If not, deny, whatever the role. An admin is an admin of *their* tenant.\n2. Does the role allow the action? For example: viewers read; members also edit what they own; admins edit and delete anything in the tenant.\n3. Otherwise **deny by default**: unknown actions and unknown roles get false.\n\nTest both directions. A rule that refuses everything passes every \"must be denied\" test, so also assert the cases that must be allowed, or the fix for a leak becomes an outage. And enforce on the server: hiding a button is not access control.",
+  "lesson": "## Authentication is not authorization\n\nAuthentication answers \"who is this?\". Authorization answers \"may they do THIS to THAT?\". A valid session proves only the first. Most serious CRUD breaches are a logged-in user reaching data that belongs to someone else.\n\n**Story 1: the invoice in the URL.** `GET /invoices/1041` runs `SELECT * FROM invoices WHERE id = ?`. The route requires a login, so it feels protected. A customer changes 1041 to 1042 and reads another company's invoice. This is an **IDOR** (insecure direct object reference): the id is treated as proof of access. Unguessable UUIDs slow the attack down; they are not a permission check.\n\n**Story 2: the forgotten write path.** The team scoped every list and detail query by tenant. `DELETE /invoices/:id` was written later and deletes by id alone. The reads were safe, so nobody looked again.\n\n## Tenant scoping\n\nIn a multi-tenant app every query carries the tenant: `WHERE id = ? AND tenant_id = ?`. The tenant id comes from the **session**, never from the body, the query string or a header the client controls. Do not rely on each handler remembering. Build a repository bound to one tenant, so that unscoped access is not there to call: it filters reads, updates and deletes, stamps the tenant on creates, and refuses to change `tenant_id`.\n\n## 404 or 403\n\nWhen a row exists but belongs to another tenant, answer **404**, exactly as if it did not exist. A 403 confirms that the id is real and lets an attacker map your data. Use **403** when the caller may know the resource exists but lacks the role: a viewer pressing Delete. **401** means not logged in at all.\n\n## Mass assignment\n\n`db.update(id, req.body)` lets a client send fields the form never showed: `role`, `tenantId`, `ownerId`, `price`. Copy an **allow-list** of fields per role. A deny-list (\"everything except role\") fails the day someone adds a sensitive column. Unknown roles get nothing. Server-owned fields such as `id`, `createdAt` and `version` are never copied from a body at all.\n\n## Writing the rule\n\nKeep the decision in one function, `can(user, action, resource)`, and check in this order:\n\n1. Same tenant? If not, deny, whatever the role. An admin is an admin of *their* tenant.\n2. Does the role allow the action? For example: viewers read; members also edit what they own; admins edit and delete anything in the tenant.\n3. Otherwise **deny by default**: unknown actions and unknown roles get false.\n\nTest both directions. A rule that refuses everything passes every \"must be denied\" test, so also assert the cases that must be allowed, or the fix for a leak becomes an outage. And enforce on the server: hiding a button is not access control.",
   "quiz": [
     {
       "prompt": "`GET /invoices/:id` requires a login and runs `SELECT * FROM invoices WHERE id = ?`. What is wrong?",
@@ -16,7 +16,7 @@
         "The id belongs in the request body rather than the URL"
       ],
       "answer": 2,
-      "explanation": "The login proves who is calling, not that this invoice is theirs. Nothing in the query ties the row to the caller."
+      "explanation": "The login proves who is calling, not that this invoice is theirs. Nothing in the query ties the row to the caller's tenant, so any logged-in user who knows or guesses an id reads it. LIMIT 1 changes nothing, because an id already matches one row, and moving the id into the body adds no check. Scope the query with the tenant from the session."
     },
     {
       "prompt": "Where must the tenant id used in a query come from?",
@@ -38,7 +38,7 @@
         "No, an id that leaks still opens the row without a check"
       ],
       "answer": 3,
-      "explanation": "Ids travel in URLs, logs, emails and screenshots. Making them hard to guess slows enumeration, but the missing permission check is still missing."
+      "explanation": "Ids travel in URLs, logs, emails, exports and screenshots, so a UUID leaks like any other id. Making ids hard to guess slows enumeration, and generating them on the server does not change that, but the missing permission check is still missing: whoever holds the id opens the row. UUIDs are fine as keys, and speed is not the point."
     },
     {
       "prompt": "A user requests an invoice that exists but belongs to another tenant. Which status reveals the least?",
@@ -49,7 +49,7 @@
         "400, because the id is not valid for this user"
       ],
       "answer": 1,
-      "explanation": "Any answer that differs from the one for an unused id confirms that the invoice exists, which lets a caller map other tenants' data."
+      "explanation": "A 404 is exactly what the caller gets for an unused id, so it confirms nothing. A 403 says the invoice exists and is protected, and any answer that differs from the unused-id answer lets a caller map other tenants' data by probing ids. A 401 is wrong too: the session is valid, it just does not reach this row."
     },
     {
       "prompt": "A viewer in the right tenant sends DELETE for a document they are able to read. Which status fits?",
@@ -60,7 +60,7 @@
         "409, because the document is still in use elsewhere"
       ],
       "answer": 2,
-      "explanation": "The caller is logged in and already knows the document exists, so there is nothing to hide. What is missing is the permission."
+      "explanation": "The caller is logged in and already knows the document exists, because they can read it, so there is nothing to hide and a 404 would only confuse. What is missing is the delete permission of the viewer role, which is what 403 says. A 401 would ask for a login that is already there, and the document being in use plays no part."
     },
     {
       "prompt": "Why is a deny-list (\"copy every field except role\") weaker than an allow-list for request bodies?",
@@ -71,7 +71,7 @@
         "It stops working as soon as the body contains nested JSON"
       ],
       "answer": 1,
-      "explanation": "A deny-list is open by default, so every new column is exposed until somebody remembers to add it. An allow-list is closed by default."
+      "explanation": "A deny-list is open by default: every column added later, such as an isAdmin flag or a credit limit, is writable from the request body until somebody remembers to list it. An allow-list is closed by default, so a forgotten field is merely not saved. Speed has nothing to do with it, and neither list rejects harmless form fields by itself."
     },
     {
       "prompt": "An admin of tenant A asks to delete a resource of tenant B. What should the permission check decide?",
@@ -82,7 +82,7 @@
         "Deny, because the tenant check precedes any role"
       ],
       "answer": 3,
-      "explanation": "A role is granted inside one tenant. Checking the tenant first means no role, however powerful, reaches across the boundary."
+      "explanation": "A role is granted inside one tenant, so the admin of tenant A holds no role at all in tenant B. Checking the tenant first means no role, however powerful, reaches across the boundary, which rules out \"admins may delete any resource\". Inside their own tenant the same admin may well delete, and whether a resource has an owner does not change the cross-tenant answer."
     },
     {
       "prompt": "A permission function is asked about an action name it does not know. What should it do?",
@@ -93,7 +93,7 @@
         "Allow, and log a warning for the team to review later"
       ],
       "answer": 0,
-      "explanation": "Deny by default fails safely: a forgotten rule shows up as a visible bug report instead of a silent hole."
+      "explanation": "Deny by default fails safely: an action the function does not know, new or misspelled, stays closed until someone writes its rule, so a forgotten rule shows up as a visible bug report instead of a silent hole. Allowing it, even with a logged warning, opens every new action before anyone has decided who may use it, and reading is a different action altogether."
     },
     {
       "prompt": "`GET /projects/:projectId/tasks` runs `SELECT * FROM tasks WHERE project_id = ?` for any logged-in user. Tasks also carry tenant_id. What is missing?",
@@ -184,7 +184,7 @@
       ],
       "explanation": "One ownership lookup, used by every by-id method:\n\n```js\nconst own = (id) => {\n  const row = db.byId(id);\n  return row && row.tenantId === tenantId ? row : null;\n};\n// ...\ncreate(data) { return db.insert({ ...data, tenantId }); },\nupdate(id, patch) {\n  if (!own(id)) return null;\n  const { tenantId: _tenantId, id: _id, ...fields } = patch;\n  return db.update(id, fields);\n},\nremove(id) { return own(id) ? db.remove(id) : false; },\n```\n\nIn SQL the same idea is `WHERE id = ? AND tenant_id = ?` on every statement, UPDATE and DELETE included. Another tenant's row and a missing row give the same `null`, which the route turns into the same 404. In `create` the repository's tenant is spread LAST, so it wins over anything in the data.\n\n**What the tests catch.** The plausible wrong answer scopes `list` and `get` and then lets `update` and `remove` go to the database by id: the read tests pass while another tenant's invoice is changed or deleted. Writing `{ tenantId, ...data }` lets the body choose the tenant, and passing the patch through untouched lets a caller move a row out of its tenant.",
       "hints": [
-        "A record id alone is never proof of access; every path to a row has to pass through the tenant filter, writes included.",
+        "A record id alone is never proof of access. Every path to a row has to pass through the tenant filter, writes included.",
         "Write one small ownership lookup that yields the row only when it belongs to this repository's tenant, and route every by-id method through it. Make the repository, not the caller, decide the tenant on new and changed rows.",
         "Build a helper that fetches by id and gives back the row only when its tenant matches. Use it for get, and as the guard in update and remove. Filter the list by tenant, put the repository's tenant last when building a new row, and strip tenant and id out of a patch before passing it on."
       ]
