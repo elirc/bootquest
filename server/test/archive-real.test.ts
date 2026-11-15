@@ -43,14 +43,14 @@ describe('content/archive.json (committed)', () => {
     expect(isArchivedKey(relatedKey, real)).toBe(false);
   });
 
-  it('paths load: sysdesign walks 18 sysdrill modules with 1-2 DESIGN IT sets each; agentic is G2 -> katas -> G3 -> G4 -> eval lab', () => {
+  it('paths load: sysdesign walks 18 sysdrill modules with 0-3 DESIGN IT sets each (rv3 MF-7: at most one step without a set, since no primary set does its maths); agentic is G2 -> katas -> G3 -> G4 -> eval lab', () => {
     const sys = real.paths.get('sysdesign')!;
     expect(sys).toHaveLength(18);
     for (const s of sys) {
       expect(s.keys[0]).toBe(`sysdrills/${s.id}/`);
-      expect(s.keys.length - 1).toBeGreaterThanOrEqual(1);
-      expect(s.keys.length - 1).toBeLessThanOrEqual(2);
+      expect(s.keys.length - 1).toBeLessThanOrEqual(3);
     }
+    expect(sys.filter((s) => s.keys.length === 1).length).toBeLessThanOrEqual(1);
     expect(real.paths.get('agentic')!.map((s) => s.id)).toEqual(['g2-briefs', 'katas-easy', 'katas-medium', 'katas-hard', 'g3', 'g4', 'eval-lab']); // rv3 S4 W8: the agentdrills step, last
   });
 });
